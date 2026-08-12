@@ -21,6 +21,12 @@ channels/*/audio/*
 channels/*/images/*
 !channels/*/audio/.gitkeep
 !channels/*/images/.gitkeep
+
+# Shared media library — available to every channel, never duplicated per channel.
+common/audio/*
+common/images/*
+!common/audio/.gitkeep
+!common/images/.gitkeep
 *.mp3
 *.flac
 *.ogg
@@ -32,7 +38,10 @@ channels/*/images/*
 
 # Generated artifacts
 channels/*/profiles/
+channels/*/playlist.m3u
+channels/*/images.list
 channels/*/docker-compose.yml
+common/profiles/
 hls/
 *.m3u8
 *.log
