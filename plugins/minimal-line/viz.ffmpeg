@@ -1,1 +1,1 @@
-[0:a]showwaves@viz=s=${WIDTH}x${HEIGHT}:mode=p2p:rate=${FPS}:draw=full:scale=lin:split_channels=0:colors=${ACCENT},fps=${FPS},format=yuv420p,setsar=1[${OUT}]
+[0:a]showwaves@viz=s=${WIDTH}x${HEIGHT}:mode=p2p:rate=${FPS}:draw=full:scale=lin:split_channels=0:colors=${ACCENT}|${ACCENT},fps=${FPS},format=yuv420p,setsar=1[${OUT}]

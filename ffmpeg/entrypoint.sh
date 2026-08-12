@@ -71,6 +71,17 @@ color_init() {
 INIT_HUE="$(color_init COLOR_INIT_HUE "${COLOR_INIT_HUE:-0}" -360 360 0)"
 INIT_SATURATION="$(color_init COLOR_INIT_SATURATION "${COLOR_INIT_SATURATION:-1}" 0 3 1)"
 INIT_BRIGHTNESS="$(color_init COLOR_INIT_BRIGHTNESS "${COLOR_INIT_BRIGHTNESS:-0}" -1 1 0)"
+# Per-channel gamma is the only commandable, expression-capable way to put color
+# *into* neutral content: hue and saturation can only rescale chroma that is
+# already there, so on grey artwork they measure as no-ops.
+INIT_GAMMA_R="$(color_init COLOR_INIT_GAMMA_R "${COLOR_INIT_GAMMA_R:-1}" 0.1 10 1)"
+INIT_GAMMA_G="$(color_init COLOR_INIT_GAMMA_G "${COLOR_INIT_GAMMA_G:-1}" 0.1 10 1)"
+INIT_GAMMA_B="$(color_init COLOR_INIT_GAMMA_B "${COLOR_INIT_GAMMA_B:-1}" 0.1 10 1)"
+# The visualization's own grade, upstream of the blend. Automatic mode drives
+# this so a slide's accent recolors the visualization without re-tinting the
+# photograph the accent was sampled from.
+INIT_VIZ_HUE="$(color_init COLOR_INIT_VIZ_HUE "${COLOR_INIT_VIZ_HUE:-0}" -360 360 0)"
+INIT_VIZ_SATURATION="$(color_init COLOR_INIT_VIZ_SATURATION "${COLOR_INIT_VIZ_SATURATION:-1}" 0 10 1)"
 
 # now.json's started_at. Taken once here so it is the compositor's start and
 # not the producer's, which is a few seconds later.
@@ -236,29 +247,54 @@ ok "plugins: ${HOT_SET} (active index ${ACTIVE_INDEX}, ${#PLUGINS[@]} hot branch
 # ----------------------------------------------------------------- filtergraph
 # Written to a file so neither bash nor the filtergraph tokenizer has to survive
 # the zmq bind_address escaping, which needs two levels.
+#
+# Color lives in two places, and the split is deliberate.
+#
+#   hue@viz    grades the visualization only, before the blend. Automatic mode
+#              owns it: the accent is sampled *from* the current slide, so
+#              re-tinting the slide with it is circular — the visualization is
+#              the thing that has to move.
+#   eq@eq +    grade the finished composite, after the blend. The operator owns
+#   hue@hue    them. Measured: with these on [base] instead, the operator's
+#              color could only ever tint the photograph *behind* the
+#              visualization, and the visualization is the brightest element in
+#              the frame — which is why the channel looked stuck.
 mkdir -p "$RUN_DIR"
 {
   # Input 0 is audio so a plugin fragment's literal [0:a] is correct as written.
   printf '%s' "[1:v]fps=${FPS}:start_time=0,realtime,"
   printf '%s' "zmq@ctl=bind_address=tcp\\\\://${ZMQ_BIND_HOST}\\\\:${ZMQ_BIND_PORT},"
-  # eval=frame is not commandable, so it can only be set here.
-  printf '%s' "eq@eq=eval=frame:contrast=1:brightness=${INIT_BRIGHTNESS}:saturation=${INIT_SATURATION},"
-  printf '%s' "hue@hue=h=${INIT_HUE},format=yuv420p,setsar=1[base];"
+  printf '%s' "format=yuv420p,setsar=1[base];"
   printf '%s' "$VIZ_FRAGMENTS"
   # streamselect rejects inputs=1 (range is 2..INT_MAX), so a single hot plugin
   # has no selector — there is nothing to switch to. See the report to the lead.
   if (( ${#PLUGINS[@]} > 1 )); then
-    printf '%s' "${VIZ_LABELS}streamselect@sel=inputs=${#PLUGINS[@]}:map=${ACTIVE_INDEX}[viz];"
+    printf '%s' "${VIZ_LABELS}streamselect@sel=inputs=${#PLUGINS[@]}:map=${ACTIVE_INDEX},"
   else
-    printf '%s' "[viz0]null[viz];"
+    printf '%s' "[viz0]"
   fi
-  printf '%s' "[base][viz]blend=all_mode=screen:all_opacity=${VIZ_OPACITY},format=yuv420p[vfull];"
+  # One instance downstream of the selector, so it survives a plugin switch.
+  # hue carries h, s and b, which is every grade the visualization needs.
+  printf '%s' "hue@viz=h=${INIT_VIZ_HUE}:s=${INIT_VIZ_SATURATION}[viz];"
+  # NOT all_mode=screen. Screen's identity is 0, but chroma's neutral is 128, so
+  # screening U and V drove both to ~192 and clipped R and B at 255 — a magenta
+  # cast that no upstream color change could survive. Measured on a #E8A0C0
+  # field: background (255,122,255), and `eq saturation 0` moved it only to
+  # (252,139,255). Luma keeps screen; chroma gets grainmerge, which is
+  # base + (viz - 128) — an additive chroma offset that is a true no-op wherever
+  # the visualization is black.
+  printf '%s' "[base][viz]blend=c0_mode=screen:c1_mode=grainmerge:c2_mode=grainmerge"
+  printf '%s' ":all_opacity=${VIZ_OPACITY},"
+  # eval=frame is not commandable, so it can only be set here.
+  printf '%s' "eq@eq=eval=frame:contrast=1:brightness=${INIT_BRIGHTNESS}:saturation=${INIT_SATURATION}"
+  printf '%s' ":gamma_r=${INIT_GAMMA_R}:gamma_g=${INIT_GAMMA_G}:gamma_b=${INIT_GAMMA_B},"
+  printf '%s' "hue@hue=h=${INIT_HUE},format=yuv420p,setsar=1[vfull];"
   printf '%s' "[vfull]split=2[vmain][vpre];"
   printf '%s' "[vpre]scale=${PREVIEW_WIDTH}:${PREVIEW_HEIGHT}:flags=fast_bilinear,fps=${PREVIEW_FPS}[vpreview];"
   printf '%s' "[0:a]aresample=44100:async=1000:first_pts=0,loudnorm=I=-14:TP=-1:LRA=11,asplit=2[amain][apreview]"
 } > "$GRAPH_FILE"
 log "filtergraph -> $GRAPH_FILE ($(wc -c < "$GRAPH_FILE") bytes)"
-ok "color: ${COLOR_MODE} (hue=${INIT_HUE} saturation=${INIT_SATURATION} brightness=${INIT_BRIGHTNESS})"
+ok "color: ${COLOR_MODE} (composite hue=${INIT_HUE} saturation=${INIT_SATURATION} brightness=${INIT_BRIGHTNESS} gamma=${INIT_GAMMA_R}/${INIT_GAMMA_G}/${INIT_GAMMA_B}; viz hue=${INIT_VIZ_HUE} saturation=${INIT_VIZ_SATURATION})"
 
 # -------------------------------------------------------------------- producer
 # The producer also writes now.json: it owns the current slide, and it is the
