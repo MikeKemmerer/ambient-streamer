@@ -13,11 +13,14 @@ ambient.yaml
 channels/*/config.yaml
 !channels/example/config.yaml
 
-# Media — large binaries, never committed
-channels/*/audio/
-channels/*/images/
-!channels/example/audio/.gitkeep
-!channels/example/images/.gitkeep
+# Media — large binaries, never committed.
+# Ignore the CONTENTS, not the directory: git cannot re-include a file whose
+# parent directory is excluded, so `channels/*/audio/` would make the !.gitkeep
+# rules below silently dead.
+channels/*/audio/*
+channels/*/images/*
+!channels/*/audio/.gitkeep
+!channels/*/images/.gitkeep
 *.mp3
 *.flac
 *.ogg
