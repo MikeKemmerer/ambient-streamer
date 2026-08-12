@@ -1,26 +1,31 @@
-"""Plugins, presets, visualisation switching and colour.
+"""Plugins, presets, visualization switching and color.
 
-Switching to a plugin outside `hot_set` is a `409`, never a silent promotion:
-promoting it means a new filtergraph, which means a restart the caller did not
-ask for.
+A plugin in `hot_set` switches instantly: its branch is already rendering and
+`streamselect` picks it in one frame. An installed plugin that is not hot is
+still usable — it is staged into `hot_set` and the compositor is replaced
+make-before-break, which costs a measured ~1s gap. Only a plugin that is not
+installed at all is an error.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
+from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query, Response
 from pydantic import Field
 
 from .. import plugins as plugin_registry
 from .. import presets as preset_registry
-from ..events import CHANNEL_VISUALISATION
+from ..config import ResolvedChannel
+from ..events import CHANNEL_VISUALIZATION
 from ..main import ApiError, AppState
-from ..models import ChannelConfig, ColourMode, ManualColour, StrictModel
+from ..models import ChannelConfig, ColorMode, ManualColor, StrictModel
 from ..watchdog import parse_progress
 from ..zmqctl import ZmqCommandError, ZmqValidationError, stream_select_message
-from .deps import Authed, recompile, save_channel_config
+from .deps import Authed, recompile, run_action, save_channel_config
 
 LOG = logging.getLogger("ambient.api.looks")
 
@@ -29,7 +34,7 @@ router = APIRouter(prefix="/api", tags=["looks"])
 STREAMSELECT_TARGET = "streamselect@sel"
 
 
-class VisualisationBody(StrictModel):
+class VisualizationBody(StrictModel):
     active: str
 
 
@@ -37,9 +42,9 @@ class PresetBody(StrictModel):
     preset: str
 
 
-class ColourBody(StrictModel):
-    mode: ColourMode | None = None
-    manual: ManualColour | None = None
+class ColorBody(StrictModel):
+    mode: ColorMode | None = None
+    manual: ManualColor | None = None
     transition_seconds: float | None = Field(None, ge=0)
 
 
@@ -79,8 +84,8 @@ async def list_presets(state: AppState = Authed) -> dict[str, Any]:
                 "name": preset.name,
                 "display_name": preset.display_name or preset.name,
                 "description": preset.description,
-                "visualisation": preset.visualisation.active if preset.visualisation else None,
-                "colour": preset.colour.model_dump(mode="json") if preset.colour else None,
+                "visualization": preset.visualization.active if preset.visualization else None,
+                "color": preset.color.model_dump(mode="json") if preset.color else None,
                 "slideshow": preset.slideshow.model_dump(mode="json", exclude_none=True),
                 "audio": preset.audio.model_dump(mode="json", exclude_none=True),
             }
@@ -89,34 +94,114 @@ async def list_presets(state: AppState = Authed) -> dict[str, Any]:
     }
 
 
-@router.put("/channels/{name}/visualisation")
-async def set_visualisation(
-    name: str, body: VisualisationBody, state: AppState = Authed
+@router.put("/channels/{name}/visualization")
+async def set_visualization(
+    name: str,
+    body: VisualizationBody,
+    response: Response,
+    allow_restart: bool = Query(
+        True, description="stage a plugin outside hot_set; false refuses instead"
+    ),
+    state: AppState = Authed,
 ) -> dict[str, Any]:
     channel = state.channel(name, resolve_media=False)
-    hot_set = channel.config.visualisation.hot_set
-    if body.active not in hot_set:
+    hot_set = list(channel.config.visualization.hot_set)
+
+    if body.active in hot_set:
+        return await _switch_hot(state, channel.directory, name, channel.config, body.active)
+
+    registry = plugin_registry.load_registry(state.workspace.plugins_dir)
+    if registry and body.active not in registry:
+        raise ApiError(
+            404,
+            "unknown_plugin",
+            f"{body.active!r} is not installed; GET /api/plugins lists what is",
+        )
+    if not allow_restart:
         raise ApiError(
             409,
-            "not_in_hot_set",
-            f"{body.active!r} is not instantiated on {name}; promoting it needs a restart",
+            "restart_required",
+            f"{body.active!r} is installed but not in hot_set on {name}; a filtergraph "
+            "is fixed at launch, so staging it needs a make-before-break restart. "
+            "Retry with allow_restart=true.",
         )
 
-    if body.active != channel.config.visualisation.active:
-        data = channel.config.model_dump(mode="json")
-        data["visualisation"]["active"] = body.active
-        save_channel_config(channel.directory, ChannelConfig.model_validate(data))
+    response.status_code = 202
+    return await _stage(state, channel, body.active)
+
+
+async def _switch_hot(
+    state: AppState, directory: Path, name: str, config: ChannelConfig, active: str
+) -> dict[str, Any]:
+    """One frame, clean cut: the branch is already rendering."""
+    hot_set = list(config.visualization.hot_set)
+    if active != config.visualization.active:
+        data = config.model_dump(mode="json")
+        data["visualization"]["active"] = active
+        save_channel_config(directory, ChannelConfig.model_validate(data))
         try:
             message = stream_select_message(
-                STREAMSELECT_TARGET, hot_set.index(body.active), len(hot_set)
+                STREAMSELECT_TARGET, hot_set.index(active), len(hot_set)
             )
         except ZmqValidationError as exc:
             raise ApiError(400, "invalid_command", str(exc)) from exc
         await _send(state, name, [message])
-        await state.events.publish(
-            CHANNEL_VISUALISATION, {"active": body.active}, channel=name
+        await state.events.publish(CHANNEL_VISUALIZATION, {"active": active}, channel=name)
+    return {
+        "channel": name,
+        "active": active,
+        "hot_set": hot_set,
+        "staged": False,
+        "restarted": False,
+        "mode": "streamselect",
+        "detail": "switched on the running filtergraph; no gap",
+    }
+
+
+async def _stage(
+    state: AppState, channel: ResolvedChannel, active: str
+) -> dict[str, Any]:
+    """Add the branch to the graph, then replace the compositor make-before-break."""
+    name = channel.name
+    config = channel.config
+    data = config.model_dump(mode="json")
+    hot_set = list(config.visualization.hot_set) + [active]
+    data["visualization"]["hot_set"] = hot_set
+    data["visualization"]["active"] = active
+
+    save_channel_config(channel.directory, ChannelConfig.model_validate(data))
+    try:
+        recompile(state, name)
+    except ApiError:
+        save_channel_config(channel.directory, config)
+        raise
+
+    reloaded = state.channel(name, resolve_media=False)
+    running = (await state.supervisor.containers(name)).composer.running
+    if running:
+        asyncio.create_task(
+            run_action(state, name, state.supervisor.restart(name), "visualization")
         )
-    return {"channel": name, "active": body.active, "hot_set": hot_set}
+    await state.events.publish(
+        CHANNEL_VISUALIZATION, {"active": active, "staged": True}, channel=name
+    )
+    return {
+        "accepted": True,
+        "channel": name,
+        "active": active,
+        "hot_set": hot_set,
+        "staged": True,
+        "restarted": running,
+        "mode": "make-before-break" if running else "applied-on-next-start",
+        "projected_cores": round(reloaded.projected_cores, 3),
+        "detail": (
+            f"{active!r} was not instantiated, so the compositor is being replaced with a "
+            "graph that includes it; measured ~1s of RTMP gap and a new YouTube ingest "
+            "session"
+            if running
+            else f"{active!r} was staged into hot_set; it applies on the next start"
+        ),
+    }
 
 
 @router.post("/channels/{name}/preset", status_code=202)
@@ -131,32 +216,32 @@ async def post_preset(name: str, body: PresetBody, state: AppState = Authed) -> 
     }
 
 
-@router.put("/channels/{name}/colour")
-async def set_colour(name: str, body: ColourBody, state: AppState = Authed) -> dict[str, Any]:
+@router.put("/channels/{name}/color")
+async def set_color(name: str, body: ColorBody, state: AppState = Authed) -> dict[str, Any]:
     channel = state.channel(name, resolve_media=False)
     data = channel.config.model_dump(mode="json")
-    colour = data["colour"]
+    color = data["color"]
     if body.mode is not None:
-        colour["mode"] = body.mode.value
+        color["mode"] = body.mode.value
     if body.manual is not None:
-        colour["manual"] = body.manual.model_dump(mode="json")
+        color["manual"] = body.manual.model_dump(mode="json")
     if body.transition_seconds is not None:
-        colour["transition_seconds"] = body.transition_seconds
+        color["transition_seconds"] = body.transition_seconds
     config = ChannelConfig.model_validate(data)
     save_channel_config(channel.directory, config)
 
     messages: list[str] = []
-    if config.colour.mode is ColourMode.MANUAL:
-        messages = preset_registry.colour_messages(
-            config.colour.manual.accent,
-            config.colour.manual.tint,
-            transition_seconds=config.colour.transition_seconds,
+    if config.color.mode is ColorMode.MANUAL:
+        messages = preset_registry.color_messages(
+            config.color.manual.accent,
+            config.color.manual.tint,
+            transition_seconds=config.color.transition_seconds,
             stream_time=await _stream_time(state, name),
         )
         await _send(state, name, messages)
     return {
         "channel": name,
-        "colour": config.colour.model_dump(mode="json"),
+        "color": config.color.model_dump(mode="json"),
         "commands": messages,
     }
 
@@ -177,24 +262,24 @@ async def apply_preset_to_channel(
     if application.rewrite_images_list:
         recompile(state, name)
 
-    if application.visualisation is not None:
-        hot_set = application.config.visualisation.hot_set
+    if application.visualization is not None:
+        hot_set = application.config.visualization.hot_set
         application.messages.insert(
             0,
             stream_select_message(
-                STREAMSELECT_TARGET, hot_set.index(application.visualisation), len(hot_set)
+                STREAMSELECT_TARGET, hot_set.index(application.visualization), len(hot_set)
             ),
         )
     await _send(state, name, application.messages)
-    if application.visualisation is not None:
+    if application.visualization is not None:
         await state.events.publish(
-            CHANNEL_VISUALISATION, {"active": application.visualisation}, channel=name
+            CHANNEL_VISUALIZATION, {"active": application.visualization}, channel=name
         )
     return application
 
 
 async def _stream_time(state: AppState, name: str) -> float:
-    """Colour ramps are expressions in `t`, which is stream time, not wallclock."""
+    """Color ramps are expressions in `t`, which is stream time, not wallclock."""
     verdict = state.watchdog.latest.get(name)
     if verdict is not None and verdict.sample is not None:
         return round(verdict.sample.out_time_seconds, 3)

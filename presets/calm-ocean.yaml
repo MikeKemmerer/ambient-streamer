@@ -1,14 +1,14 @@
-# Cool blues on the default plugin. Colour rides the eq/hue ramps installed by
+# Cool blues on the default plugin. Color rides the eq/hue ramps installed by
 # one zmq command each; nothing here can force a restart.
 version: 1
 name: calm-ocean
 display_name: "Calm Ocean"
 description: "Cool blues, slow fades, gentle spectrum."
 
-visualisation:
+visualization:
   active: showfreqs-bars
 
-colour:
+color:
   mode: manual
   manual:
     accent: "#4FC3F7"
@@ -24,7 +24,7 @@ audio:
   crossfade_seconds: 6.0
 
 # eq.brightness, eq.saturation and hue.h are deliberately absent: those three
-# carry the colour ramp, and a constant here would land after it and replace a
+# carry the color ramp, and a constant here would land after it and replace a
 # 4 s transition with a hard cut.
 effects:
   eq:

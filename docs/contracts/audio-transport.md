@@ -84,7 +84,7 @@ Each channel needs two mounts:
 | `CHANNEL_FALLBACK_MOUNT` e.g. `/lofi-fallback` | a file on disk | covers Liquidsoap restarts |
 
 The fallback mount must be configured with `fallback-override` so listeners
-move back automatically when the real source returns. **Measured** behaviour
+move back automatically when the real source returns. **Measured** behavior
 across a kill and restart:
 
 ```

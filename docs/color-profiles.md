@@ -1,8 +1,8 @@
-# Colour profiles
+# Color profiles
 
-A colour profile is a small JSON file describing one image's palette. The slideshow producer
-reads the incoming slide's profile and sends the compositor a colour change, so the
-visualisation and the overall grade track the artwork.
+A color profile is a small JSON file describing one image's palette. The slideshow producer
+reads the incoming slide's profile and sends the compositor a color change, so the
+visualization and the overall grade track the artwork.
 
 The on-disk shape is fixed by [`contracts/on-disk.md`](contracts/on-disk.md); placement rules
 are in [`contracts/media-selection.md`](contracts/media-selection.md). This document is how
@@ -13,7 +13,7 @@ extraction and application actually work.
 ## Where profiles live
 
 **One profile per image, beside the image tree it belongs to.** A profile describes the
-*image*, not the channel, so an image shared by four channels is analysed once.
+*image*, not the channel, so an image shared by four channels is analyzed once.
 
 ```
 common/
@@ -55,14 +55,14 @@ extraction run rebuilds them.
 | `source` | string | image path relative to the repository root, or the bare filename if it is outside |
 | `extracted_at` | ISO-8601 UTC, seconds precision | when this profile was written |
 | `extractor` | string | which implementation produced it. **Versioned on purpose** |
-| `dominant` | `#RRGGBB` | the largest colour cluster |
-| `accent` | `#RRGGBB` | the most visually prominent cluster — what the visualisation tracks |
+| `dominant` | `#RRGGBB` | the largest color cluster |
+| `accent` | `#RRGGBB` | the most visually prominent cluster — what the visualization tracks |
 | `palette` | 1–5 × `#RRGGBB` | clusters, largest first |
 | `brightness` | 0.0–1.0 | mean perceived luminance (Rec. 709 weights) |
 | `warmth` | −1.0–1.0 | negative cool, positive warm |
 | `mood` | `calm` `warm` `cool` `energetic` | coarse label for UI grouping and preset selection |
 
-Validation is strict: unknown keys are rejected, and hex colours must match `^#[0-9A-Fa-f]{6}$`.
+Validation is strict: unknown keys are rejected, and hex colors must match `^#[0-9A-Fa-f]{6}$`.
 A file that fails validation is treated as **absent** and re-extracted rather than half-used.
 
 ### Why `extractor` is versioned
@@ -83,7 +83,7 @@ to work out which files are stale.
 | Load | Pillow, converted to RGB |
 | Downsample | `thumbnail((160, 160))` — analysis runs on at most 160 px on the long edge |
 | Cluster | k-means++ seeding, k = 5, 12 iterations, **fixed seed `20260811`** |
-| `palette` | cluster centres, ordered by pixel count, largest first |
+| `palette` | cluster centers, ordered by pixel count, largest first |
 | `dominant` | the largest cluster |
 | `accent` | the cluster maximising `saturation × (0.35 + luma)`, plus a `0.15` bonus for not being the dominant one |
 | `brightness` | mean per-pixel luma over the sampled image, weights `(0.2126, 0.7152, 0.0722)` |
@@ -91,7 +91,7 @@ to work out which files are stale.
 | `mood` | `energetic` if saturation ≥ 0.55 and brightness ≥ 0.45; else `warm` if warmth ≥ 0.15; else `cool` if warmth ≤ −0.15; else `calm` |
 
 **The seed is fixed deliberately.** The same image must not produce a different accent every
-time the library is rescanned — a 24/7 stream that shifts colour because someone re-ran an
+time the library is rescanned — a 24/7 stream that shifts color because someone re-ran an
 import is a bug, not a feature.
 
 The 160 px sample is a speed/accuracy trade. It is enough for palette extraction and keeps a
@@ -167,7 +167,7 @@ Profiles also appear in `GET /api/media/images`, summarised per image as `domina
 
 ---
 
-## How colour reaches the stream
+## How color reaches the stream
 
 Not by a per-frame command stream. By **one command that installs a self-animating expression**.
 
@@ -175,7 +175,7 @@ Not by a per-frame command stream. By **one command that installs a self-animati
 
 The `zmq` filter polls its socket only when a frame passes through it. That makes command
 latency exactly one frame period and caps throughput at about **31.5 commands per second** at
-30 fps — one per frame, with each send blocking for a frame period. A per-frame colour ramp is
+30 fps — one per frame, with each send blocking for a frame period. A per-frame color ramp is
 therefore impossible on the command channel.
 
 It does not need to be. Measured:
@@ -209,13 +209,13 @@ The compositor builds `eq@eq=eval=frame:...` for exactly this reason.
 **Measured:** one failed `drawbox` command permanently disables that instance for the life of
 the process — it re-runs `init()` on every command and never rolls back. Recovery requires the
 restart this system exists to avoid. `drawbox color` also takes no expression, so it could only
-hard-cut. Palette-driven colour rides on `eq` and `hue`, never `drawbox`.
+hard-cut. Palette-driven color rides on `eq` and `hue`, never `drawbox`.
 
 ### Range checking is the caller's job
 
 **Measured:** `eq@eq brightness 99` returns `0 Success`. FFmpeg accepts out-of-range values
 silently. Every value is clamped before it is sent —
-`backend/ambient/zmqctl.py` and the `ColourSender` in `ffmpeg/slideshow.py` are security- and
+`backend/ambient/zmqctl.py` and the `ColorSender` in `ffmpeg/slideshow.py` are security- and
 correctness-critical for this reason, not convenience wrappers.
 
 Message format is three whitespace-separated non-empty tokens, always. Anything else corrupts
@@ -226,7 +226,7 @@ the heap in FFmpeg's `f_zmq.c` and aborts the encoder with exit 134. See
 
 ## The two appliers
 
-There are **two independent paths** that send colour, with different mappings. Know which one
+There are **two independent paths** that send color, with different mappings. Know which one
 you are looking at.
 
 ### 1. Automatic — the slideshow producer
@@ -238,18 +238,18 @@ crossfade begins.
 |---------|-------|
 | `eq@eq brightness` | ramp `0.0` → `clamp((brightness − 0.5) × 0.4, −1, 1)` |
 | `eq@eq saturation` | ramp `1.0` → `clamp(1.0 + 0.25 × warmth, 0, 3)` |
-| `hue@hue h` | hard set to the accent colour's hue in degrees, **not ramped** |
+| `hue@hue h` | hard set to the accent color's hue in degrees, **not ramped** |
 
-Ramp duration is `COLOUR_TRANSITION_SECONDS`, default `2.0`. Sends run on a daemon thread with
-a depth-1 queue, so a wedged endpoint can never stall frame production — a backlogged colour
+Ramp duration is `COLOR_TRANSITION_SECONDS`, default `2.0`. Sends run on a daemon thread with
+a depth-1 queue, so a wedged endpoint can never stall frame production — a backlogged color
 change is dropped and logged as `zmq_backlogged`.
 
-If the profile file does not exist, nothing is sent and the previous colour stays. That is the
+If the profile file does not exist, nothing is sent and the previous color stays. That is the
 normal state for a library that has never been extracted.
 
 ### 2. Manual — the control plane
 
-`backend/ambient/presets.py`, driven by `PUT /api/channels/{name}/colour` and
+`backend/ambient/presets.py`, driven by `PUT /api/channels/{name}/color` and
 `POST /api/channels/{name}/preset`. Takes an `accent` + `tint` pair rather than a profile.
 
 | Command | Derivation |
@@ -258,17 +258,17 @@ normal state for a library that has never been extracted.
 | `eq@eq saturation` | `0.8 + accent_saturation × 0.8` |
 | `eq@eq brightness` | `(tint_luma − 0.5) × 2 × 0.2` |
 
-All three are ramped over `colour.transition_seconds`, anchored to the channel's current
+All three are ramped over `color.transition_seconds`, anchored to the channel's current
 `out_time`.
 
 ### Where they collide
 
-`config.yaml` has `colour.mode: automatic | manual`, and the backend honours it — manual mode
+`config.yaml` has `color.mode: automatic | manual`, and the backend honours it — manual mode
 sends the manual pair, automatic mode sends nothing.
 
-**The producer does not read `colour.mode`.** It applies the incoming slide's profile on every
-slide change regardless. So on a channel set to `manual`, a manual colour holds only until the
-next slide, then the profile wins. If you want manual colour to stick today, delete the
+**The producer does not read `color.mode`.** It applies the incoming slide's profile on every
+slide change regardless. So on a channel set to `manual`, a manual color holds only until the
+next slide, then the profile wins. If you want manual color to stick today, delete the
 profiles for that channel's images.
 
 ---
@@ -304,11 +304,11 @@ EXTRACTORS = {
 
 Rules an extractor must follow:
 
-1. **Return an `Analysis`**, with every field inside its documented range. `ColourProfile`
+1. **Return an `Analysis`**, with every field inside its documented range. `ColorProfile`
    validation rejects anything else and the profile is then treated as absent forever.
 2. **Be deterministic.** Seed any randomness with a constant. A profile that changes on
-   re-extraction makes a live stream shift colour for no operator-visible reason.
-3. **Version the name.** `-v1`, `-v2`. Changing behaviour without changing the name leaves
+   re-extraction makes a live stream shift color for no operator-visible reason.
+3. **Version the name.** `-v1`, `-v2`. Changing behavior without changing the name leaves
    stale profiles indistinguishable from fresh ones.
 4. **Raise `ProfileError`** for an unreadable or unparseable image. `refresh_tree` collects it
    and carries on; any other exception aborts the whole run.
@@ -328,8 +328,8 @@ implementation can be exercised against one tree before it becomes the default. 
 
 | Limitation | Effect |
 |------------|--------|
-| The producer's profile lookup only handles images **directly** under `images/` | An image at `images/night/city.jpg` gets a profile written at `profiles/night/city.json` by the extractor, but the producer looks for `images/night/profiles/city.json`, finds nothing, and applies no colour. **Keep images one level deep if you want automatic colour** |
-| The producer ignores `colour.mode` | See [§Where they collide](#where-they-collide) |
+| The producer's profile lookup only handles images **directly** under `images/` | An image at `images/night/city.jpg` gets a profile written at `profiles/night/city.json` by the extractor, but the producer looks for `images/night/profiles/city.json`, finds nothing, and applies no color. **Keep images one level deep if you want automatic color** |
+| The producer ignores `color.mode` | See [§Where they collide](#where-they-collide) |
 | `hue` is set, not ramped, by the producer | Slide changes with very different accents show a hue snap while brightness and saturation glide |
 | `POST /api/media/profiles` blocks | It answers `202` after doing the work, not before |
 | No extraction CLI | Use the Python snippet above |
@@ -343,5 +343,5 @@ implementation can be exercised against one tree before it becomes the default. 
 | [`contracts/on-disk.md`](contracts/on-disk.md) | the normative profile schema and placement |
 | [`contracts/zmq-control.md`](contracts/zmq-control.md) | message format, replies, targeting, the expression technique |
 | [`contracts/media-selection.md`](contracts/media-selection.md) | how images are selected and where profiles sit relative to them |
-| [visualization-filters.md](visualization-filters.md) | `eq` and `hue` as the live colour surface |
-| [api-reference.md](api-reference.md) | the colour and preset endpoints |
+| [visualization-filters.md](visualization-filters.md) | `eq` and `hue` as the live color surface |
+| [api-reference.md](api-reference.md) | the color and preset endpoints |

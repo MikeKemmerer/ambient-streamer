@@ -33,10 +33,13 @@ def test_event_names_match_the_contract() -> None:
         "channel.progress",
         "channel.track",
         "channel.slide",
-        "channel.visualisation",
+        "channel.visualization",
         "watchdog.event",
         "capacity.warning",
         "job.progress",
+        # Additive: media upload finished, the library changed. Pending in
+        # docs/contracts/rest-api.md.
+        "media.uploaded",
     }
 
 

@@ -1,7 +1,7 @@
 {
   "name": "avectorscope-lissajous",
   "display_name": "Lissajous Vectorscope",
-  "description": "Stereo vectorscope; the only branch with commandable colour.",
+  "description": "Stereo vectorscope; the only branch with commandable color.",
   "version": "1.0.0",
   "author": "ambient-streamer",
   "commandable": [

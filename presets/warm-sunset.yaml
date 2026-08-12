@@ -3,10 +3,10 @@ name: warm-sunset
 display_name: "Warm Sunset"
 description: "Amber wash, long crossfades."
 
-visualisation:
+visualization:
   active: showfreqs-bars
 
-colour:
+color:
   mode: manual
   manual:
     accent: "#FFB74D"
@@ -21,7 +21,7 @@ slideshow:
 audio:
   crossfade_seconds: 10.0
 
-# Only the knobs the colour ramp does not own: eq.brightness, eq.saturation and
+# Only the knobs the color ramp does not own: eq.brightness, eq.saturation and
 # hue.h are left to the ramp.
 effects:
   eq:

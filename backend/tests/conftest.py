@@ -22,9 +22,9 @@ version: 1
 name: calm-ocean
 display_name: "Calm Ocean"
 description: "Cool blues, slow fades."
-visualisation:
+visualization:
   active: showfreqs-bars
-colour:
+color:
   mode: manual
   manual:
     accent: "#4FC3F7"
@@ -59,6 +59,9 @@ class FakeDocker:
         self.calls: list[list[str]] = []
         self.states: dict[str, str] = {}
         self.files: dict[str, str] = {}
+        self.logs: dict[str, str] = {}
+        # Keyed by a substring of the argv, e.g. an encoder name for a probe.
+        self.runs: dict[str, CommandResult] = {}
         self.fail: set[str] = set()
 
     async def __call__(
@@ -82,10 +85,22 @@ class FakeDocker:
             if payload is None:
                 return CommandResult(tuple(args), 1, "", "no such file")
             return CommandResult(tuple(args), 0, payload, "")
+        if args[1:2] == ["logs"]:
+            payload = self.logs.get(args[-1])
+            if payload is None:
+                return CommandResult(tuple(args), 1, "", "No such container")
+            return CommandResult(tuple(args), 0, payload, "")
+        if args[1:2] == ["run"]:
+            for marker, result in self.runs.items():
+                if marker in joined:
+                    return result
         return CommandResult(tuple(args), 0, "", "")
 
     def compose_calls(self) -> list[list[str]]:
         return [c for c in self.calls if c[1:2] == ["compose"]]
+
+    def calls_matching(self, *tokens: str) -> list[list[str]]:
+        return [c for c in self.calls if all(t in c for t in tokens)]
 
 
 def eventually(predicate: Callable[[], object], timeout: float = 5.0):

@@ -24,10 +24,11 @@ CHANNEL_STATUS = "channel.status"
 CHANNEL_PROGRESS = "channel.progress"
 CHANNEL_TRACK = "channel.track"
 CHANNEL_SLIDE = "channel.slide"
-CHANNEL_VISUALISATION = "channel.visualisation"
+CHANNEL_VISUALIZATION = "channel.visualization"
 WATCHDOG_EVENT = "watchdog.event"
 CAPACITY_WARNING = "capacity.warning"
 JOB_PROGRESS = "job.progress"
+MEDIA_UPLOADED = "media.uploaded"
 
 EVENT_NAMES = frozenset(
     {
@@ -35,10 +36,11 @@ EVENT_NAMES = frozenset(
         CHANNEL_PROGRESS,
         CHANNEL_TRACK,
         CHANNEL_SLIDE,
-        CHANNEL_VISUALISATION,
+        CHANNEL_VISUALIZATION,
         WATCHDOG_EVENT,
         CAPACITY_WARNING,
         JOB_PROGRESS,
+        MEDIA_UPLOADED,
     }
 )
 

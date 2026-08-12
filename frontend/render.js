@@ -56,6 +56,19 @@ export function fmtClock(iso) {
   return d.toTimeString().slice(0, 8);
 }
 
+export function fmtBytes(bytes) {
+  if (typeof bytes !== 'number' || !Number.isFinite(bytes) || bytes < 0) return DASH;
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ['KB', 'MB', 'GB'];
+  let value = bytes / 1024;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  return `${value < 10 ? value.toFixed(1) : Math.round(value)} ${units[unit]}`;
+}
+
 /** Split a media path into a dim directory and a readable basename. */
 export function splitPath(path) {
   const text = String(path || '');
@@ -220,7 +233,7 @@ export function buildCard(name, handlers) {
     nextVal.title = ch.next_track || '';
     slideVal.textContent = ch.current_slide ? basename(ch.current_slide) : DASH;
     slideVal.title = ch.current_slide || '';
-    vizVal.textContent = ch.visualisation || DASH;
+    vizVal.textContent = ch.visualization || DASH;
 
     const substituted = Boolean(ch.encoder_requested && ch.encoder && ch.encoder_requested !== ch.encoder);
     clear(metrics);
@@ -318,6 +331,43 @@ export function availableRow(path, tree, used, onAdd) {
     ]),
     tree ? el('span', { class: 'tree', text: tree }) : null,
   ]);
+}
+
+/**
+ * One row per file in an upload batch. Built once and updated in place, so a
+ * re-render of the media lists beside it cannot wipe a transfer in progress.
+ */
+export function uploadRow(entry, onCancel) {
+  const name = el('span', { class: 'u-name', title: entry.name, text: entry.name });
+  const size = el('span', { class: 'u-size num', text: fmtBytes(entry.size) });
+  const chip = el('span', { class: 'chip u-state', dataset: { tone: 'idle' }, text: 'queued' });
+  const cancel = el('button', { class: 'icon u-cancel', type: 'button', title: 'cancel', text: '\u2715', onclick: () => onCancel(entry) });
+  const fill = el('span');
+  const bar = el('div', { class: 'u-bar' }, [fill]);
+  const detail = el('div', { class: 'u-detail small' });
+
+  const root = el('li', { dataset: { tone: 'idle' } }, [name, size, chip, cancel, bar, detail]);
+
+  function update() {
+    const tone = entry.status === 'done' ? 'ok'
+      : entry.status === 'failed' ? 'bad'
+        : entry.status === 'skipped' || entry.status === 'canceled' ? 'warn'
+          : entry.status === 'uploading' ? 'info' : 'idle';
+    root.dataset.tone = tone;
+    chip.dataset.tone = tone;
+    chip.textContent = entry.status === 'uploading'
+      ? `${Math.round((entry.progress || 0) * 100)}%`
+      : entry.status;
+    detail.textContent = entry.detail || '';
+    detail.hidden = !entry.detail;
+    bar.hidden = entry.status !== 'uploading' && entry.status !== 'queued';
+    fill.style.width = `${Math.round((entry.progress || 0) * 100)}%`;
+    cancel.hidden = entry.status !== 'uploading' && entry.status !== 'queued';
+    name.title = entry.path || entry.name;
+  }
+
+  update();
+  return { root, update };
 }
 
 /** HTML5 drag reorder over rows carrying data-index. */

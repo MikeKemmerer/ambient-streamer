@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 import os
 import re
 from pathlib import Path
@@ -17,7 +16,12 @@ from typing import Any
 from fastapi import APIRouter
 
 from .. import plugins as plugin_registry
-from ..config import ResolvedChannel, channel_directory
+from ..config import (
+    ResolvedChannel,
+    channel_directory,
+    ignored_channel_names,
+    parse_env_file,
+)
 from ..events import CHANNEL_STATUS
 from ..main import ApiError, AppState
 from ..models import (
@@ -30,13 +34,11 @@ from ..models import (
     Health,
     Resolution,
     StrictModel,
-    Visualisation,
+    Visualization,
 )
 from ..supervisor import ChannelBusy
 from ..watchdog import Verdict, parse_progress
-from .deps import Authed, recompile, save_channel_config
-
-LOG = logging.getLogger("ambient.api.channels")
+from .deps import Authed, recompile, run_action, save_channel_config
 
 router = APIRouter(prefix="/api/channels", tags=["channels"])
 
@@ -56,7 +58,7 @@ class CreateChannel(StrictModel):
     rtmp_url: str = "rtmp://a.rtmp.youtube.com/live2"
     # Write-only. It is never echoed back and never logged.
     stream_key: str = ""
-    visualisation: Visualisation | None = None
+    visualization: Visualization | None = None
 
 
 class PatchChannel(StrictModel):
@@ -65,11 +67,15 @@ class PatchChannel(StrictModel):
     genre: str | None = None
     audio: dict[str, Any] | None = None
     images: dict[str, Any] | None = None
-    visualisation: dict[str, Any] | None = None
-    colour: dict[str, Any] | None = None
+    visualization: dict[str, Any] | None = None
+    color: dict[str, Any] | None = None
     preset: str | None = None
     bumpers: dict[str, Any] | None = None
     schedule: dict[str, Any] | None = None
+
+
+class ResolutionBody(StrictModel):
+    resolution: Resolution
 
 
 # --------------------------------------------------------------------------
@@ -135,8 +141,8 @@ async def channel_status(
         "current_track": _pick(now, "current_track", "track"),
         "next_track": _pick(now, "next_track"),
         "current_slide": _pick(now, "current_slide", "slide"),
-        "visualisation": _pick(now, "visualisation", "active_plugin")
-        or channel.config.visualisation.active,
+        "visualization": _pick(now, "visualization", "active_plugin")
+        or channel.config.visualization.active,
         "encoder": _pick(now, "encoder") or channel.encoder.value,
         "encoder_requested": channel.encoder.value,
         "fps": sample.fps if sample else 0.0,
@@ -172,7 +178,11 @@ async def list_channels(state: AppState = Authed) -> dict[str, Any]:
             errors.append({"channel": name, "detail": str(exc.detail)})
             continue
         summaries.append(await channel_status(state, channel, detail=False))
-    return {"channels": summaries, "errors": errors}
+    return {
+        "channels": summaries,
+        "errors": errors,
+        "ignored": ignored_channel_names(state.workspace),
+    }
 
 
 @router.get("/{name}")
@@ -215,10 +225,10 @@ async def create_channel(body: CreateChannel, state: AppState = Authed) -> dict[
     if mount in taken or fallback in taken:
         raise ApiError(409, "mount_in_use", "another channel already uses that Icecast mount")
 
-    visualisation = body.visualisation or Visualisation(
+    visualization = body.visualization or Visualization(
         active=_default_plugin(state), hot_set=[_default_plugin(state)]
     )
-    config = ChannelConfig(name=name, genre=body.genre, visualisation=visualisation)
+    config = ChannelConfig(name=name, genre=body.genre, visualization=visualization)
 
     for sub in ("audio", "images", "bumpers", "profiles"):
         (directory / sub).mkdir(parents=True, exist_ok=True)
@@ -277,14 +287,14 @@ async def start_channel(name: str, state: AppState = Authed) -> dict[str, Any]:
     channel = state.channel(name)
     recompile(state, name)
     _guard_capacity(state, channel)
-    asyncio.create_task(_run(state, name, state.supervisor.start(name), "start"))
+    asyncio.create_task(run_action(state, name, state.supervisor.start(name), "start"))
     return {"accepted": True, "channel": name, "action": "start"}
 
 
 @router.post("/{name}/stop", status_code=202)
 async def stop_channel(name: str, state: AppState = Authed) -> dict[str, Any]:
     state.channel(name, resolve_media=False)
-    asyncio.create_task(_run(state, name, state.supervisor.stop(name), "stop"))
+    asyncio.create_task(run_action(state, name, state.supervisor.stop(name), "stop"))
     return {"accepted": True, "channel": name, "action": "stop"}
 
 
@@ -292,8 +302,63 @@ async def stop_channel(name: str, state: AppState = Authed) -> dict[str, Any]:
 async def restart_channel(name: str, state: AppState = Authed) -> dict[str, Any]:
     state.channel(name)
     recompile(state, name)
-    asyncio.create_task(_run(state, name, state.supervisor.restart(name), "restart"))
+    asyncio.create_task(run_action(state, name, state.supervisor.restart(name), "restart"))
     return {"accepted": True, "channel": name, "action": "restart", "mode": "make-before-break"}
+
+
+@router.put("/{name}/resolution", status_code=202)
+async def set_resolution(
+    name: str, body: ResolutionBody, state: AppState = Authed
+) -> dict[str, Any]:
+    """Not a live change. The filtergraph is fixed at launch, so the channel restarts."""
+    channel = state.channel(name, resolve_media=False)
+    previous = channel.resolution
+    if body.resolution is previous:
+        return {
+            "accepted": False,
+            "channel": name,
+            "resolution": previous.value,
+            "restarted": False,
+            "detail": f"{name} is already {previous.value}",
+        }
+
+    restore = _raw_resolution(channel.directory)
+    _write_env_values(channel.directory, {"CHANNEL_RESOLUTION": body.resolution.value})
+    try:
+        updated = state.channel(name)
+        _guard_capacity(state, updated)
+    except ApiError:
+        # A refused change must not survive in .env.
+        _write_env_values(channel.directory, {"CHANNEL_RESOLUTION": restore})
+        raise
+    recompile(state, name)
+
+    running = (await state.supervisor.containers(name)).composer.running
+    if running:
+        asyncio.create_task(
+            run_action(state, name, state.supervisor.restart(name), "resolution")
+        )
+    await state.events.publish(
+        CHANNEL_STATUS,
+        {"state": ChannelState.STARTING.value if running else ChannelState.STOPPED.value,
+         "changed": ["resolution"]},
+        channel=name,
+    )
+    return {
+        "accepted": True,
+        "channel": name,
+        "resolution": body.resolution.value,
+        "previous": previous.value,
+        "projected_cores": round(updated.projected_cores, 3),
+        "restarted": running,
+        "mode": "make-before-break" if running else "applied-on-next-start",
+        "detail": (
+            "the filtergraph is fixed at launch, so the compositor is being replaced; "
+            "measured ~1s of RTMP gap and a new YouTube ingest session"
+            if running
+            else "the channel is stopped; the new resolution applies on the next start"
+        ),
+    }
 
 
 @router.get("/{name}/preview")
@@ -362,14 +427,29 @@ def _write_channel_env(directory: Path, body: CreateChannel, mount: str, fallbac
     return path
 
 
-async def _run(state: AppState, name: str, awaitable, action: str) -> None:
-    """202 means the work happens here; failures surface as SSE, not a status code."""
-    try:
-        await awaitable
-    except Exception as exc:
-        LOG.warning("channel %s: %s failed: %s", name, action, exc)
-        await state.events.publish(
-            CHANNEL_STATUS,
-            {"state": ChannelState.FAILED.value, "action": action, "detail": str(exc)},
-            channel=name,
-        )
+def _raw_resolution(directory: Path) -> str:
+    """The literal `.env` value, which may be empty and inherit the default."""
+    return parse_env_file(Path(directory) / ".env").get("CHANNEL_RESOLUTION", "")
+
+
+def _write_env_values(directory: Path, values: dict[str, str]) -> Path:
+    """Rewrite named keys in place, preserving everything else including the key.
+
+    Read-modify-write rather than a full regeneration: this file holds the
+    stream key, which the control plane must not be able to lose.
+    """
+    path = Path(directory) / ".env"
+    existing = path.read_text(encoding="utf-8").splitlines() if path.is_file() else []
+    remaining = dict(values)
+    out: list[str] = []
+    for raw in existing:
+        key = raw.split("=", 1)[0].strip().removeprefix("export ").strip()
+        if key in remaining:
+            out.append(f"{key}={remaining.pop(key)}")
+        else:
+            out.append(raw)
+    out.extend(f"{key}={value}" for key, value in remaining.items())
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+        handle.write("\n".join(out) + "\n")
+    return path

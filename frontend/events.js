@@ -47,7 +47,7 @@ export class EventStream {
       } catch (err) {
         if (this.stopped || gen !== this.generation) return;
         if (err && err.status === 401) {
-          this.onState('unauthorised');
+          this.onState('unauthorized');
           this.stopped = true;
           return;
         }

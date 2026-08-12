@@ -36,7 +36,7 @@ images:
   hold_seconds: 20.0
   fade_seconds: 2.0
 
-visualisation:
+visualization:
   active: showfreqs-bars
 
   # Every plugin listed here is instantiated at launch so it can be switched to
@@ -48,7 +48,7 @@ visualisation:
   hot_set:
     - showfreqs-bars
 
-colour:
+color:
   mode: automatic             # automatic | manual
   manual:
     accent: "#4FC3F7"

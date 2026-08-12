@@ -1,4 +1,4 @@
-"""Visualisation plugin registry.
+"""Visualization plugin registry.
 
 Reads the manifests under `plugins/` and enforces the one rule FFmpeg will not
 enforce: a plugin branch must emit exactly the channel's output geometry. A
@@ -20,9 +20,41 @@ _PLACEHOLDER_SIZE = re.compile(r"\$\{WIDTH\}x\$\{HEIGHT\}")
 _BASE_PIXELS = 1280 * 720
 _1080P_PIXELS = 1920 * 1080
 
+# Measured at 720p30/libx264 on a 7-core host. A filter benchmark sees only the
+# visualization branch; a channel also pays MP3 decode, the slideshow, the
+# program encode and the preview, so budget from these, never from a manifest.
+#
+#   3 hot plugins  0.9936x at 2.03 cores
+#   5 hot plugins  0.97x   at 2.64 cores  (below realtime)
+#   1 hot plugin   1.0x    at ~1.50 cores
+#
+# Slope is 0.28 per extra hot branch, not the 0.22 previously assumed.
+IDLE_BRANCH_CORES_720P30 = 0.28
+# Decode, slideshow, per-frame filters and the 720p program encode.
+PIPELINE_CORES_720P30 = 1.02
+# The HLS preview is a second complete encode, not a tap off the first. Fixed
+# at 640x360@15 regardless of the channel's own geometry, so it does not scale.
+PREVIEW_CORES = 0.20
+# The pipeline scales with pixels like the visualization branches do.
+PIPELINE_SCALE_1080P = 1.9
+
 
 class PluginError(ValueError):
     """A plugin manifest is missing, malformed, or geometrically wrong."""
+
+
+def pixel_scale(width: int, height: int, fps: int, scale_1080p: float) -> float:
+    """Cost multiplier for a branch measured at 720p30."""
+    pixels = width * height
+    if pixels <= _BASE_PIXELS:
+        scale = 1.0
+    elif pixels <= _1080P_PIXELS:
+        scale = 1.0 + (scale_1080p - 1.0) * (pixels - _BASE_PIXELS) / (
+            _1080P_PIXELS - _BASE_PIXELS
+        )
+    else:
+        scale = scale_1080p * pixels / _1080P_PIXELS
+    return scale * (fps / 30.0)
 
 
 @dataclass(frozen=True)
@@ -51,16 +83,14 @@ class PluginManifest:
         return self.directory / "viz.ffmpeg"
 
     def cost_cores(self, width: int, height: int, fps: int) -> float:
-        pixels = width * height
-        if pixels <= _BASE_PIXELS:
-            scale = 1.0
-        elif pixels <= _1080P_PIXELS:
-            scale = 1.0 + (self.scale_1080p - 1.0) * (pixels - _BASE_PIXELS) / (
-                _1080P_PIXELS - _BASE_PIXELS
-            )
-        else:
-            scale = self.scale_1080p * pixels / _1080P_PIXELS
-        return self.cores_720p30 * scale * (fps / 30.0)
+        """Declared cost, floored at the measured per-branch slope.
+
+        Manifest figures come from benchmarking a branch alone; in a live graph
+        the cheapest branch still measured 0.28 at 720p30.
+        """
+        scale = pixel_scale(width, height, fps, self.scale_1080p)
+        floor = IDLE_BRANCH_CORES_720P30 * pixel_scale(width, height, fps, PIPELINE_SCALE_1080P)
+        return max(self.cores_720p30 * scale, floor)
 
 
 def load_manifest(directory: Path) -> PluginManifest:
@@ -151,6 +181,14 @@ class HotSetCheck:
     errors: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     projected_cores: float = 0.0
+    pipeline_cores: float = 0.0
+    preview_cores: float = 0.0
+    branch_cores: float = 0.0
+
+
+def pipeline_cores(width: int, height: int, fps: int) -> float:
+    """Everything the compositor pays before any visualization branch."""
+    return PIPELINE_CORES_720P30 * pixel_scale(width, height, fps, PIPELINE_SCALE_1080P)
 
 
 def check_hot_set(
@@ -175,5 +213,8 @@ def check_hot_set(
             check_output_size(manifest, width, height)
         except PluginError as exc:
             check.errors.append(str(exc))
-        check.projected_cores += manifest.cost_cores(width, height, fps)
+        check.branch_cores += manifest.cost_cores(width, height, fps)
+    check.pipeline_cores = pipeline_cores(width, height, fps)
+    check.preview_cores = PREVIEW_CORES
+    check.projected_cores = check.pipeline_cores + check.preview_cores + check.branch_cores
     return check

@@ -421,7 +421,7 @@ probe() {
 
 # QSV needs a real Intel render node. /dev/dri existing is not enough: on a
 # host whose only render node belongs to an NVIDIA card, it is present and QSV
-# still cannot initialise. The encode is the test.
+# still cannot initialize. The encode is the test.
 QSV_NOTE="needs an Intel render node; /dev/dri is not exposed on Docker Desktop/WSL2 at all"
 if [[ -d /dev/dri ]]; then
 	log "/dev/dri present: $(ls /dev/dri | paste -sd' ' -) — presence proves nothing, probing"

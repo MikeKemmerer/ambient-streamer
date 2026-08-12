@@ -19,9 +19,9 @@ them requires re-running the spike that produced them.
 | [audio-transport.md](audio-transport.md) | Liquidsoap → Icecast → compositor | media-pipeline, infra |
 | [slideshow.md](slideshow.md) | producer → compositor over `image2pipe` | media-pipeline, backend-api |
 | [zmq-control.md](zmq-control.md) | runtime filter commands | backend-api, media-pipeline |
-| [plugin.md](plugin.md) | visualisation plugin package | media-pipeline, backend-api |
+| [plugin.md](plugin.md) | visualization plugin package | media-pipeline, backend-api |
 | [media-selection.md](media-selection.md) | `playlist.m3u`, `images.list`, shared vs per-channel | backend-api, media-pipeline |
-| [on-disk.md](on-disk.md) | paths, colour profiles, HLS, logs, runtime state | all |
+| [on-disk.md](on-disk.md) | paths, color profiles, HLS, logs, runtime state | all |
 | [rest-api.md](rest-api.md) | REST + SSE | backend-api, frontend |
 | [preset.md](preset.md) | preset packs | media-pipeline, backend-api |
 | [bumpers.md](bumpers.md) | station IDs and their insertion | media-pipeline, backend-api, frontend |
@@ -38,8 +38,8 @@ Phase 0 measured what each hatch actually costs:
 |---|---|---|
 | Track / playlist order | Liquidsoap owns audio in its own process | 0 s |
 | Image set / order | producer feeds `image2pipe` | 0 s, FFmpeg PID unchanged |
-| Colours | `zmq` runtime commands | one frame |
-| Visualisation plugin | `streamselect` between hot graphs | one frame, clean cut |
+| Colors | `zmq` runtime commands | one frame |
+| Visualization plugin | `streamselect` between hot graphs | one frame, clean cut |
 | Liquidsoap restart | Icecast fallback mount | 0 s, 0.00 % silence |
 | Anything needing a real FFmpeg restart | MediaMTX relay | **~1 s, and a new YouTube ingest session** |
 

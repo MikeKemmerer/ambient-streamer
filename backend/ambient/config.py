@@ -82,6 +82,7 @@ class Workspace:
     common_dir: Path
     channels_dir: Path
     log_dir: Path
+    run_dir: Path
     plugins_dir: Path
     presets_dir: Path
     ambient: AmbientConfig
@@ -127,12 +128,15 @@ def load_workspace(repo_root: Path | str) -> Workspace:
     common_value = raw_env.get("AMBIENT_COMMON_DIR") or ambient.paths.common
     channels_value = raw_env.get("AMBIENT_DATA_DIR") or ambient.paths.channels
     log_value = raw_env.get("AMBIENT_LOG_DIR") or ambient.paths.logs
+    # Shared with every composer so the watchdog can read their progress files.
+    run_value = raw_env.get("AMBIENT_RUN_DIR") or "/run/ambient"
 
     workspace = Workspace(
         root=root,
         common_dir=_resolve_path(root, common_value),
         channels_dir=_resolve_path(root, channels_value),
         log_dir=_resolve_path(root, log_value),
+        run_dir=_resolve_path(root, run_value),
         plugins_dir=root / "plugins",
         presets_dir=root / "presets",
         ambient=ambient,
@@ -170,11 +174,19 @@ def channel_directory(workspace: Workspace, name: str) -> Path:
     return resolved
 
 
+def ignored_channel_names(workspace: Workspace) -> list[str]:
+    """Directories `paths.ignore_channels` holds back from discovery."""
+    return sorted({name.strip() for name in workspace.ambient.paths.ignore_channels if name.strip()})
+
+
 def discover_channels(workspace: Workspace) -> list[str]:
-    """Every directory under channels/ that holds a .env is a channel."""
+    """Every directory under channels/ that holds a .env and is not ignored."""
+    ignored = set(ignored_channel_names(workspace))
     names: list[str] = []
     for child in sorted(workspace.channels_dir.iterdir()):
         if not child.is_dir() or not (child / ".env").is_file():
+            continue
+        if child.name in ignored:
             continue
         if not CHANNEL_NAME_RE.match(child.name):
             workspace.warnings.append(
@@ -203,10 +215,13 @@ class ResolvedChannel:
     fade_seconds: float
     producer_fps: int
     jpeg_quality: int
+    active_plugin: str
+    hot_set: list[str]
     audio: SelectionResult
     images: SelectionResult
     bumpers: SelectionResult
     projected_cores: float = 0.0
+    cores_breakdown: dict[str, float] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
 
     @property
@@ -299,7 +314,7 @@ def load_channel(
             )
 
     registry = plugin_registry.load_registry(workspace.plugins_dir)
-    check = plugin_registry.check_hot_set(config.visualisation.hot_set, registry, width, height, fps)
+    check = plugin_registry.check_hot_set(config.visualization.hot_set, registry, width, height, fps)
     if check.errors:
         raise ConfigError(f"channel {name!r}: " + "; ".join(check.errors))
     warnings.extend(f"channel {name!r}: {w}" for w in check.warnings)
@@ -340,10 +355,17 @@ def load_channel(
         ),
         producer_fps=defaults.slideshow.producer_fps,
         jpeg_quality=defaults.slideshow.jpeg_quality,
+        active_plugin=config.visualization.active,
+        hot_set=list(config.visualization.hot_set),
         audio=audio,
         images=images,
         bumpers=bumpers,
         projected_cores=check.projected_cores,
+        cores_breakdown={
+            "pipeline": round(check.pipeline_cores, 3),
+            "preview": round(check.preview_cores, 3),
+            "branches": round(check.branch_cores, 3),
+        },
         warnings=warnings,
     )
 

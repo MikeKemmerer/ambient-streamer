@@ -18,7 +18,7 @@ you an afternoon if you find them later.
 | Streaming path — Liquidsoap → Icecast → composer → MediaMTX → YouTube, plus HLS preview | **built, verified live** |
 | `scripts/install.sh` — prerequisites, secrets, paths, port check, encoder probe, fallbacks | **built** |
 | Control plane — FastAPI REST + SSE, supervisor, watchdog, scheduler, in its own container | **built** |
-| Five visualisation plugins, six preset packs | **built** |
+| Five visualization plugins, six preset packs | **built** |
 | Operator web UI | files exist under `frontend/` and are baked into the backend image, but **the backend serves no static files** — see [§10](#10-the-operator-ui) |
 | HLS preview proxy through the backend | **not implemented** — see [§9](#9-verify) |
 | Icecast mount registration when a channel is created | **manual** — see [§7](#7-register-the-channels-icecast-mount-and-fallback) |
@@ -60,11 +60,11 @@ Several `config.yaml` settings do not reach the running compositor yet. See
 This is a public, continuous broadcast. Both halves of the media matter legally.
 
 - **Music must be royalty-free or owned.** Anything else attracts Content ID claims, and on a
-  24/7 stream a claim can mute or end the broadcast. Keep the licence or purchase record for
+  24/7 stream a claim can mute or end the broadcast. Keep the license or purchase record for
   every track.
-- **Images must be licensed for this use**, and any licence requiring attribution needs that
+- **Images must be licensed for this use**, and any license requiring attribution needs that
   attribution where a viewer can see it — the video description at minimum, on screen if the
-  licence says so. CC-BY is not "free"; it is "free with a condition".
+  license says so. CC-BY is not "free"; it is "free with a condition".
 
 Nothing in this repository checks either. It is the operator's responsibility.
 
@@ -204,7 +204,7 @@ directory it is given, so the link resolves to a path the container cannot see. 
 lists exist to avoid that. Full rules:
 [`contracts/media-selection.md`](contracts/media-selection.md).
 
-Optionally extract colour profiles now, so the visualisation tracks the artwork from the first
+Optionally extract color profiles now, so the visualization tracks the artwork from the first
 slide:
 
 ```bash
@@ -362,7 +362,7 @@ docker logs --tail 40 ambient-mediamtx
 
 Expect `[path lofi] ... is publishing` and a `[publish lofi] publishing to
 rtmp://a.rtmp.youtube.com/live2 (key withheld from argv)` line. If the key is still empty you
-get `staying down; will re-check every 60s` instead — that is correct behaviour, not a fault.
+get `staying down; will re-check every 60s` instead — that is correct behavior, not a fault.
 
 **YouTube Studio** reports **Excellent** stream health with no dropped frames. Path-ready to
 publishing is measured at **207 ms**, so the ingest indicator should turn over quickly.
@@ -434,8 +434,8 @@ of the resolved configuration to the compositor.
 | You set | What actually happens |
 |---------|-----------------------|
 | `CHANNEL_RESOLUTION`, `CHANNEL_FPS` in `.env` | Ignored by the compositor. It reads `WIDTH`/`HEIGHT`/`FPS`, which the template does not set, so **every channel runs 1280×720 at 30 fps** |
-| `visualisation.hot_set` in `config.yaml` | Not passed. The compositor uses its own default, `showfreqs-bars`, whatever the file says — so the other four plugins validate and cost but do not go on air |
-| `visualisation.active` | Not passed. The active branch is always index 0 |
+| `visualization.hot_set` in `config.yaml` | Not passed. The compositor uses its own default, `showfreqs-bars`, whatever the file says — so the other four plugins validate and cost but do not go on air |
+| `visualization.active` | Not passed. The active branch is always index 0 |
 | `images.hold_seconds`, `images.fade_seconds`, `images.order` | Not passed. The producer uses its defaults: 20 s hold, 2 s fade, sequential |
 | `slideshow.producer_fps`, `jpeg_quality` in `ambient.yaml` | Not passed. Producer defaults apply: 10 fps, quality 88 |
 | `CHANNEL_FALLBACK_MOUNT` | Validated, then unused. Icecast derives the fallback from the channel name in `mounts.list` |
@@ -483,7 +483,7 @@ docker exec lofi-composer cat /run/ambient/lofi/filtergraph.txt
 | [scaling.md](scaling.md) | how many channels this host will hold |
 | [docker-deployment.md](docker-deployment.md) | ports, GPU passthrough, resource limits, the Docker socket |
 | [api-reference.md](api-reference.md) | every REST endpoint and SSE event |
-| [plugin-development.md](plugin-development.md) | writing a visualisation plugin |
+| [plugin-development.md](plugin-development.md) | writing a visualization plugin |
 | [visualization-filters.md](visualization-filters.md) | the filters available and how they behave here |
-| [color-profiles.md](color-profiles.md) | palettes, extraction, and how colour reaches the stream |
+| [color-profiles.md](color-profiles.md) | palettes, extraction, and how color reaches the stream |
 | [`contracts/`](contracts/README.md) | the frozen interfaces — the source of truth |

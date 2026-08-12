@@ -128,6 +128,7 @@ services:
       AMBIENT_BACKEND_PORT: ${AMBIENT_BACKEND_PORT:-8090}
       AMBIENT_ROOT: ${AMBIENT_REPO_ROOT:?unset — run scripts/install.sh; it must be this repo's absolute host path}
       AMBIENT_LOG_DIR: ${AMBIENT_LOG_DIR:-/var/log/ambient}
+      AMBIENT_RUN_DIR: ${AMBIENT_RUN_DIR:-/run/ambient}
       AMBIENT_FRONTEND_DIR: ${AMBIENT_FRONTEND_DIR:-/opt/ambient/frontend}
       PUID: ${PUID:-1000}
       PGID: ${PGID:-1000}
@@ -142,6 +143,9 @@ services:
       # and the media resolver writes playlist.m3u and images.list.
       - ${AMBIENT_REPO_ROOT:?}:${AMBIENT_REPO_ROOT:?}
       - ${AMBIENT_LOG_DIR:-/var/log/ambient}:${AMBIENT_LOG_DIR:-/var/log/ambient}
+      # Shared with every composer. The watchdog reads each channel's progress
+      # file from here; without it the watchdog is blind and restarts forever.
+      - ${AMBIENT_RUN_DIR:-/run/ambient}:${AMBIENT_RUN_DIR:-/run/ambient}
     ports:
       - "${AMBIENT_BIND_ADDRESS:-127.0.0.1}:${AMBIENT_BACKEND_PORT:-8090}:${AMBIENT_BACKEND_PORT:-8090}"
     healthcheck:

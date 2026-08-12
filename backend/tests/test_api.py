@@ -117,7 +117,7 @@ def test_get_channel_returns_the_dashboard_fields(api) -> None:
     body = client.get("/api/channels/lofi", headers=AUTH).json()
     for field in (
         "name", "state", "uptime_seconds", "current_track", "next_track", "current_slide",
-        "visualisation", "encoder", "encoder_requested", "fps", "speed", "bitrate_kbps",
+        "visualization", "encoder", "encoder_requested", "fps", "speed", "bitrate_kbps",
         "cpu_cores", "liquidsoap_buffer", "rtmp", "hls", "health",
     ):
         assert field in body, field
@@ -136,7 +136,7 @@ def test_an_unknown_channel_is_a_404(api) -> None:
 
 def test_a_hostile_channel_name_is_rejected(api) -> None:
     client, state = api
-    # A traversal never reaches a handler: the router normalises it away.
+    # A traversal never reaches a handler: the router normalizes it away.
     traversal = client.get("/api/channels/..%2F..%2Fetc", headers=AUTH)
     assert traversal.status_code == 404
     assert traversal.json()["error"] == "not_found"
@@ -291,7 +291,7 @@ def test_put_images_rewrites_the_generated_list(api, repo: Path) -> None:
 
 
 # --------------------------------------------------------------------------
-# Plugins, presets and colour
+# Plugins, presets and color
 # --------------------------------------------------------------------------
 
 
@@ -302,22 +302,42 @@ def test_plugins_and_presets_are_listed(api) -> None:
     assert [p["name"] for p in presets] == ["calm-ocean"]
 
 
-def test_switching_outside_the_hot_set_is_a_409(api) -> None:
+def test_switching_outside_the_hot_set_stages_and_restarts(api, repo: Path) -> None:
+    """An installed plugin is usable; it just cannot switch instantly."""
     client, _state = api
     response = client.put(
-        "/api/channels/lofi/visualisation", headers=AUTH, json={"active": "showwaves-classic"}
+        "/api/channels/lofi/visualization", headers=AUTH, json={"active": "showwaves-classic"}
+    )
+    assert response.status_code == 202
+    body = response.json()
+    assert body["staged"] is True
+    assert body["active"] == "showwaves-classic"
+    assert body["hot_set"] == ["showfreqs-bars", "showwaves-classic"]
+    config = yaml.safe_load((repo / "channels" / "lofi" / "config.yaml").read_text("utf-8"))
+    assert config["visualization"]["hot_set"] == ["showfreqs-bars", "showwaves-classic"]
+
+
+def test_staging_can_be_refused_by_the_caller(api) -> None:
+    client, _state = api
+    response = client.put(
+        "/api/channels/lofi/visualization?allow_restart=false",
+        headers=AUTH,
+        json={"active": "showwaves-classic"},
     )
     assert response.status_code == 409
-    assert response.json()["error"] == "not_in_hot_set"
+    assert response.json()["error"] == "restart_required"
 
 
 def test_switching_inside_the_hot_set_is_accepted(api) -> None:
     client, _state = api
     response = client.put(
-        "/api/channels/lofi/visualisation", headers=AUTH, json={"active": "showfreqs-bars"}
+        "/api/channels/lofi/visualization", headers=AUTH, json={"active": "showfreqs-bars"}
     )
     assert response.status_code == 200
-    assert response.json()["active"] == "showfreqs-bars"
+    body = response.json()
+    assert body["active"] == "showfreqs-bars"
+    assert body["staged"] is False
+    assert body["mode"] == "streamselect"
 
 
 def test_applying_a_preset_returns_202(api, repo: Path) -> None:
@@ -345,10 +365,10 @@ def test_a_preset_name_cannot_traverse(api) -> None:
     assert response.status_code == 400
 
 
-def test_setting_colour_persists_and_emits_validated_commands(api, repo: Path) -> None:
+def test_setting_color_persists_and_emits_validated_commands(api, repo: Path) -> None:
     client, _state = api
     response = client.put(
-        "/api/channels/lofi/colour",
+        "/api/channels/lofi/color",
         headers=AUTH,
         json={"mode": "manual", "manual": {"accent": "#4FC3F7", "tint": "#0B2A3A"}},
     )
@@ -356,13 +376,13 @@ def test_setting_colour_persists_and_emits_validated_commands(api, repo: Path) -
     for message in response.json()["commands"]:
         assert len(message.split()) == 3
     config = yaml.safe_load((repo / "channels" / "lofi" / "config.yaml").read_text("utf-8"))
-    assert config["colour"]["manual"]["accent"] == "#4FC3F7"
+    assert config["color"]["manual"]["accent"] == "#4FC3F7"
 
 
-def test_a_non_hex_colour_is_a_400(api) -> None:
+def test_a_non_hex_color_is_a_400(api) -> None:
     client, _state = api
     response = client.put(
-        "/api/channels/lofi/colour", headers=AUTH, json={"manual": {"accent": "red", "tint": "#000000"}}
+        "/api/channels/lofi/color", headers=AUTH, json={"manual": {"accent": "red", "tint": "#000000"}}
     )
     assert response.status_code == 400
     assert response.json()["error"] == "invalid_request"
@@ -425,10 +445,46 @@ def test_capacity_reports_projection_against_available_cores(api) -> None:
     assert [c["channel"] for c in body["channels"]] == ["lofi"]
 
 
+def test_system_probes_encoders_inside_the_composer_image(api) -> None:
+    """The backend image ships no ffmpeg; encoding happens in the composer."""
+    from ambient.supervisor import CommandResult
+
+    client, state = api
+    docker = state.supervisor.runner
+    docker.runs["h264_nvenc"] = CommandResult(
+        (), 1, "", "[h264_nvenc @ 0x1] OpenEncodeSessionEx failed: out of memory (10)"
+    )
+    docker.runs["h264_qsv"] = CommandResult((), 125, "", "docker: no such device /dev/dri")
+
+    body = client.get("/api/system", headers=AUTH).json()
+    assert body["encoder_probe_image"] == "ambient-composer:dev"
+    probes = {p["encoder"]: p for p in body["encoders"]}
+    assert probes["h264_nvenc"]["available"] is False
+    assert "OpenEncodeSessionEx failed" in probes["h264_nvenc"]["detail"]
+    assert probes["h264_qsv"]["available"] is False
+    assert probes["libx264"]["available"] is True
+
+    runs = [c for c in docker.calls if c[1:2] == ["run"]]
+    assert any("--gpus" in c for c in runs)
+    assert any("ambient-composer:dev" in c for c in runs)
+
+
+def test_system_caches_probes_until_refresh_is_asked_for(api) -> None:
+    client, state = api
+    docker = state.supervisor.runner
+    client.get("/api/system", headers=AUTH)
+    first = len([c for c in docker.calls if c[1:2] == ["run"]])
+    client.get("/api/system", headers=AUTH)
+    assert len([c for c in docker.calls if c[1:2] == ["run"]]) == first
+    client.get("/api/system?refresh=true", headers=AUTH)
+    assert len([c for c in docker.calls if c[1:2] == ["run"]]) == first * 2
+
+
 def test_logs_validate_the_service_name(api) -> None:
     client, _state = api
     ok = client.get("/api/logs", params={"channel": "lofi", "service": "compositor"}, headers=AUTH)
     assert ok.status_code == 200
+    assert ok.json()["services"] == ["compositor", "liquidsoap", "producer", "watchdog"]
     bad = client.get(
         "/api/logs", params={"channel": "lofi", "service": "../../etc/passwd"}, headers=AUTH
     )
@@ -436,9 +492,113 @@ def test_logs_validate_the_service_name(api) -> None:
     assert bad.json()["error"] == "invalid_log_service"
 
 
+def test_logs_fall_back_to_docker_logs_when_no_file_exists(api) -> None:
+    client, state = api
+    state.supervisor.runner.logs["lofi-composer"] = "frame=1 fps=30\nframe=2 fps=30\n"
+    body = client.get(
+        "/api/logs", params={"channel": "lofi", "service": "compositor"}, headers=AUTH
+    ).json()
+    assert body["source"] == "docker"
+    assert body["container"] == "lofi-composer"
+    assert body["text"] == "frame=1 fps=30\nframe=2 fps=30"
+    assert body["line_count"] == 2
+    assert body["path"].endswith("/lofi/compositor.log")
+
+
+def test_logs_prefer_the_file_when_it_has_content(api, repo: Path) -> None:
+    client, state = api
+    state.supervisor.runner.logs["lofi-composer"] = "from docker\n"
+    log = repo / "logs" / "lofi" / "compositor.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_text("from the file\n", encoding="utf-8")
+    body = client.get(
+        "/api/logs", params={"channel": "lofi", "service": "compositor"}, headers=AUTH
+    ).json()
+    assert body["source"] == "file"
+    assert body["text"] == "from the file"
+
+
+def test_logs_report_no_source_for_a_service_with_no_container(api) -> None:
+    client, _state = api
+    body = client.get(
+        "/api/logs", params={"channel": "lofi", "service": "watchdog"}, headers=AUTH
+    ).json()
+    assert body["source"] == "none"
+    assert body["text"] == ""
+
+
 def test_logs_reject_an_unknown_channel(api) -> None:
     client, _state = api
     assert client.get("/api/logs", params={"channel": "nope"}, headers=AUTH).status_code == 404
+
+
+# --------------------------------------------------------------------------
+# Discovery and resolution
+# --------------------------------------------------------------------------
+
+
+def test_the_example_template_is_not_listed_as_a_channel(api, repo: Path) -> None:
+    client, _state = api
+    example = repo / "channels" / "example"
+    example.mkdir()
+    (example / ".env").write_text("CHANNEL_MOUNT=/example\n", encoding="utf-8")
+    body = client.get("/api/channels", headers=AUTH).json()
+    assert [c["name"] for c in body["channels"]] == ["lofi"]
+    assert body["ignored"] == ["example"]
+    assert client.get("/api/system", headers=AUTH).json()["ignored_channels"] == ["example"]
+
+
+def test_changing_resolution_reports_a_restart(api, repo: Path) -> None:
+    client, state = api
+    state.supervisor.runner.states["lofi-composer"] = RUNNING_STATE
+    response = client.put(
+        "/api/channels/lofi/resolution", headers=AUTH, json={"resolution": "480p"}
+    )
+    assert response.status_code == 202
+    body = response.json()
+    assert body["restarted"] is True
+    assert body["mode"] == "make-before-break"
+    assert body["previous"] == "720p"
+    env = (repo / "channels" / "lofi" / ".env").read_text(encoding="utf-8")
+    assert "CHANNEL_RESOLUTION=480p" in env
+    # The credential survives a read-modify-write of the same file.
+    assert "YOUTUBE_STREAM_KEY=aaaa-bbbb-cccc-dddd-eeee" in env
+
+
+def test_changing_resolution_on_a_stopped_channel_does_not_restart(api) -> None:
+    client, _state = api
+    body = client.put(
+        "/api/channels/lofi/resolution", headers=AUTH, json={"resolution": "1080p"}
+    ).json()
+    assert body["restarted"] is False
+    assert body["mode"] == "applied-on-next-start"
+
+
+def test_an_unknown_resolution_is_a_400(api) -> None:
+    client, _state = api
+    response = client.put(
+        "/api/channels/lofi/resolution", headers=AUTH, json={"resolution": "8k"}
+    )
+    assert response.status_code == 400
+
+
+def test_a_refused_resolution_change_leaves_the_env_alone(api, repo: Path) -> None:
+    client, state = api
+    plugin = repo / "plugins" / "showfreqs-bars"
+    plugin.mkdir(parents=True)
+    (plugin / "config.json").write_text(
+        json.dumps({"name": "showfreqs-bars", "output_size": "channel"}), encoding="utf-8"
+    )
+    (plugin / "viz.ffmpeg").write_text("showfreqs=s=${WIDTH}x${HEIGHT}\n", encoding="utf-8")
+    state.workspace.ambient.limits.reserved_cores = 999.0
+
+    before = (repo / "channels" / "lofi" / ".env").read_text(encoding="utf-8")
+    response = client.put(
+        "/api/channels/lofi/resolution", headers=AUTH, json={"resolution": "2160p"}
+    )
+    assert response.status_code == 409
+    assert response.json()["error"] == "insufficient_capacity"
+    assert (repo / "channels" / "lofi" / ".env").read_text(encoding="utf-8") == before
 
 
 def test_metrics_is_prometheus_text(api) -> None:

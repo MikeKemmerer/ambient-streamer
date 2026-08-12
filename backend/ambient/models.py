@@ -26,7 +26,7 @@ from pydantic import (
 # Icecast mount, so it is validated as hostile input everywhere it is accepted.
 CHANNEL_NAME_RE = re.compile(r"^[a-z0-9](?:[a-z0-9_-]{0,30}[a-z0-9])?$")
 
-HEX_COLOUR = r"^#[0-9A-Fa-f]{6}$"
+HEX_COLOR = r"^#[0-9A-Fa-f]{6}$"
 TIME_WINDOW = r"^([01]\d|2[0-3]):[0-5]\d-([01]\d|2[0-3]):[0-5]\d$"
 MOUNT = r"^/[A-Za-z0-9][A-Za-z0-9._-]*$"
 MEMORY_LIMIT = r"^\d+(\.\d+)?[bkmgBKMG]?$"
@@ -51,7 +51,7 @@ class ImageOrder(str, Enum):
     SHUFFLE = "shuffle"
 
 
-class ColourMode(str, Enum):
+class ColorMode(str, Enum):
     AUTOMATIC = "automatic"
     MANUAL = "manual"
 
@@ -154,6 +154,8 @@ class Paths(StrictModel):
     common: str = "./common"
     channels: str = "./channels"
     logs: str = "/var/log/ambient"
+    # channels/example/ ships as a template; it is not a stream.
+    ignore_channels: list[str] = Field(default_factory=lambda: ["example"])
 
 
 class Relay(StrictModel):
@@ -180,6 +182,22 @@ class WatchdogSettings(StrictModel):
         return value
 
 
+class Uploads(StrictModel):
+    """Limits for operator media upload, enforced while the body streams."""
+
+    max_file_mb: int = Field(512, ge=1)
+    max_request_mb: int = Field(2048, ge=1)
+    max_files: int = Field(64, ge=1)
+    # A 24/7 streamer that fills its own disk takes the stream down.
+    min_free_mb: int = Field(1024, ge=0)
+
+    @model_validator(mode="after")
+    def _request_fits_one_file(self) -> Uploads:
+        if self.max_request_mb < self.max_file_mb:
+            raise ValueError("uploads.max_request_mb must be at least uploads.max_file_mb")
+        return self
+
+
 class AmbientConfig(StrictModel):
     version: Literal[1] = 1
     defaults: Defaults = Field(default_factory=Defaults)
@@ -188,6 +206,7 @@ class AmbientConfig(StrictModel):
     paths: Paths = Field(default_factory=Paths)
     relay: Relay = Field(default_factory=Relay)
     watchdog: WatchdogSettings = Field(default_factory=WatchdogSettings)
+    uploads: Uploads = Field(default_factory=Uploads)
 
 
 # --------------------------------------------------------------------------
@@ -215,30 +234,30 @@ class ImageSelection(StrictModel):
         return self
 
 
-class Visualisation(StrictModel):
+class Visualization(StrictModel):
     active: str
     hot_set: list[str] = Field(min_length=1)
 
     @model_validator(mode="after")
-    def _active_is_hot(self) -> Visualisation:
+    def _active_is_hot(self) -> Visualization:
         if self.active not in self.hot_set:
             raise ValueError(
-                f"visualisation.active {self.active!r} is not in hot_set "
+                f"visualization.active {self.active!r} is not in hot_set "
                 f"{self.hot_set!r}; only instantiated graphs can be switched to"
             )
         if len(set(self.hot_set)) != len(self.hot_set):
-            raise ValueError("visualisation.hot_set contains duplicates")
+            raise ValueError("visualization.hot_set contains duplicates")
         return self
 
 
-class ManualColour(StrictModel):
-    accent: str = Field("#4FC3F7", pattern=HEX_COLOUR)
-    tint: str = Field("#101820", pattern=HEX_COLOUR)
+class ManualColor(StrictModel):
+    accent: str = Field("#4FC3F7", pattern=HEX_COLOR)
+    tint: str = Field("#101820", pattern=HEX_COLOR)
 
 
-class Colour(StrictModel):
-    mode: ColourMode = ColourMode.AUTOMATIC
-    manual: ManualColour = Field(default_factory=ManualColour)
+class Color(StrictModel):
+    mode: ColorMode = ColorMode.AUTOMATIC
+    manual: ManualColor = Field(default_factory=ManualColor)
     transition_seconds: float = Field(2.0, ge=0)
 
 
@@ -294,8 +313,8 @@ class ChannelConfig(StrictModel):
     genre: str = ""
     audio: AudioSelection = Field(default_factory=AudioSelection)
     images: ImageSelection = Field(default_factory=ImageSelection)
-    visualisation: Visualisation
-    colour: Colour = Field(default_factory=Colour)
+    visualization: Visualization
+    color: Color = Field(default_factory=Color)
     preset: str | None = None
     bumpers: Bumpers = Field(default_factory=Bumpers)
     schedule: Schedule = Field(default_factory=Schedule)

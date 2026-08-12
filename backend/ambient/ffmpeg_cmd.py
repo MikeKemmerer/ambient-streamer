@@ -170,6 +170,41 @@ def probe_command(encoder: Encoder | str, ffmpeg: str = "ffmpeg") -> list[str]:
     ]
 
 
+def probe_device_args(encoder: Encoder | str) -> list[str]:
+    """What the encoder's hardware needs passed into a container.
+
+    Absent hardware makes `docker run` fail, which is the truthful answer.
+    """
+    value = _name_of(encoder)
+    if value == Encoder.NVENC.value:
+        return ["--gpus", "all"]
+    if value == Encoder.QSV.value:
+        return ["--device", "/dev/dri"]
+    return []
+
+
+def docker_probe_argv(
+    image: str, encoder: Encoder | str, *, docker: str = "docker", ffmpeg: str = "ffmpeg"
+) -> list[str]:
+    """Probe inside the composer image: that is where encoding actually happens.
+
+    The backend image ships no ffmpeg, so probing in-process reports every
+    encoder missing rather than reporting the truth about the encode host.
+    """
+    return [
+        docker,
+        "run",
+        "--rm",
+        "--network",
+        "none",
+        "--entrypoint",
+        ffmpeg,
+        *probe_device_args(encoder),
+        image,
+        *probe_command(encoder, ffmpeg)[1:],
+    ]
+
+
 def probe_encoder(
     encoder: Encoder | str,
     ffmpeg: str = "ffmpeg",
@@ -197,10 +232,17 @@ def probe_encoder(
         if completed.returncode == 0:
             result = ProbeResult(key[0], True)
         else:
-            detail = (completed.stderr or "").strip().splitlines()
-            result = ProbeResult(key[0], False, detail[-1] if detail else f"rc={completed.returncode}")
+            result = ProbeResult(
+                key[0], False, probe_failure_detail(completed.stderr, completed.returncode)
+            )
     _PROBE_CACHE[key] = result
     return result
+
+
+def probe_failure_detail(stderr: str, returncode: int) -> str:
+    """The last real line of ffmpeg's stderr — where `OpenEncodeSessionEx failed` lands."""
+    lines = [line.strip() for line in (stderr or "").strip().splitlines() if line.strip()]
+    return lines[-1] if lines else f"rc={returncode}"
 
 
 def _name_of(encoder: Encoder | str) -> str:

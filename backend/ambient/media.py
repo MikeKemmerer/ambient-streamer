@@ -5,7 +5,7 @@ validation boundary from docs/contracts/media-selection.md, and writes the two
 generated lists atomically.
 
 Every path in a channel's config eventually arrives from the control plane's
-HTTP API, so an entry is untrusted input: it is normalised, prefix-checked
+HTTP API, so an entry is untrusted input: it is normalized, prefix-checked
 against the two permitted trees, resolved through symlinks and prefix-checked
 again. Globs are validated on their expanded results — a pattern is not a path
 and cannot be prefix-checked.
@@ -126,7 +126,7 @@ def validate_entry(entry: str) -> str:
 
 
 def resolve_under_roots(entry: str, roots: MediaRoots) -> Path:
-    """Normalise, prefix-check, resolve symlinks, prefix-check again."""
+    """Normalize, prefix-check, resolve symlinks, prefix-check again."""
     lexical = Path(os.path.normpath(os.path.join(roots.repo_root, entry)))
     if not _under_any(lexical, roots.trees):
         raise MediaError(f"{entry!r} resolves outside common/ and this channel's directory")
@@ -274,7 +274,7 @@ def resolve_selection(
             raise MediaError(f"{entry!r} does not exist")
         if real.suffix.lower() not in kind.extensions:
             raise MediaError(
-                f"{entry!r} is not a recognised {kind.value} file "
+                f"{entry!r} is not a recognized {kind.value} file "
                 f"(expected one of {' '.join(sorted(kind.extensions))})"
             )
         add(real, entry)

@@ -3,10 +3,10 @@ name: orthodox-chant
 display_name: "Orthodox Chant"
 description: "Gold on deep red, very slow slides."
 
-visualisation:
+visualization:
   active: showfreqs-bars
 
-colour:
+color:
   mode: manual
   manual:
     accent: "#E8C27A"
@@ -22,7 +22,7 @@ slideshow:
 audio:
   crossfade_seconds: 3.0
 
-# Only the knobs the colour ramp does not own: eq.brightness, eq.saturation and
+# Only the knobs the color ramp does not own: eq.brightness, eq.saturation and
 # hue.h are left to the ramp.
 effects:
   eq:

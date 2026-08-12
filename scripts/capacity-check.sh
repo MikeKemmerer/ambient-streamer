@@ -3,7 +3,7 @@
 #
 # Budgets from the MEASURED cost of a running channel, never from filtergraph
 # benchmarks. A 720p channel with one hot plugin measured ~1.5 cores, because
-# a channel is far more than its visualisation branch: the HLS preview is a
+# a channel is far more than its visualization branch: the HLS preview is a
 # second complete encode, plus MP3 decode off Icecast and JPEG decode off
 # image2pipe. A filter benchmark sees ~0.24 of that and under-predicts by 6x.
 # See docs/scaling.md.
@@ -40,7 +40,7 @@ head1() { printf '\n%s%s%s\n' "$C_BLD" "$*" "$C_OFF" >&2; }
 BASE_CORES_720P=1.5
 
 # Each additional HOT plugin, on screen or not — hot_set is a CPU budget.
-PLUGIN_CORES=0.22
+PLUGIN_CORES=0.28
 
 # Share of BASE_CORES_720P that does not scale with output resolution: the
 # 360p preview encode, MP3 decode and the publisher. The rest is scaled by
@@ -111,7 +111,7 @@ res_mbps() {
 	esac
 }
 
-# Entries under visualisation.hot_set, block or inline form. Floors at 1: the
+# Entries under visualization.hot_set, block or inline form. Floors at 1: the
 # measured 1.5 cores was itself a channel with one hot plugin.
 hot_plugin_count() {
 	local cfg="$1"
@@ -283,7 +283,7 @@ else
        Decode GPU Support Matrix; channels past the cap fall back to libx264
        automatically and report the substitution, so budget CPU for them." ;;
 			*)
-				note_warning "unrecognised board '$gpu_name' — check NVIDIA's support matrix for
+				note_warning "unrecognized board '$gpu_name' — check NVIDIA's support matrix for
        its concurrent NVENC session limit before planning around it." ;;
 		esac
 	done < <(nvidia-smi --query-gpu=name,driver_version,encoder.stats.sessionCount \

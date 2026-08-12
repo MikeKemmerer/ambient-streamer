@@ -3,10 +3,10 @@ name: deep-space
 display_name: "Deep Space"
 description: "Near-black tint with a cold accent."
 
-visualisation:
+visualization:
   active: showfreqs-bars
 
-colour:
+color:
   mode: manual
   manual:
     accent: "#7FA8FF"
@@ -21,7 +21,7 @@ slideshow:
 audio:
   crossfade_seconds: 8.0
 
-# Only the knobs the colour ramp does not own: eq.brightness, eq.saturation and
+# Only the knobs the color ramp does not own: eq.brightness, eq.saturation and
 # hue.h are left to the ramp.
 effects:
   eq:

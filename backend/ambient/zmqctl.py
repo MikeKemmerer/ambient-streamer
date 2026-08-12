@@ -21,11 +21,11 @@ SUCCESS = "0 Success"
 
 _TARGET_RE = re.compile(r"^(?P<cls>[A-Za-z][A-Za-z0-9_]*)@(?P<label>[A-Za-z0-9][A-Za-z0-9_]*)$")
 _COMMAND_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
-_COLOUR_RE = re.compile(r"^(?:#|0x)?[0-9A-Fa-f]{6}(?:[0-9A-Fa-f]{2})?$|^[A-Za-z]+(?:@0?\.\d+)?$")
+_COLOR_RE = re.compile(r"^(?:#|0x)?[0-9A-Fa-f]{6}(?:[0-9A-Fa-f]{2})?$|^[A-Za-z]+(?:@0?\.\d+)?$")
 _EXPRESSION_CHARS = re.compile(r"^[0-9A-Za-z_.+\-*/%(),^<>=!:?]+$")
 _IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
-# FFmpeg's expression grammar, restricted to what a colour ramp needs.
+# FFmpeg's expression grammar, restricted to what a color ramp needs.
 _ALLOWED_IDENTIFIERS = frozenset(
     {
         "t", "n", "pos", "w", "h", "PI", "E", "PHI",
@@ -59,7 +59,7 @@ _RANGES: dict[tuple[str, str], tuple[float, float]] = {
     ("astreamselect", "map"): (0.0, 63.0),
 }
 
-_COLOUR_PARAMS = frozenset({"color", "c", "colors", "rc", "gc", "bc"})
+_COLOR_PARAMS = frozenset({"color", "c", "colors", "rc", "gc", "bc"})
 
 # `drawbox` re-runs init() on every command and never rolls back: one rejected
 # value disables that instance permanently. Expressions are not accepted there.
@@ -132,9 +132,9 @@ def validate_value(filter_class: str, command: str, value: str) -> str:
     is silently ignored."""
     token = _single_token(value, "value")
 
-    if command in _COLOUR_PARAMS:
-        if not _COLOUR_RE.match(token):
-            raise ZmqValidationError(f"value {token!r} is not a colour")
+    if command in _COLOR_PARAMS:
+        if not _COLOR_RE.match(token):
+            raise ZmqValidationError(f"value {token!r} is not a color")
         return token
 
     try:
@@ -221,7 +221,7 @@ class ZmqControl:
 
     The filter only polls its socket when a frame passes through, so a round
     trip is bounded below by the graph's frame period (~33 ms at 30 fps) and
-    throughput ceilings at roughly one command per frame. Colour ramps are sent
+    throughput ceilings at roughly one command per frame. Color ramps are sent
     as self-animating expressions rather than command streams for that reason.
     """
 

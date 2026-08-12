@@ -8,7 +8,7 @@ benchmark suggests, and what to check before adding one more.
 ## The headline number
 
 > **Measured on a running 7-core host: about 1.5 cores per 720p channel with one hot
-> visualisation plugin.**
+> visualization plugin.**
 >
 > Reserving about one core for the OS and the shared services, that host runs
 > **about four channels, not five.**
@@ -35,11 +35,11 @@ the 640×360 HLS preview.
 
 ## Why 1.5 and not 0.25
 
-A filtergraph benchmark measures the visualisation branch. A channel is much more than that.
+A filtergraph benchmark measures the visualization branch. A channel is much more than that.
 
 | Cost | Counted by a filter benchmark? |
 |------|-------------------------------|
-| Visualisation branch (one, idle or active) | yes — ~0.24 cores at 720p30 |
+| Visualization branch (one, idle or active) | yes — ~0.24 cores at 720p30 |
 | Slideshow crossfade rendering and JPEG **encode**, in the producer | no |
 | JPEG **decode** off the `image2pipe` input | no |
 | MP3 decode from Icecast | no |
@@ -66,7 +66,7 @@ the reference channel it reads 0.24 against a measured 1.49. **Use `measured_cor
 | Change | Effect |
 |--------|--------|
 | **Each additional hot plugin** | **+0.2–0.25 cores at 720p**, whether or not it is on screen. `hot_set` is a CPU budget, not a preference list |
-| **1080p instead of 720p** | more on *both* encodes, ~1.9× on the visualisation branch, and the bitrate ladder rises from 3000k to 5000k |
+| **1080p instead of 720p** | more on *both* encodes, ~1.9× on the visualization branch, and the bitrate ladder rises from 3000k to 5000k |
 | **Higher frame rate** | roughly linear on the filter branches; ≥ 50 fps also multiplies the video bitrate by 1.5 in the ladder |
 | **NVENC on the program encode** | moves the 720p encode off the CPU; the preview stays on `libx264` deliberately |
 | **Longer crossfades / higher producer fps** | more JPEG encode in the producer. 10 fps with a 2.0 s fade costs about +14 % of a core at 720p |
@@ -74,7 +74,7 @@ the reference channel it reads 0.24 against a measured 1.49. **Use `measured_cor
 A rough model for planning, all figures at 720p30 with `libx264`:
 
 ```
-channel_cores ≈ 1.5 + 0.22 × (hot_plugins − 1)
+channel_cores ≈ 1.5 + 0.28 × (hot_plugins − 1)
 host_channels ≈ floor((total_cores − reserved_cores) / channel_cores)
 ```
 
@@ -141,7 +141,7 @@ Container log rotation is configured. Host-side rotation is not — add a `logro
 
 ## Encoder ceilings
 
-| Encoder | Ceiling | Behaviour past it |
+| Encoder | Ceiling | Behavior past it |
 |---------|---------|-------------------|
 | `libx264` | CPU only — the model above | encoder speed drops below 1.0×, YouTube starves |
 | `h264_nvenc` | **consumer GeForce cards cap concurrent encode sessions** | channels past the cap fall back to `libx264` automatically and report the substitution |
@@ -203,7 +203,7 @@ The watchdog treats sustained `speed` below `min_speed` (default 0.97) for `stal
    ([quickstart.md §4](quickstart.md#4-create-a-channel)).
 3. **Register the Icecast mount and generate its fallback**, then `SIGHUP` Icecast. Never
    restart Icecast — that takes every running channel's audio input with it.
-4. Add media and extract colour profiles.
+4. Add media and extract color profiles.
 5. `python -m ambient.compile <name>` — it warns about anything that resolved oddly and refuses
    a `hot_set` the host cannot afford.
 6. `scripts/channel.sh start <name>`.
@@ -213,7 +213,7 @@ The watchdog treats sustained `speed` below `min_speed` (default 0.97) for `stal
 
 `POST /api/channels/{name}/start` performs a version of step 1 automatically and returns
 `409 insufficient_capacity` when it fails — but it compares against `projected_cores`, which
-counts only visualisation branches, so it is generous. It will not save you from
+counts only visualization branches, so it is generous. It will not save you from
 oversubscribing. Step 7 is the real check.
 
 ---

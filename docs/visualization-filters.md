@@ -1,4 +1,4 @@
-# Visualisation filters
+# Visualization filters
 
 What each FFmpeg filter in the composer's graph does, how it behaves in a 24/7 stream, and
 which of its parameters can be changed without a restart.
@@ -57,13 +57,13 @@ Used by `plugins/showfreqs-bars`, which is the compositor's built-in default.
 | `fscale` | `lin` `log` `rlog` | frequency scale. `log` spreads bass out instead of crushing it into the left edge |
 | `win_size` | power of two | FFT size. Larger = finer frequency resolution, slower response |
 | `averaging` | integer | frames averaged. Higher = smoother, laggier. `2` is calm without feeling dead |
-| `colors` | colour list | launch-time only |
+| `colors` | color list | launch-time only |
 
 Ambient music is quiet and bass-heavy, which is why the shipped preset is
 `ascale=log:fscale=log:win_size=1024:averaging=2` — linear scales leave most of the frame empty.
 
 **Commandable: nothing.** Measured — `showfreqs` exposes no runtime-tunable parameters at all.
-Its colour cannot be changed live. Colour comes from `eq`/`hue` downstream instead.
+Its color cannot be changed live. Color comes from `eq`/`hue` downstream instead.
 
 **Cost:** measured 0.24 cores at 720p30, scaling ~1.9× at 1080p.
 
@@ -75,7 +75,7 @@ Used by `plugins/showwaves-classic` (`mode=line`, `draw=scale`, `scale=sqrt`) an
 | Option | Values | Notes |
 |--------|--------|-------|
 | `s` | `WxH` | must be the channel geometry |
-| `mode` | `point` `line` `p2p` `cline` | `cline` (centred line) is the usual ambient choice |
+| `mode` | `point` `line` `p2p` `cline` | `cline` (centerd line) is the usual ambient choice |
 | `n` | integer | samples per column; controls horizontal scroll rate |
 | `rate` | fps | output rate. Set it to the channel fps, or let the required `fps` tail do it |
 | `draw` | `scale` `full` | `full` draws every sample rather than a scaled envelope |
@@ -96,7 +96,7 @@ Used by `plugins/avectorscope-lissajous`.
 | `zoom` | float | magnification; ambient material is often quiet enough to need > 1 |
 | `draw` | `dot` `line` | `line` is denser and more visible on a slideshow |
 | `scale` | `lin` `sqrt` `cbrt` `log` | amplitude scale |
-| `rc` `gc` `bc` | 0–255 | per-channel colour weights |
+| `rc` `gc` `bc` | 0–255 | per-channel color weights |
 | `swap` `mirror` | flags | orientation |
 
 **Commandable — and it is the only one of the three that is:** `mode`, `rc`, `gc`, `bc`, `zoom`,
@@ -104,7 +104,7 @@ Used by `plugins/avectorscope-lissajous`.
 
 That makes `avectorscope` the natural home for a plugin that declares real `commandable`
 entries, and `avectorscope-lissajous` declares nine of them. A mono or near-mono source
-collapses the display to a diagonal line, which is correct behaviour, not a fault.
+collapses the display to a diagonal line, which is correct behavior, not a fault.
 
 ### `showspectrum` — scrolling spectrogram
 
@@ -115,7 +115,7 @@ A time-frequency waterfall rather than an instantaneous bar display, so it reads
 ambient material where `showfreqs` reads as movement. `legend=0` matters: the legend consumes
 part of the frame, and the frame must be exactly the channel geometry.
 
-**Commandable: nothing.** Colour comes from `color=` at launch and from `eq`/`hue` downstream.
+**Commandable: nothing.** Color comes from `color=` at launch and from `eq`/`hue` downstream.
 
 **Not asserted by the composer image build.** The build hard-fails on a missing `showfreqs`,
 `showwaves` or `avectorscope`, but not on a missing `showspectrum` — it is present in the
@@ -208,7 +208,7 @@ hue@hue=h=0
 Commandable: `h` (degrees), `s`, `H` (radians), `b`. `hue` re-evaluates per frame
 unconditionally, so it needs no `eval` equivalent.
 
-Together, `eq` and `hue` are **the entire live colour surface**. See
+Together, `eq` and `hue` are **the entire live color surface**. See
 [color-profiles.md](color-profiles.md).
 
 ### `drawbox` — excluded on purpose
@@ -221,7 +221,7 @@ a single `22 Invalid argument` leaves it dead forever. Recovery needs the restar
 exists to avoid. `eq` and `hue` do not behave this way.
 
 `drawbox color` also takes no expression, so it could only ever hard-cut. Do not put a
-`drawbox` on the live colour path.
+`drawbox` on the live color path.
 
 ### `streamselect@sel` / `astreamselect` — the plugin switch
 
@@ -247,7 +247,7 @@ selector.
 [base][viz]blend=all_mode=screen:all_opacity=0.65
 ```
 
-`screen` lightens: black in the visualisation is transparent, bright areas add to the image.
+`screen` lightens: black in the visualization is transparent, bright areas add to the image.
 That is what makes a visualiser readable over arbitrary photography without a mask.
 
 Opacity comes from `VIZ_OPACITY` (default `0.65`) and is a **launch-time** value — `blend` is
@@ -289,7 +289,7 @@ graph and makes what each branch emits unambiguous.
 | `aresample=44100` | one clock for the whole stream. 44.1 kHz is what the ingest path mandates and what Liquidsoap encodes |
 | `async=1000` | absorbs small drift between the audio clock and the video clock without a hard resync |
 | `first_pts=0` | anchors the timeline so `out_time` starts at zero and is directly comparable to wallclock |
-| `loudnorm=I=-14:TP=-1:LRA=11` | −14 LUFS is the level streaming platforms normalise to; `TP=-1` leaves a dB of true-peak headroom for the AAC encoder |
+| `loudnorm=I=-14:TP=-1:LRA=11` | −14 LUFS is the level streaming platforms normalize to; `TP=-1` leaves a dB of true-peak headroom for the AAC encoder |
 | `asplit=2` | one branch to the program encode, one to the preview |
 
 `loudnorm` here is single-pass and operates on the composite stream. Per-track loudness
@@ -302,7 +302,7 @@ compositor.
 
 | Change | Mechanism | Cost |
 |--------|-----------|------|
-| Colour (`eq`, `hue`) | ZMQ command, ideally a time expression | one frame |
+| Color (`eq`, `hue`) | ZMQ command, ideally a time expression | one frame |
 | Active plugin | `streamselect@sel map N` | one frame, clean cut |
 | Slide set, order, timing | producer rescans between slides | 0 s, FFmpeg PID unchanged |
 | Playlist, track order | Liquidsoap, behind Icecast | 0 s |

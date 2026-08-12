@@ -7,7 +7,7 @@ low-resolution HLS preview.
 
 The rule the whole design serves: **a 24/7 stream must never restart FFmpeg.** A filtergraph is
 fixed at launch, so every live-editable feature routes around that — images arrive on a pipe,
-colours change over ZMQ, plugins switch with `streamselect`, and the audio engine restarts
+colors change over ZMQ, plugins switch with `streamselect`, and the audio engine restarts
 behind an Icecast fallback mount. See [docs/architecture.md](docs/architecture.md).
 
 ## Status
@@ -24,7 +24,7 @@ channel: `speed=0.996x`, 3085–3137 kbits/s, `drop_frames=0`, `dup_frames=0`.
 | MediaMTX relay, HLS preview, `runOnReady` YouTube publisher | Icecast mount registration when a channel is created |
 | FastAPI control plane: REST, SSE, supervisor, watchdog, scheduler | Bumper synthesis |
 | Five visualization plugins, six preset packs | |
-| Colour-profile extraction and live `eq`/`hue` application | |
+| Color-profile extraction and live `eq`/`hue` application | |
 | `scripts/install.sh`, compile CLI, per-channel start/stop | |
 
 Start with [docs/quickstart.md](docs/quickstart.md), which is explicit about what each gap
@@ -150,8 +150,8 @@ docker compose --project-name ambient-lofi \
 |--------|-----|---------------|
 | Add/remove/reorder tracks | edit `config.yaml` or `PUT /api/channels/<ch>/playlist`, recompile; Liquidsoap reloads | 0 s |
 | Add/remove/reorder images | edit `config.yaml` or `PUT /api/channels/<ch>/images`, recompile; producer reloads between slides | 0 s, FFmpeg PID unchanged |
-| Colour | `PUT /api/channels/<ch>/colour`, or an image's colour profile | one frame |
-| Visualization plugin | `PUT /api/channels/<ch>/visualisation` | one frame, clean cut |
+| Color | `PUT /api/channels/<ch>/color`, or an image's color profile | one frame |
+| Visualization plugin | `PUT /api/channels/<ch>/visualization` | one frame, clean cut |
 | Restart Liquidsoap | Icecast fallback mount absorbs it | 0 s, 0.00 % silence |
 | Add a channel to Icecast | `mounts.list` + `docker kill -s HUP ambient-icecast` | no restart |
 | Fill in a stream key | the relay reads it when the path goes ready | no relay restart |
@@ -179,11 +179,11 @@ cores per additional hot plugin; see [docs/scaling.md](docs/scaling.md).
 This is a 24/7 public YouTube broadcast, so both halves of the media matter legally.
 
 - **Music must be royalty-free or owned.** Anything else attracts Content ID claims, and on a
-  continuous stream a claim can mute or end the broadcast. Keep the licence or purchase record
+  continuous stream a claim can mute or end the broadcast. Keep the license or purchase record
   for every track.
-- **Images must be licensed for the use**, and any licence requiring attribution needs that
+- **Images must be licensed for the use**, and any license requiring attribution needs that
   attribution somewhere the viewer can see it — the video description at minimum, on-screen if
-  the licence says so. CC-BY is not "free"; it is "free with a condition".
+  the license says so. CC-BY is not "free"; it is "free with a condition".
 
 Nothing in this repository checks either of these. It is the operator's responsibility.
 
@@ -191,9 +191,9 @@ Nothing in this repository checks either of these. It is the operator's responsi
 
 | Path | Purpose |
 |------|---------|
-| `backend/ambient/` | Control plane: config layer, media resolver, FFmpeg command builder, ZMQ validator, Compose renderer, REST + SSE app, supervisor, watchdog, scheduler, colour extraction |
+| `backend/ambient/` | Control plane: config layer, media resolver, FFmpeg command builder, ZMQ validator, Compose renderer, REST + SSE app, supervisor, watchdog, scheduler, color extraction |
 | `frontend/` | Operator UI — plain HTML/CSS/JS, no build step, `hls.js` vendored as one file |
-| `channels/<name>/` | Per-channel `.env`, `config.yaml`, media, colour profiles, generated files |
+| `channels/<name>/` | Per-channel `.env`, `config.yaml`, media, color profiles, generated files |
 | `common/` | Shared media library — audio, images, bumpers, beds, fallbacks — mounted read-only into every channel |
 | `liquidsoap/` | Parameterized Liquidsoap channel script |
 | `ffmpeg/` | Slideshow producer and compositor entrypoint |

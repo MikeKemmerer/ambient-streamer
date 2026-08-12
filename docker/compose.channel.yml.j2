@@ -24,7 +24,7 @@
 # Two containers. Liquidsoap owns audio and may restart freely; Icecast's
 # fallback mount absorbs it. The compositor must NOT restart — its filtergraph
 # is fixed at launch, and every live-editable feature routes around that
-# (image2pipe for slides, zmq for colour, streamselect for plugins).
+# (image2pipe for slides, zmq for color, streamselect for plugins).
 
 name: ambient-{{ channel }}
 
@@ -101,6 +101,10 @@ services:
       # to YouTube, so it has no reason to hold the credential — and holding it
       # would expose it through `docker inspect` on every channel container.
       ENCODER: ${ENCODER:-{{ encoder | default('libx264') }}}
+      # Without these the entrypoint falls back to a single hardcoded plugin and
+      # the channel's whole visualization selection is silently ignored.
+      ACTIVE_PLUGIN: "{{ active_plugin }}"
+      HOT_SET: "{{ hot_set }}"
       RESOLUTION: ${RESOLUTION:-720p}
       FPS: ${FPS:-30}
       # ipc:// on tmpfs, not tcp://. A published ZMQ port is a remote kill surface.
@@ -118,10 +122,10 @@ services:
       - {{ common_dir }}:/media/common:ro
       - {{ channel_dir }}:/media/channel:ro
       - {{ log_dir }}:/var/log/ambient
-    tmpfs:
-      # now.json, progress, zmq.sock, health.json. Not persisted — it is a cache
-      # of what the process is doing now, never a source of truth.
-      - /run/ambient:mode=0755,size=64m
+      # Shared with the backend, NOT a private tmpfs. The watchdog reads
+      # /run/ambient/<channel>/progress from here; a per-container tmpfs leaves
+      # it permanently blind and restarting a healthy composer forever.
+      - {{ run_dir }}:/run/ambient
     deploy:
       resources:
         limits:

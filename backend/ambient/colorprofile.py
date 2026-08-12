@@ -1,8 +1,8 @@
-"""Colour profile extraction.
+"""Color profile extraction.
 
 One profile per image, beside the image tree it belongs to — a profile
 describes the image, not the channel, so a shared image used by four channels
-is analysed once (docs/contracts/media-selection.md).
+is analyzed once (docs/contracts/media-selection.md).
 
 `extractor` is versioned so profiles can be regenerated when the algorithm
 changes without guessing which are stale: a profile whose extractor is unknown
@@ -25,7 +25,7 @@ from pydantic import Field, ValidationError
 
 from .events import utc_now_iso
 from .media import IMAGE_EXTENSIONS, atomic_write_lines
-from .models import HEX_COLOUR, StrictModel
+from .models import HEX_COLOR, StrictModel
 
 LOG = logging.getLogger("ambient.colorprofile")
 
@@ -43,16 +43,16 @@ LUMA = (0.2126, 0.7152, 0.0722)
 
 
 class ProfileError(ValueError):
-    """The image could not be read or analysed."""
+    """The image could not be read or analyzed."""
 
 
-class ColourProfile(StrictModel):
+class ColorProfile(StrictModel):
     version: Literal[1] = PROFILE_VERSION
     source: str
     extracted_at: str
     extractor: str
-    dominant: str = Field(pattern=HEX_COLOUR)
-    accent: str = Field(pattern=HEX_COLOUR)
+    dominant: str = Field(pattern=HEX_COLOR)
+    accent: str = Field(pattern=HEX_COLOR)
     palette: list[str] = Field(min_length=1)
     brightness: float = Field(ge=0.0, le=1.0)
     warmth: float = Field(ge=-1.0, le=1.0)
@@ -75,16 +75,16 @@ class Analysis:
     mood: str
 
 
-def to_hex(colour: Sequence[float]) -> str:
-    return "#" + "".join(f"{max(0, min(255, round(c))):02X}" for c in colour)
+def to_hex(color: Sequence[float]) -> str:
+    return "#" + "".join(f"{max(0, min(255, round(c))):02X}" for c in color)
 
 
-def _luma(colour: Rgb) -> float:
-    return sum(c * w for c, w in zip(colour, LUMA)) / 255.0
+def _luma(color: Rgb) -> float:
+    return sum(c * w for c, w in zip(color, LUMA)) / 255.0
 
 
-def _saturation(colour: Rgb) -> float:
-    high, low = max(colour), min(colour)
+def _saturation(color: Rgb) -> float:
+    high, low = max(color), min(color)
     return 0.0 if high <= 0 else (high - low) / high
 
 
@@ -95,25 +95,25 @@ def _kmeans(pixels: Sequence[Rgb], k: int, iterations: int = KMEANS_ITERATIONS) 
     rng = random.Random(KMEANS_SEED)
     k = max(1, min(k, len(set(pixels))))
 
-    centres: list[Rgb] = [rng.choice(pixels)]
-    while len(centres) < k:
-        weights = [min(_distance(p, c) for c in centres) for p in pixels]
+    centers: list[Rgb] = [rng.choice(pixels)]
+    while len(centers) < k:
+        weights = [min(_distance(p, c) for c in centers) for p in pixels]
         total = sum(weights)
         if total <= 0:
-            centres.append(rng.choice(pixels))
+            centers.append(rng.choice(pixels))
             continue
-        centres.append(rng.choices(pixels, weights=weights, k=1)[0])
+        centers.append(rng.choices(pixels, weights=weights, k=1)[0])
 
     assignments = [0] * len(pixels)
     for _ in range(iterations):
         moved = False
         for index, pixel in enumerate(pixels):
-            best = min(range(len(centres)), key=lambda c: _distance(pixel, centres[c]))
+            best = min(range(len(centers)), key=lambda c: _distance(pixel, centers[c]))
             if best != assignments[index]:
                 assignments[index] = best
                 moved = True
-        sums = [[0.0, 0.0, 0.0] for _ in centres]
-        counts = [0] * len(centres)
+        sums = [[0.0, 0.0, 0.0] for _ in centers]
+        counts = [0] * len(centers)
         for index, pixel in enumerate(pixels):
             cluster = assignments[index]
             counts[cluster] += 1
@@ -121,14 +121,14 @@ def _kmeans(pixels: Sequence[Rgb], k: int, iterations: int = KMEANS_ITERATIONS) 
                 sums[cluster][channel] += pixel[channel]
         for cluster, count in enumerate(counts):
             if count:
-                centres[cluster] = tuple(value / count for value in sums[cluster])  # type: ignore[assignment]
+                centers[cluster] = tuple(value / count for value in sums[cluster])  # type: ignore[assignment]
         if not moved:
             break
 
-    counts = [0] * len(centres)
+    counts = [0] * len(centers)
     for cluster in assignments:
         counts[cluster] += 1
-    clusters = [(centre, count) for centre, count in zip(centres, counts) if count]
+    clusters = [(center, count) for center, count in zip(centers, counts) if count]
     clusters.sort(key=lambda item: item[1], reverse=True)
     return clusters
 
@@ -151,7 +151,7 @@ def extract_pillow_kmeans_v1(path: Path) -> Analysis:
     try:
         from PIL import Image, UnidentifiedImageError
     except ImportError as exc:  # pragma: no cover - depends on environment
-        raise ProfileError("Pillow is required to extract colour profiles") from exc
+        raise ProfileError("Pillow is required to extract color profiles") from exc
 
     try:
         with Image.open(path) as handle:
@@ -165,12 +165,12 @@ def extract_pillow_kmeans_v1(path: Path) -> Analysis:
     ]
 
     clusters = _kmeans(pixels, PALETTE_SIZE)
-    palette = [to_hex(centre) for centre, _count in clusters]
+    palette = [to_hex(center) for center, _count in clusters]
     dominant = clusters[0][0]
 
     # The accent is the most saturated cluster that is not the background.
     accent = max(
-        (centre for centre, _ in clusters),
+        (center for center, _ in clusters),
         key=lambda c: _saturation(c) * (0.35 + _luma(c)) + (0.0 if c == dominant else 0.15),
     )
 
@@ -203,14 +203,14 @@ def profile_path(image: Path, tree_root: Path) -> Path:
     return Path(tree_root) / "profiles" / relative.with_suffix(".json")
 
 
-def read_profile(path: Path) -> ColourProfile | None:
+def read_profile(path: Path) -> ColorProfile | None:
     """A profile from an unknown extractor is treated as absent."""
     try:
         raw = json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
     try:
-        profile = ColourProfile.model_validate(raw)
+        profile = ColorProfile.model_validate(raw)
     except ValidationError:
         return None
     if profile.extractor not in EXTRACTORS:
@@ -224,7 +224,7 @@ def extract(
     *,
     repo_root: Path,
     extractor: str = DEFAULT_EXTRACTOR,
-) -> ColourProfile:
+) -> ColorProfile:
     implementation = EXTRACTORS.get(extractor)
     if implementation is None:
         raise ProfileError(f"unknown extractor {extractor!r}")
@@ -233,7 +233,7 @@ def extract(
         source = str(Path(image).resolve().relative_to(Path(repo_root).resolve()).as_posix())
     except ValueError:
         source = Path(image).name
-    return ColourProfile(
+    return ColorProfile(
         source=source,
         extracted_at=utc_now_iso(),
         extractor=extractor,
@@ -246,7 +246,7 @@ def extract(
     )
 
 
-def write_profile(profile: ColourProfile, path: Path) -> Path:
+def write_profile(profile: ColorProfile, path: Path) -> Path:
     body = json.dumps(profile.model_dump(), indent=2, sort_keys=False)
     atomic_write_lines(Path(path), body.splitlines())
     return Path(path)
@@ -259,7 +259,7 @@ def ensure_profile(
     repo_root: Path,
     force: bool = False,
     extractor: str = DEFAULT_EXTRACTOR,
-) -> tuple[ColourProfile, bool]:
+) -> tuple[ColorProfile, bool]:
     """Return the image's profile, extracting it if missing or stale."""
     target = profile_path(image, tree_root)
     if not force:
@@ -313,7 +313,7 @@ def refresh_tree(
     return {"tree": str(tree_root), "extracted": extracted, "skipped": skipped, "errors": errors}
 
 
-def summarise(profile: ColourProfile | None) -> dict[str, object] | None:
+def summarise(profile: ColorProfile | None) -> dict[str, object] | None:
     if profile is None:
         return None
     return {
@@ -328,7 +328,7 @@ def summarise(profile: ColourProfile | None) -> dict[str, object] | None:
 
 __all__ = [
     "Analysis",
-    "ColourProfile",
+    "ColorProfile",
     "EXTRACTORS",
     "PILLOW_KMEANS_V1",
     "ProfileError",

@@ -33,7 +33,7 @@ def build_repo(root: Path) -> Path:
     (channel / "images" / "slide.jpg").write_bytes(b"x")
     (channel / "config.yaml").write_text(
         "version: 1\nname: lofi\naudio:\n  tracks: []\nimages:\n  slides: []\n"
-        "visualisation:\n  active: showfreqs-bars\n  hot_set: [showfreqs-bars]\n"
+        "visualization:\n  active: showfreqs-bars\n  hot_set: [showfreqs-bars]\n"
         "schedule:\n  timezone: America/Los_Angeles\n  rules: []\n",
         encoding="utf-8",
     )
@@ -49,8 +49,8 @@ def build_repo(root: Path) -> Path:
     (root / "presets").mkdir()
     (root / "presets" / "calm-ocean.yaml").write_text(
         "version: 1\nname: calm-ocean\ndisplay_name: Calm Ocean\n"
-        "visualisation:\n  active: showfreqs-bars\n"
-        "colour:\n  mode: manual\n  manual:\n    accent: '#4FC3F7'\n    tint: '#0B2A3A'\n"
+        "visualization:\n  active: showfreqs-bars\n"
+        "color:\n  mode: manual\n  manual:\n    accent: '#4FC3F7'\n    tint: '#0B2A3A'\n"
         "  transition_seconds: 4.0\nslideshow:\n  hold_seconds: 30.0\n  fade_seconds: 3.0\n",
         encoding="utf-8",
     )
@@ -87,6 +87,7 @@ CASES = [
     ("GET", "/api/channels/nope", None, 404, TOKEN),
     ("GET", "/api/channels/UPPER", None, 400, TOKEN),
     ("GET", "/api/system", None, 200, TOKEN),
+    ("GET", "/api/system?refresh=true", None, 200, TOKEN),
     ("GET", "/api/capacity", None, 200, TOKEN),
     ("GET", "/api/plugins", None, 200, TOKEN),
     ("GET", "/api/presets", None, 200, TOKEN),
@@ -94,18 +95,28 @@ CASES = [
     ("GET", "/api/media/audio", None, 200, TOKEN),
     ("GET", "/api/media/images", None, 200, TOKEN),
     ("POST", "/api/media/profiles", {}, 202, TOKEN),
+    # Upload takes multipart only; a JSON body proves the routes are there and
+    # refuse anything else. The multipart paths are covered in test_uploads.py.
+    ("POST", "/api/media/upload", {}, 400, TOKEN),
+    ("POST", "/api/media/audio/upload", {}, 400, TOKEN),
+    ("POST", "/api/media/upload", {}, 401, None),
     ("GET", "/api/logs?channel=lofi&service=compositor", None, 200, TOKEN),
+    ("GET", "/api/logs?channel=lofi&service=liquidsoap", None, 200, TOKEN),
+    ("GET", "/api/logs?channel=lofi&service=producer", None, 200, TOKEN),
+    ("GET", "/api/logs?channel=lofi&service=watchdog", None, 200, TOKEN),
     ("GET", "/api/logs?channel=lofi&service=../etc", None, 400, TOKEN),
     ("GET", "/api/channels/lofi/playlist", None, 200, TOKEN),
     ("PUT", "/api/channels/lofi/playlist", {"tracks": ["channels/lofi/audio/01 - a track.m4a"]}, 200, TOKEN),
     ("PUT", "/api/channels/lofi/playlist", {"tracks": ["../../etc/passwd"]}, 400, TOKEN),
     ("GET", "/api/channels/lofi/images", None, 200, TOKEN),
     ("PUT", "/api/channels/lofi/images", {"slides": ["channels/lofi/images/*"]}, 200, TOKEN),
-    ("PUT", "/api/channels/lofi/visualisation", {"active": "showfreqs-bars"}, 200, TOKEN),
-    ("PUT", "/api/channels/lofi/visualisation", {"active": "nope"}, 409, TOKEN),
+    ("PUT", "/api/channels/lofi/visualization", {"active": "showfreqs-bars"}, 200, TOKEN),
+    ("PUT", "/api/channels/lofi/visualization?allow_restart=false", {"active": "minimal-line"}, 409, TOKEN),
+    ("PUT", "/api/channels/lofi/visualization", {"active": "minimal-line"}, 202, TOKEN),
+    ("PUT", "/api/channels/lofi/visualization", {"active": "nope"}, 404, TOKEN),
     ("POST", "/api/channels/lofi/preset", {"preset": "calm-ocean"}, 202, TOKEN),
     ("POST", "/api/channels/lofi/preset", {"preset": "../etc"}, 400, TOKEN),
-    ("PUT", "/api/channels/lofi/colour", {"mode": "manual", "manual": {"accent": "#4FC3F7", "tint": "#101820"}}, 200, TOKEN),
+    ("PUT", "/api/channels/lofi/color", {"mode": "manual", "manual": {"accent": "#4FC3F7", "tint": "#101820"}}, 200, TOKEN),
     ("GET", "/api/channels/lofi/bumpers", None, 200, TOKEN),
     ("PUT", "/api/channels/lofi/bumpers", {"every_tracks": 3, "text": {"bumpers": [{"id": "station-id", "text": "hi"}]}}, 200, TOKEN),
     ("POST", "/api/channels/lofi/bumpers/generate", None, 202, TOKEN),
@@ -115,6 +126,8 @@ CASES = [
     ("POST", "/api/channels", {"name": "rain"}, 409, TOKEN),
     ("PATCH", "/api/channels/lofi", {"genre": "sleep"}, 200, TOKEN),
     ("PATCH", "/api/channels/lofi", {"resolution": "1080p"}, 400, TOKEN),
+    ("PUT", "/api/channels/lofi/resolution", {"resolution": "480p"}, 202, TOKEN),
+    ("PUT", "/api/channels/lofi/resolution", {"resolution": "8k"}, 400, TOKEN),
     ("POST", "/api/channels/lofi/start", None, 202, TOKEN),
     ("POST", "/api/channels/lofi/stop", None, 202, TOKEN),
     ("POST", "/api/channels/lofi/restart", None, 202, TOKEN),

@@ -42,14 +42,14 @@ Pipeline:
 2. **resample the voice to 44.1 kHz**
 3. mix over the bed, ducking the bed with `sidechaincompress` keyed on the voice
 4. pad with `lead_in_seconds` / `lead_out_seconds` of bed alone
-5. **normalise the finished bumper to `I=-14:TP=-1:LRA=11`**
+5. **normalize the finished bumper to `I=-14:TP=-1:LRA=11`**
 6. encode MP3 44.1 kHz stereo → `channels/<name>/bumpers/<id>.mp3`
 
 Two steps are easy to omit and both produce bugs that only show up on air:
 
 - **Kokoro emits 24 kHz.** Everything downstream is locked to 44.1 kHz. Skipping
   the resample yields wrong-pitch audio or forces a mid-stream rate change.
-- **Loudness must match the music.** An un-normalised bumper jumps out at
+- **Loudness must match the music.** An un-normalized bumper jumps out at
   listeners. `-14 LUFS` is the same target the stream already uses.
 
 `espeak-ng` is an **apt** package required by the misaki G2P for

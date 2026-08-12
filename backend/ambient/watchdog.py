@@ -27,7 +27,7 @@ from .models import ChannelState, Health
 LOG = logging.getLogger("ambient.watchdog")
 
 # Long enough that a freshly launched composer is not called stalled: the
-# producer is throttled to ~1.5 fps for 4-6 s while FFmpeg initialises, and
+# producer is throttled to ~1.5 fps for 4-6 s while FFmpeg initializes, and
 # that offset is benign.
 STARTUP_GRACE_SECONDS = 45.0
 # After a restart, do not judge or restart again until the replacement settled.

@@ -3,13 +3,13 @@ name: minimalist-line-art
 display_name: "Minimalist Line Art"
 description: "Monochrome, thin strokes."
 
-# No `visualisation`. This preset pairs with the `minimal-line` plugin, but a
+# No `visualization`. This preset pairs with the `minimal-line` plugin, but a
 # preset naming a plugin outside the channel's hot_set is a 409, and a fresh
 # channel's hot_set holds only the default plugin. Omitting the key leaves the
 # channel's active branch alone, so this applies anywhere. Put `minimal-line`
 # in the hot_set and switch to it separately.
 
-colour:
+color:
   mode: manual
   manual:
     accent: "#E0E0E0"
@@ -25,7 +25,7 @@ audio:
   crossfade_seconds: 5.0
 
 # hue.s = 0 is what makes it monochrome: `hue` sits downstream of `eq`, so it
-# drains the colour without touching the eq ramp underneath it.
+# drains the color without touching the eq ramp underneath it.
 effects:
   eq:
     contrast: 1.15

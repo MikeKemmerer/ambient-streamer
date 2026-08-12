@@ -10,7 +10,7 @@ ambient-streamer/
 ├── ambient.yaml                  global live config               (gitignored)
 ├── common/
 │   ├── audio/  images/  bumpers/{,beds/}
-│   └── profiles/<image>.json     colour profiles for shared images
+│   └── profiles/<image>.json     color profiles for shared images
 └── channels/<name>/
     ├── .env                      stream key + channel settings    (gitignored)
     ├── config.yaml               channel live config              (gitignored)
@@ -41,7 +41,7 @@ it, and enforcing that at the mount catches the mistake early.
 under `/mnt/c` on Docker Desktop, adds a network or 9p round trip to every read
 and will stall a 24/7 stream.
 
-## Colour profile
+## Color profile
 
 `<name>.json`, one per image, beside the image tree it belongs to.
 
@@ -135,7 +135,7 @@ at ≥0.97. **Any** compositor exit is a fault regardless of exit code. `drop` a
 
 ## Restarts
 
-Only two changes require a compositor restart: `visualisation.hot_set` and
+Only two changes require a compositor restart: `visualization.hot_set` and
 anything in `.env`. Both must be **make-before-break** — start the replacement,
 let it claim the relay path, then stop the old one.
 

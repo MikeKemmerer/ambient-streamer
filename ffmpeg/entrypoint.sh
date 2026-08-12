@@ -3,7 +3,7 @@
 #
 # This process must run for the life of the channel. A restart is a new YouTube
 # ingest session, so nothing here may depend on relaunching FFmpeg: images
-# arrive on image2pipe, colours change over zmq, plugins switch via streamselect.
+# arrive on image2pipe, colors change over zmq, plugins switch via streamselect.
 #
 # See docs/contracts/{audio-transport,slideshow,plugin,zmq-control}.md and the
 # youtube-ingest skill. Encoder flags are verbatim from that skill.
@@ -160,7 +160,7 @@ PREVIEW_VIDEO=("${VIDEO_FLAGS[@]}")
 ok "encoder: ${ENCODER} @ ${RATE} (preview libx264 @ ${P_RATE})"
 
 # --------------------------------------------------------------------- plugins
-# ffmpeg takes colours as 0xRRGGBB; '#' is a filtergraph escaping problem.
+# ffmpeg takes colors as 0xRRGGBB; '#' is a filtergraph escaping problem.
 ACCENT_FF="0x${ACCENT#\#}"
 
 IFS=',' read -r -a PLUGINS <<<"$HOT_SET"

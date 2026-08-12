@@ -1,4 +1,4 @@
-"""Media library and per-channel ordered selections.
+"""Media library, per-channel ordered selections, and operator upload.
 
 `PUT` replaces the whole ordered list rather than patching it: reordering is
 the common operation, and a positional patch API for a drag-and-drop UI invites
@@ -6,19 +6,23 @@ lost-update races between two open browsers.
 
 Every path is validated against the two-tree rule before it is written — these
 paths arrive over HTTP, so `../` traversal would otherwise mount arbitrary host
-files into a stream.
+files into a stream. Upload is the same boundary from the other direction and
+lives in `ambient.uploads`.
 """
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Literal
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query, Request
+from fastapi.responses import JSONResponse
 from pydantic import Field
 
 from .. import colorprofile
-from ..config import channel_directory
+from ..config import ConfigError, channel_directory
+from ..events import MEDIA_UPLOADED
 from ..main import ApiError, AppState
 from ..media import (
     MediaError,
@@ -27,6 +31,18 @@ from ..media import (
     resolve_selection,
 )
 from ..models import ChannelConfig, ImageOrder, StrictModel
+from ..uploads import (
+    COMMON_TARGET,
+    KIND_ALIASES,
+    KIND_BY_SEGMENT,
+    STAGING_DIRNAME,
+    UploadAborted,
+    UploadLimits,
+    UploadReceiver,
+    UploadTarget,
+    receive,
+    relative_dir,
+)
 from .deps import Authed, recompile, save_channel_config
 
 router = APIRouter(prefix="/api", tags=["media"])
@@ -106,8 +122,8 @@ async def list_images(state: AppState = Authed) -> dict[str, Any]:
 async def extract_profiles(
     force: bool = False, channel: str | None = None, state: AppState = Authed
 ) -> dict[str, Any]:
-    """Extract missing colour profiles. A profile describes the image, so a
-    shared image is analysed once and every channel sees it."""
+    """Extract missing color profiles. A profile describes the image, so a
+    shared image is analyzed once and every channel sees it."""
     trees: list[Path] = []
     if channel is None:
         trees.append(state.workspace.common_dir)
@@ -120,6 +136,214 @@ async def extract_profiles(
         for tree in trees
     ]
     return {"accepted": True, "trees": results}
+
+
+def _upload_target(state: AppState, target: str, kind: MediaKind) -> UploadTarget:
+    """`common` or one existing channel. A name from a request is hostile input."""
+    if target == COMMON_TARGET:
+        return UploadTarget(
+            name=COMMON_TARGET,
+            kind=kind,
+            tree_root=state.workspace.common_dir.resolve(),
+            channel=None,
+        )
+    try:
+        directory = channel_directory(state.workspace, target)
+    except ConfigError as exc:
+        raise ApiError(400, "invalid_channel_name", str(exc)) from exc
+    if target not in state.names():
+        raise ApiError(404, "unknown_channel", f"no channel named {target!r}")
+    return UploadTarget(name=target, kind=kind, tree_root=directory, channel=target)
+
+
+def _field_kind(value: str, fallback: MediaKind | None) -> MediaKind:
+    if not value:
+        if fallback is None:
+            raise UploadAborted("missing_kind", "the request carries no 'kind' field", 400)
+        return fallback
+    kind = KIND_ALIASES.get(value.lower())
+    if kind is None:
+        raise UploadAborted(
+            "invalid_kind", f"kind must be audio or images, not {value[:40]!r}", 400
+        )
+    return kind
+
+
+def _field_target(fields: dict[str, str], fallback: str | None) -> str:
+    """`destination=common` or `destination=channel` plus `channel=<name>`.
+
+    The channel is only honoured for `destination=channel`, so a request that
+    names both cannot have the stray field decide where the bytes land.
+    """
+    destination = fields.get("destination", "").lower()
+    channel = fields.get("channel", "")
+    if not destination:
+        if channel:
+            return channel
+        if fallback is None:
+            raise UploadAborted(
+                "missing_destination", "the request carries no 'destination' field", 400
+            )
+        return fallback
+    if destination == COMMON_TARGET:
+        return COMMON_TARGET
+    if destination == "channel":
+        if not channel:
+            raise UploadAborted(
+                "missing_channel", "destination=channel needs a 'channel' field", 400
+            )
+        return channel
+    raise UploadAborted(
+        "invalid_destination",
+        f"destination must be common or channel, not {destination[:40]!r}",
+        400,
+    )
+
+
+def _resolver(
+    state: AppState, *, kind: MediaKind | None, target: str | None
+) -> Callable[[dict[str, str]], UploadTarget]:
+    """Turn the trailing form fields into a validated target."""
+
+    def resolve(fields: dict[str, str]) -> UploadTarget:
+        chosen = _field_kind(fields.get("kind", ""), kind)
+        try:
+            return _upload_target(state, _field_target(fields, target), chosen)
+        except ApiError as exc:
+            raise UploadAborted(exc.error, str(exc.detail), exc.status_code) from exc
+
+    return resolve
+
+
+async def _finalize(receiver: UploadReceiver, part: Any) -> None:
+    """Probing and profile extraction are CPU-bound; keep the loop free for SSE."""
+    await asyncio.to_thread(receiver.finish, part)
+
+
+def _refused(exc: UploadAborted) -> ApiError:
+    return ApiError(exc.status_code, exc.error, exc.detail)
+
+
+async def _upload(
+    request: Request,
+    state: AppState,
+    *,
+    kind: MediaKind | None,
+    target: str | None,
+    fallback: str | None,
+    on_conflict: str,
+) -> JSONResponse:
+    """Stream a multipart batch into `common/` or one channel's own tree.
+
+    An explicit `?target=` is resolved before a byte is read, so a duplicate or
+    a bad extension is refused without receiving the file. Otherwise the target
+    comes from the body's own fields, which the browser appends *after* the
+    file, and the upload stages until they arrive.
+
+    Per-file results, so one rejected file never fails the batch: 200 when all
+    succeeded, 207 when some did, 400 when none did.
+    """
+    limits = UploadLimits.from_config(state.workspace.ambient)
+    declared = request.headers.get("content-length") or ""
+    if declared.isdigit() and int(declared) > limits.max_request_bytes:
+        raise ApiError(
+            413, "request_too_large", f"at most {limits.max_request_bytes} bytes per request"
+        )
+
+    eager = _upload_target(state, target, kind) if target is not None and kind else None
+    receiver = UploadReceiver(
+        eager,
+        limits,
+        rename_on_conflict=on_conflict == "rename",
+        repo_root=state.workspace.root,
+        resolve_target=None if eager else _resolver(state, kind=kind, target=fallback),
+        staging_dir=None if eager else state.workspace.root / STAGING_DIRNAME,
+    )
+    try:
+        results = await receive(
+            request.stream(),
+            request.headers.get("content-type") or "",
+            receiver,
+            finalize=_finalize,
+        )
+    except UploadAborted as exc:
+        raise _refused(exc) from exc
+
+    if not results:
+        raise ApiError(400, "no_files", "the request carried no file parts")
+
+    # Every file may have failed before the target was ever needed.
+    try:
+        upload = receiver.resolve()
+    except UploadAborted as exc:
+        raise _refused(exc) from exc
+
+    stored = [r for r in results if r.ok]
+    body = {
+        "target": upload.name,
+        "destination": COMMON_TARGET if upload.channel is None else "channel",
+        "channel": upload.channel,
+        "kind": upload.kind.folder,
+        "directory": relative_dir(upload.directory, state.workspace.root),
+        "uploaded": len(stored),
+        "failed": len(results) - len(stored),
+        "results": [r.as_dict() for r in results],
+    }
+    if stored:
+        await state.events.publish(
+            MEDIA_UPLOADED,
+            {
+                "target": upload.name,
+                "kind": upload.kind.folder,
+                "uploaded": len(stored),
+                "failed": len(results) - len(stored),
+                "files": [r.filename for r in stored],
+            },
+            channel=upload.channel,
+        )
+    status = 200 if len(stored) == len(results) else (207 if stored else 400)
+    return JSONResponse(status_code=status, content=body)
+
+
+@router.post("/media/upload")
+async def upload_media(
+    request: Request,
+    on_conflict: Literal["reject", "rename"] = "reject",
+    state: AppState = Authed,
+) -> JSONResponse:
+    """Upload with everything in the body: `files`, `kind`, `destination`, `channel`.
+
+    Nothing is implied here — the route names neither the kind nor the tree, so
+    a request missing either field is refused rather than defaulted into the
+    shared library.
+    """
+    return await _upload(
+        request, state, kind=None, target=None, fallback=None, on_conflict=on_conflict
+    )
+
+
+@router.post("/media/{kind}/upload")
+async def upload_media_kind(
+    kind: Literal["audio", "images"],
+    request: Request,
+    request_target: str | None = Query(None, alias="target"),
+    on_conflict: Literal["reject", "rename"] = "reject",
+    state: AppState = Authed,
+) -> JSONResponse:
+    """The same upload with the kind in the path.
+
+    `?target=` still wins when it is given; without it the body's `destination`
+    decides, and a request that says nothing at all keeps the historical
+    `common` default.
+    """
+    return await _upload(
+        request,
+        state,
+        kind=KIND_BY_SEGMENT[kind],
+        target=request_target,
+        fallback=COMMON_TARGET,
+        on_conflict=on_conflict,
+    )
 
 
 @router.get("/channels/{name}/playlist")
@@ -202,7 +426,7 @@ async def put_images(name: str, body: ImagesBody, state: AppState = Authed) -> d
 
 
 def _validate(state: AppState, directory: Path, entries: list[str], kind: MediaKind) -> None:
-    """Normalise, prefix-check, resolve symlinks, prefix-check again."""
+    """Normalize, prefix-check, resolve symlinks, prefix-check again."""
     roots = MediaRoots.create(state.workspace.root, state.workspace.common_dir, directory)
     try:
         resolve_selection(entries, kind, roots)

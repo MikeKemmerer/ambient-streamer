@@ -1,4 +1,4 @@
-"""Colour profiles: the on-disk schema, where they land, and staleness."""
+"""Color profiles: the on-disk schema, where they land, and staleness."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ import pytest
 from ambient.colorprofile import (
     EXTRACTORS,
     PILLOW_KMEANS_V1,
-    ColourProfile,
+    ColorProfile,
     ProfileError,
     ensure_profile,
     extract,
@@ -24,15 +24,15 @@ from ambient.colorprofile import (
 PIL = pytest.importorskip("PIL")
 
 
-def make_image(path: Path, colours: list[tuple[int, int, int]], size: int = 32) -> Path:
+def make_image(path: Path, colors: list[tuple[int, int, int]], size: int = 32) -> Path:
     from PIL import Image
 
     image = Image.new("RGB", (size, size))
     pixels = image.load()
-    band = max(1, size // len(colours))
+    band = max(1, size // len(colors))
     for y in range(size):
         for x in range(size):
-            pixels[x, y] = colours[min(x // band, len(colours) - 1)]
+            pixels[x, y] = colors[min(x // band, len(colors) - 1)]
     path.parent.mkdir(parents=True, exist_ok=True)
     image.save(path)
     return path
@@ -80,7 +80,7 @@ def test_a_profile_lives_beside_the_tree_that_owns_the_image(tmp_path: Path) -> 
     )
 
 
-def test_a_shared_image_is_analysed_once(tmp_path: Path) -> None:
+def test_a_shared_image_is_analyzed_once(tmp_path: Path) -> None:
     tree = tmp_path / "common"
     make_image(tree / "images" / "shared.png", [(20, 60, 40)])
     _first, wrote_first = ensure_profile(
@@ -159,9 +159,9 @@ def test_summarise_is_none_for_a_missing_profile() -> None:
     assert summarise(None) is None
 
 
-def test_the_schema_rejects_a_non_hex_colour() -> None:
+def test_the_schema_rejects_a_non_hex_color() -> None:
     with pytest.raises(Exception):
-        ColourProfile(
+        ColorProfile(
             source="x.jpg",
             extracted_at="2026-08-11T22:04:00Z",
             extractor=PILLOW_KMEANS_V1,

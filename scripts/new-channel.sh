@@ -92,7 +92,7 @@ ok "$MOUNT and $FALLBACK_MOUNT are free"
 # ---------------------------------------------------------------------------
 head1 "2/5  directories"
 
-# profiles/ matches what POST /api/channels creates; colour extraction writes
+# profiles/ matches what POST /api/channels creates; color extraction writes
 # there. Its contents are generated, so it gets no .gitkeep.
 for sub in audio images bumpers; do
 	mkdir -p "$CHANNEL_DIR/$sub"

@@ -77,7 +77,7 @@ audio:
 
 ## Expansion rules
 
-| Rule | Behaviour |
+| Rule | Behavior |
 |---|---|
 | Sort | natural sort, so `track2` precedes `track10` |
 | Extension filter | only known media extensions; anything else is skipped |
@@ -86,7 +86,7 @@ audio:
 | Empty glob | warning, not an error — a folder may legitimately be empty for now |
 | Empty result overall | **hard error.** A channel with no audio cannot stream |
 
-Recognised extensions:
+Recognized extensions:
 
 | Kind | Extensions |
 |---|---|
@@ -171,12 +171,12 @@ degrades to copy-then-unlink and is not atomic.
 
 ## Path validation
 
-Every entry in `config.yaml` must resolve, after normalisation, to a location
+Every entry in `config.yaml` must resolve, after normalization, to a location
 under `common/` or that channel's own directory. Reject anything else.
 
 This is a security boundary, not tidiness: these paths arrive from the control
 plane's HTTP API, so `../` traversal would let a caller mount arbitrary host
-files into a stream. Normalise first, then check the prefix — checking before
+files into a stream. Normalize first, then check the prefix — checking before
 normalising is the classic way to get this wrong.
 
 Symlinks inside either tree are resolved and re-validated after resolution, for
@@ -188,7 +188,7 @@ wrong position, or a symlinked subdirectory, can produce matches outside the
 intended tree even when the pattern reads as though it could not. Expand first,
 then validate every result individually and discard the ones that escape.
 
-## Colour profiles
+## Color profiles
 
 Profiles are generated per image, not per channel — a profile describes the
 image.
@@ -198,7 +198,7 @@ image.
 | `common/images/x.jpg` | `common/profiles/x.json` |
 | `channels/lofi/images/y.jpg` | `channels/lofi/profiles/y.json` |
 
-A shared image used by four channels is analysed once. See
+A shared image used by four channels is analyzed once. See
 [on-disk.md](on-disk.md) for the profile schema.
 
 ## Change semantics

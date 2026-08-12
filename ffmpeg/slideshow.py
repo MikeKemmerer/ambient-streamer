@@ -101,7 +101,7 @@ def encode(img: Image.Image, quality: int) -> bytes:
 
 
 # --------------------------------------------------------------------------
-# colour transitions (slideshow.md obligation 6)
+# color transitions (slideshow.md obligation 6)
 # --------------------------------------------------------------------------
 
 def profile_path(image: str) -> Optional[str]:
@@ -138,7 +138,7 @@ def clamp(value: float, low: float, high: float) -> float:
     return low if value < low else high if value > high else value
 
 
-class ColourSender:
+class ColorSender:
     """Validated, non-blocking zmq client.
 
     Every message is exactly three non-empty whitespace-free tokens: anything
@@ -260,7 +260,7 @@ class Producer:
         self.next_stat = cfg.stats_interval
         self.started = 0.0
         self.first_write: Optional[float] = None
-        self.colour = (ColourSender(cfg.zmq_endpoint, cfg.transition)
+        self.color = (ColorSender(cfg.zmq_endpoint, cfg.transition)
                        if cfg.zmq_endpoint else None)
         self.now = nowstate.start_writer()
         self.playlist: list[str] = []
@@ -375,12 +375,12 @@ class Producer:
                 continue
             nxt_path, nxt_img, nxt_bytes = nxt
             self.slides += 1
-            # Published as the crossfade starts, with the colour ramp, because
+            # Published as the crossfade starts, with the color ramp, because
             # that is when the viewer sees the new slide arrive.
             if self.now is not None:
                 self.now.set_slide(nxt_path)
-            if self.colour is not None:
-                self.colour.apply(nxt_path, self.stream_time())
+            if self.color is not None:
+                self.color.apply(nxt_path, self.stream_time())
 
             for step in range(1, self.fade_frames + 1):
                 alpha = step / (self.fade_frames + 1)
@@ -406,7 +406,7 @@ def parse_args() -> Settings:
                     default=env_float("STATS_INTERVAL", 30.0))
     ap.add_argument("--zmq-endpoint", default=env_str("ZMQ_ENDPOINT", ""))
     ap.add_argument("--transition", type=float,
-                    default=env_float("COLOUR_TRANSITION_SECONDS", 2.0))
+                    default=env_float("COLOR_TRANSITION_SECONDS", 2.0))
     args = ap.parse_args()
     if args.fps <= 0:
         ap.error("--fps must be positive")

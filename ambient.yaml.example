@@ -49,6 +49,11 @@ paths:
   channels: ./channels
   logs: /var/log/ambient
 
+  # Directories under channels/ that are not streams. `example` is the template
+  # every new channel is copied from; without this it shows up as a broken
+  # channel in the UI.
+  ignore_channels: ["example"]
+
 relay:
   # Internal service addresses on the compose network. None of these are
   # published to the host; the backend proxies what operators need.

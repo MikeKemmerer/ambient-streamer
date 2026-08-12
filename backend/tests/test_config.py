@@ -11,6 +11,8 @@ from ambient.config import (
     ConfigError,
     channel_directory,
     check_mount_uniqueness,
+    discover_channels,
+    ignored_channel_names,
     load_channel,
     load_workspace,
     parse_env_file,
@@ -39,10 +41,10 @@ audio:
 images:
   slides: []
   order: sequential
-visualisation:
+visualization:
   active: showfreqs-bars
   hot_set: [showfreqs-bars]
-colour:
+color:
   mode: automatic
 preset: null
 bumpers:
@@ -199,6 +201,49 @@ def test_empty_env_values_fall_back_to_defaults(tmp_path: Path) -> None:
     channel = load_channel(workspace, "lofi")
     assert channel.env.encoder is None  # CHANNEL_ENCODER= is unset, not an error
     assert channel.encoder.value == "libx264"
+
+
+# --------------------------------------------------------------------------
+# Discovery
+# --------------------------------------------------------------------------
+
+
+def test_a_directory_without_an_env_is_not_a_channel(tmp_path: Path) -> None:
+    root = make_repo(tmp_path)
+    (root / "channels" / "notes").mkdir()
+    (root / "channels" / "notes" / "README.md").write_text("x", encoding="utf-8")
+    assert discover_channels(load_workspace(root)) == ["lofi"]
+
+
+def test_the_example_template_is_ignored_by_default(tmp_path: Path) -> None:
+    root = make_repo(tmp_path)
+    example = root / "channels" / "example"
+    example.mkdir()
+    (example / ".env").write_text(CHANNEL_ENV, encoding="utf-8")
+    workspace = load_workspace(root)
+    assert ignored_channel_names(workspace) == ["example"]
+    assert discover_channels(workspace) == ["lofi"]
+
+
+def test_the_ignore_list_is_configurable(tmp_path: Path) -> None:
+    root = make_repo(tmp_path)
+    (root / "ambient.yaml").write_text(
+        "version: 1\npaths:\n  ignore_channels: [lofi]\n", encoding="utf-8"
+    )
+    workspace = load_workspace(root)
+    assert ignored_channel_names(workspace) == ["lofi"]
+    assert discover_channels(workspace) == []
+
+
+def test_an_empty_ignore_list_hides_nothing(tmp_path: Path) -> None:
+    root = make_repo(tmp_path)
+    example = root / "channels" / "example"
+    example.mkdir()
+    (example / ".env").write_text(CHANNEL_ENV, encoding="utf-8")
+    (root / "ambient.yaml").write_text(
+        "version: 1\npaths:\n  ignore_channels: []\n", encoding="utf-8"
+    )
+    assert discover_channels(load_workspace(root)) == ["example", "lofi"]
 
 
 def test_stream_key_is_not_printed(tmp_path: Path) -> None:

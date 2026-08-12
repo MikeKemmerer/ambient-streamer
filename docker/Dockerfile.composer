@@ -1,7 +1,7 @@
 # ambient-streamer — FFmpeg compositor, one container per channel.
 #
 # Why Ubuntu 24.04 and not a hand-built FFmpeg: the distro ffmpeg 6.1.1 is built
-# with --enable-libzmq, which is the whole live-control mechanism (colour and
+# with --enable-libzmq, which is the whole live-control mechanism (color and
 # plugin changes mutate the running filtergraph instead of restarting FFmpeg).
 # A hand-built binary would be one more thing to keep patched for a 24/7 service.
 #
@@ -28,7 +28,7 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 
 # Hard-fail the build if the base ever ships an FFmpeg without these. Silent
-# loss of libzmq would look like "colour commands stopped working" at runtime.
+# loss of libzmq would look like "color commands stopped working" at runtime.
 RUN set -eux; \
     ffmpeg -hide_banner -buildconf | grep -q -- '--enable-libzmq'; \
     ffmpeg -hide_banner -buildconf | grep -q -- '--enable-libx264'; \

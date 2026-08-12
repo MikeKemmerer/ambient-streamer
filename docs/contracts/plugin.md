@@ -1,4 +1,4 @@
-# Contract — Visualisation plugin
+# Contract — Visualization plugin
 
 Owner: lead. Consumers: media-pipeline, backend-api.
 
@@ -35,7 +35,7 @@ Evidence via `signalstats`:
 
 Other mismatches are handled automatically and are not errors:
 
-| Mismatch | FFmpeg behaviour |
+| Mismatch | FFmpeg behavior |
 |---|---|
 | pix_fmt | inserts `auto_scale`, renders correctly |
 | frame rate | framesync resolves it |
@@ -70,7 +70,7 @@ Placeholders are substituted at launch.
 |---|---|
 | `${WIDTH}` `${HEIGHT}` | channel output geometry |
 | `${FPS}` | channel output frame rate |
-| `${ACCENT}` | current accent colour |
+| `${ACCENT}` | current accent color |
 | `${OUT}` | the branch label the compositor assigns |
 
 Every filter instance the backend may address at runtime carries an explicit
@@ -87,7 +87,7 @@ Every filter instance the backend may address at runtime carries an explicit
   "version": "1.0.0",
   "author": "ambient-streamer",
   "commandable": [
-    { "target": "showfreqs@viz", "param": "colors", "type": "colour" }
+    { "target": "showfreqs@viz", "param": "colors", "type": "color" }
   ],
   "cost": {
     "cores_720p30": 0.24,
@@ -106,7 +106,7 @@ Every filter instance the backend may address at runtime carries an explicit
 
 **Measured:** `showwaves` and `showfreqs` expose **no** runtime-commandable
 parameters at all. `avectorscope` exposes `mode`, `rc`, `gc`, `bc`, `zoom`,
-`draw`, `scale`, `swap`, `mirror`. Colour for the first two therefore has to
+`draw`, `scale`, `swap`, `mirror`. Color for the first two therefore has to
 come from `eq`/`hue` downstream, not from the plugin itself.
 
 ## Switching

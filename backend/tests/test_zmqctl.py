@@ -95,7 +95,7 @@ def test_drawbox_refuses_expressions() -> None:
         build_message("drawbox@box", "t", "sin(t)")
 
 
-def test_drawbox_colour_is_accepted() -> None:
+def test_drawbox_color_is_accepted() -> None:
     assert build_message("drawbox@box", "color", "red") == "drawbox@box color red"
     assert build_message("drawbox@box", "color", "#4FC3F7").endswith("#4FC3F7")
 

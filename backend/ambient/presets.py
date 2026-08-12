@@ -5,7 +5,7 @@ anything that would: not `hot_set`, not resolution/fps/encoder, not media
 selection. What it can reach is what the escape hatches reach — zmq commands,
 `streamselect`, and the generated lists.
 
-Colour is emitted as a self-animating `eq`/`hue` expression rather than a
+Color is emitted as a self-animating `eq`/`hue` expression rather than a
 command stream. Measured: the zmq filter ceilings at ~31.5 commands/s because
 it only polls when a frame passes, so a per-frame ramp is impossible; one
 expression moves the value every frame with no further traffic.
@@ -23,12 +23,12 @@ import yaml
 from pydantic import Field, ValidationError, field_validator
 
 from .models import (
-    HEX_COLOUR,
+    HEX_COLOR,
     ChannelConfig,
-    Colour,
-    ColourMode,
+    Color,
+    ColorMode,
     ImageOrder,
-    ManualColour,
+    ManualColor,
     StrictModel,
 )
 from .zmqctl import ZmqValidationError, build_message
@@ -47,10 +47,10 @@ class PresetError(ValueError):
 
 
 class NotInHotSet(PresetError):
-    """The preset's visualisation is not instantiated on this channel."""
+    """The preset's visualization is not instantiated on this channel."""
 
 
-class PresetVisualisation(StrictModel):
+class PresetVisualization(StrictModel):
     # No hot_set: changing it means a new filtergraph, which means a restart.
     active: str
 
@@ -83,9 +83,9 @@ class PresetEffects(StrictModel):
     hue: PresetHue = Field(default_factory=PresetHue)
 
 
-class PresetColour(StrictModel):
-    mode: ColourMode | None = None
-    manual: ManualColour | None = None
+class PresetColor(StrictModel):
+    mode: ColorMode | None = None
+    manual: ManualColor | None = None
     transition_seconds: float | None = Field(None, ge=0)
 
 
@@ -94,8 +94,8 @@ class Preset(StrictModel):
     name: str
     display_name: str = ""
     description: str = ""
-    visualisation: PresetVisualisation | None = None
-    colour: PresetColour | None = None
+    visualization: PresetVisualization | None = None
+    color: PresetColor | None = None
     slideshow: PresetSlideshow = Field(default_factory=PresetSlideshow)
     audio: PresetAudio = Field(default_factory=PresetAudio)
     effects: PresetEffects = Field(default_factory=PresetEffects)
@@ -147,34 +147,34 @@ def get_preset(presets_dir: Path, name: str) -> Preset:
 
 
 # --------------------------------------------------------------------------
-# Colour
+# Color
 # --------------------------------------------------------------------------
 
 
-def parse_hex(colour: str) -> tuple[float, float, float]:
-    text = colour.strip().lstrip("#")
+def parse_hex(color: str) -> tuple[float, float, float]:
+    text = color.strip().lstrip("#")
     if len(text) != 6:
-        raise PresetError(f"{colour!r} is not a #rrggbb colour")
+        raise PresetError(f"{color!r} is not a #rrggbb color")
     try:
         return tuple(int(text[i : i + 2], 16) / 255.0 for i in (0, 2, 4))  # type: ignore[return-value]
     except ValueError as exc:
-        raise PresetError(f"{colour!r} is not a #rrggbb colour") from exc
+        raise PresetError(f"{color!r} is not a #rrggbb color") from exc
 
 
 @dataclass(frozen=True)
-class ColourTargets:
-    """The `eq`/`hue` values a colour pair maps to."""
+class ColorTargets:
+    """The `eq`/`hue` values a color pair maps to."""
 
     hue_degrees: float
     saturation: float
     brightness: float
 
 
-def colour_targets(accent: str, tint: str) -> ColourTargets:
+def color_targets(accent: str, tint: str) -> ColorTargets:
     red, green, blue = parse_hex(accent)
     hue, _lightness, saturation = colorsys.rgb_to_hls(red, green, blue)
     tint_luma = sum(c * w for c, w in zip(parse_hex(tint), (0.2126, 0.7152, 0.0722)))
-    return ColourTargets(
+    return ColorTargets(
         hue_degrees=round(hue * 360.0 - 180.0, 2),
         saturation=round(0.8 + saturation * 0.8, 3),
         brightness=round((tint_luma - 0.5) * 2 * BRIGHTNESS_RANGE, 3),
@@ -188,21 +188,21 @@ def _ramp(start: float, end: float, seconds: float, at: float) -> str:
     return f"{start:g}+({end - start:g})*min(max((t-{at:g})/{seconds:g},0),1)"
 
 
-def colour_messages(
+def color_messages(
     accent: str,
     tint: str,
     *,
     transition_seconds: float = 0.0,
     stream_time: float = 0.0,
-    current: ColourTargets | None = None,
+    current: ColorTargets | None = None,
 ) -> list[str]:
-    """Validated `TARGET COMMAND ARG` messages for a colour change.
+    """Validated `TARGET COMMAND ARG` messages for a color change.
 
     Every message goes through `zmqctl.build_message`: a malformed one aborts
     FFmpeg with SIGABRT.
     """
-    target = colour_targets(accent, tint)
-    start = current or ColourTargets(hue_degrees=0.0, saturation=1.0, brightness=0.0)
+    target = color_targets(accent, tint)
+    start = current or ColorTargets(hue_degrees=0.0, saturation=1.0, brightness=0.0)
     pairs = (
         (HUE_TARGET, "h", start.hue_degrees, target.hue_degrees),
         (EQ_TARGET, "saturation", start.saturation, target.saturation),
@@ -239,7 +239,7 @@ class PresetApplication:
     preset: str
     config: ChannelConfig
     messages: list[str] = field(default_factory=list)
-    visualisation: str | None = None
+    visualization: str | None = None
     rewrite_images_list: bool = False
     reconfigure_liquidsoap: bool = False
     changed: list[str] = field(default_factory=list)
@@ -252,17 +252,17 @@ def apply_preset(
     data = config.model_dump()
     application = PresetApplication(preset=preset.name, config=config)
 
-    if preset.visualisation is not None:
-        active = preset.visualisation.active
-        if active not in config.visualisation.hot_set:
+    if preset.visualization is not None:
+        active = preset.visualization.active
+        if active not in config.visualization.hot_set:
             raise NotInHotSet(
                 f"preset {preset.name!r} wants {active!r}, which is not in this "
                 f"channel's hot_set; promoting it would need a restart"
             )
-        if active != config.visualisation.active:
-            data["visualisation"]["active"] = active
-            application.visualisation = active
-            application.changed.append("visualisation.active")
+        if active != config.visualization.active:
+            data["visualization"]["active"] = active
+            application.visualization = active
+            application.changed.append("visualization.active")
 
     if preset.slideshow.hold_seconds is not None:
         data["images"]["hold_seconds"] = preset.slideshow.hold_seconds
@@ -282,25 +282,25 @@ def apply_preset(
         application.reconfigure_liquidsoap = True
         application.changed.append("audio.crossfade_seconds")
 
-    colour = Colour.model_validate(data["colour"])
-    if preset.colour is not None:
-        merged = colour.model_dump()
-        if preset.colour.mode is not None:
-            merged["mode"] = preset.colour.mode
-        if preset.colour.manual is not None:
-            merged["manual"] = preset.colour.manual.model_dump()
-        if preset.colour.transition_seconds is not None:
-            merged["transition_seconds"] = preset.colour.transition_seconds
-        colour = Colour.model_validate(merged)
-        data["colour"] = colour.model_dump()
-        application.changed.append("colour")
+    color = Color.model_validate(data["color"])
+    if preset.color is not None:
+        merged = color.model_dump()
+        if preset.color.mode is not None:
+            merged["mode"] = preset.color.mode
+        if preset.color.manual is not None:
+            merged["manual"] = preset.color.manual.model_dump()
+        if preset.color.transition_seconds is not None:
+            merged["transition_seconds"] = preset.color.transition_seconds
+        color = Color.model_validate(merged)
+        data["color"] = color.model_dump()
+        application.changed.append("color")
 
-    if colour.mode is ColourMode.MANUAL:
+    if color.mode is ColorMode.MANUAL:
         application.messages.extend(
-            colour_messages(
-                colour.manual.accent,
-                colour.manual.tint,
-                transition_seconds=colour.transition_seconds,
+            color_messages(
+                color.manual.accent,
+                color.manual.tint,
+                transition_seconds=color.transition_seconds,
                 stream_time=stream_time,
             )
         )
@@ -312,15 +312,15 @@ def apply_preset(
 
 
 __all__ = [
-    "HEX_COLOUR",
-    "ColourTargets",
+    "HEX_COLOR",
+    "ColorTargets",
     "NotInHotSet",
     "Preset",
     "PresetApplication",
     "PresetError",
     "apply_preset",
-    "colour_messages",
-    "colour_targets",
+    "color_messages",
+    "color_targets",
     "effect_messages",
     "get_preset",
     "load_preset",

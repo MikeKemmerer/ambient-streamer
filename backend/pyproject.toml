@@ -14,6 +14,9 @@ dependencies = [
     "fastapi>=0.110",
     "uvicorn>=0.27",
     "Pillow>=10.0",
+    # Streaming multipart parsing for media upload: the body is written
+    # straight into the destination directory, never buffered whole.
+    "python-multipart>=0.0.9",
 ]
 
 [project.optional-dependencies]

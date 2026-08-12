@@ -5,12 +5,14 @@ import {
   ApiError,
   api,
   asList,
+  asLog,
   asMediaGroups,
-  asText,
+  asUploadResults,
   authHeaders,
   clearToken,
   hasToken,
   setToken,
+  uploadMedia,
 } from './api.js';
 import { EventStream } from './events.js';
 import { Preview } from './preview.js';
@@ -23,6 +25,7 @@ import {
   clear,
   el,
   flatten,
+  fmtBytes,
   fmtClock,
   fmtNum,
   fmtUptime,
@@ -34,6 +37,7 @@ import {
   renderKv,
   stateTone,
   toast,
+  uploadRow,
 } from './render.js';
 
 const DASH = '—';
@@ -43,13 +47,38 @@ const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 // envelope keys (channel, at) never end up rendered as status.
 const STATUS_KEYS = [
   'state', 'health', 'uptime_seconds', 'current_track', 'next_track', 'current_slide',
-  'visualisation', 'encoder', 'encoder_requested', 'fps', 'speed', 'bitrate_kbps',
+  'visualization', 'encoder', 'encoder_requested', 'fps', 'speed', 'bitrate_kbps',
   'cpu_cores', 'liquidsoap_buffer', 'rtmp', 'hls',
 ];
 
 // Fields GET /api/channels/{name} adds on top of the summary. They are not merged
 // from SSE, which carries the status subset only.
 const DETAIL_KEYS = ['fault', 'fault_detail', 'warnings'];
+
+// Upload: everything that differs between the two media panels. The extension
+// lists are a courtesy filter for the operator, not a check — the control plane
+// probes the actual contents, because a name and a Content-Type are whatever the
+// uploading side says they are.
+const UPLOAD = {
+  audio: {
+    folder: 'audio',
+    noun: 'audio file',
+    extensions: ['.mp3', '.flac', '.ogg', '.opus', '.m4a', '.aac', '.wav'],
+    largeBytes: 250 * 1024 * 1024,
+    list: () => state.playlist,
+    rerender: () => renderAudioTab(),
+  },
+  images: {
+    folder: 'images',
+    noun: 'image',
+    extensions: ['.jpg', '.jpeg', '.png', '.webp', '.bmp'],
+    largeBytes: 40 * 1024 * 1024,
+    list: () => state.slides,
+    rerender: () => renderSlidesTab(),
+  },
+};
+
+const UPLOAD_CONCURRENCY = 2;
 
 const state = {
   channels: new Map(),
@@ -61,8 +90,16 @@ const state = {
   media: { audio: [], images: [] },
   capacity: null,
   system: null,
-  playlist: { saved: [], draft: [] },
-  slides: { saved: [], draft: [] },
+  playlist: { saved: [], draft: [], watched: [] },
+  slides: { saved: [], draft: [], watched: [] },
+  // Held apart from the config so the 1 Hz progress render cannot reset the picker.
+  resolutionDraft: null,
+  // Paths the Add all buttons would append: what is visible and not yet selected.
+  addable: { audio: [], images: [] },
+  // Upload rows and the chosen tree live here, never re-derived from a render, so
+  // a status refresh or a media reload cannot wipe a transfer in progress.
+  uploads: { audio: [], images: [] },
+  uploadDest: { audio: 'channel', images: 'channel' },
   scheduleRows: [],
   jobs: new Map(),
   configErrors: new Map(),
@@ -88,7 +125,7 @@ function report(label, err) {
   if (err instanceof ApiError) {
     if (err.status === 401) {
       openTokenDialog('The control plane rejected that token.');
-      toast('bad', label, 'unauthorised');
+      toast('bad', label, 'unauthorized');
       return;
     }
     toast('bad', `${label} \u2014 ${err.error}`, err.detail);
@@ -158,10 +195,10 @@ async function pingHealth() {
 async function loadPlugins() {
   const data = await guard('plugins', () => api.plugins());
   if (data === undefined) return;
-  state.plugins = asList(data, 'plugins', 'items').map(normalisePlugin).filter((p) => p.name);
+  state.plugins = asList(data, 'plugins', 'items').map(normalizePlugin).filter((p) => p.name);
 }
 
-function normalisePlugin(entry) {
+function normalizePlugin(entry) {
   if (typeof entry === 'string') return { name: entry, display_name: entry };
   const manifest = entry && entry.manifest && typeof entry.manifest === 'object' ? entry.manifest : entry || {};
   return {
@@ -236,9 +273,25 @@ async function refreshChannels() {
     }
   }
 
+  renderSkipped(data);
   renderChannelList();
   renderTopbar();
   if (state.selected) loadChannelDetail(state.selected);
+}
+
+/** Directories the backend skipped — the `example` template and anything like it. */
+function renderSkipped(data) {
+  const note = $('channel-skipped');
+  const entries = asList(data, 'ignored', 'skipped', 'hidden').map((entry) =>
+    typeof entry === 'string'
+      ? { name: entry, reason: '' }
+      : { name: entry.name || entry.channel || entry.directory || entry.path || '', reason: entry.reason || entry.detail || '' },
+  ).filter((entry) => entry.name);
+
+  note.hidden = entries.length === 0;
+  if (!entries.length) return;
+  note.textContent = `${entries.length} director${entries.length === 1 ? 'y' : 'ies'} skipped: ${entries.map((e) => e.name).join(', ')}`;
+  note.title = entries.map((e) => (e.reason ? `${e.name} — ${e.reason}` : e.name)).join('\n');
 }
 
 async function loadChannelDetail(name) {
@@ -270,10 +323,12 @@ async function loadSelection(name) {
   if (tracks !== undefined) {
     state.playlist.saved = asList(tracks, 'tracks', 'playlist', 'items').map(String);
     state.playlist.draft = [...state.playlist.saved];
+    state.playlist.watched = asList(tracks, 'watched').map(String);
   }
   if (slides !== undefined) {
     state.slides.saved = asList(slides, 'slides', 'images', 'items').map(String);
     state.slides.draft = [...state.slides.saved];
+    state.slides.watched = asList(slides, 'watched').map(String);
   }
 }
 
@@ -298,7 +353,7 @@ function config(name) {
 }
 
 function hotSet(name) {
-  const viz = config(name).visualisation;
+  const viz = config(name).visualization;
   return Array.isArray(viz && viz.hot_set) ? viz.hot_set : [];
 }
 
@@ -345,8 +400,9 @@ function selectChannel(name) {
   if (!name) return;
 
   updateCard(name);
-  state.playlist = { saved: [], draft: [] };
-  state.slides = { saved: [], draft: [] };
+  state.playlist = { saved: [], draft: [], watched: [] };
+  state.slides = { saved: [], draft: [], watched: [] };
+  state.resolutionDraft = null;
   renderDetail();
   loadChannelDetail(name);
 }
@@ -398,15 +454,16 @@ function renderOverview(ch, cfg) {
     ['track', ch.current_track ? basename(ch.current_track) : DASH],
     ['next', ch.next_track ? basename(ch.next_track) : DASH],
     ['slide', ch.current_slide ? basename(ch.current_slide) : DASH],
-    ['visualisation', ch.visualisation || DASH],
+    ['visualization', ch.visualization || DASH],
     ['preset', cfg.preset || 'none'],
-    ['colour', cfg.colour ? cfg.colour.mode : DASH],
+    ['color', cfg.color ? cfg.color.mode : DASH],
   ]);
 
   const substituted = Boolean(ch.encoder_requested && ch.encoder && ch.encoder_requested !== ch.encoder);
   const warnings = Array.isArray(ch.warnings) ? ch.warnings : [];
   renderKv($('pipeline-kv'), [
     ['encoder', ch.encoder || DASH, substituted ? `(requested ${ch.encoder_requested} \u2014 probe failed)` : ''],
+    ['resolution', resolutionOf(state.selected) || DASH],
     ['rtmp', ch.rtmp || DASH],
     ['hls', ch.hls || DASH],
     ['liquidsoap', ch.liquidsoap_buffer || DASH],
@@ -416,6 +473,8 @@ function renderOverview(ch, cfg) {
     ...(warnings.length ? [['warnings', warnings.join(' \u00B7 ')]] : []),
   ]);
 
+  syncResolution();
+
   const grid = $('metric-grid');
   clear(grid);
   grid.append(
@@ -424,6 +483,53 @@ function renderOverview(ch, cfg) {
     metricTile('bitrate', typeof ch.bitrate_kbps === 'number' ? `${Math.round(ch.bitrate_kbps)}k` : DASH),
     metricTile('cores', fmtNum(ch.cpu_cores, 2)),
   );
+}
+
+/** Resolution lives in the channel .env, so it may be reported flat or under config. */
+function resolutionOf(name) {
+  if (!name) return '';
+  const detail = state.details.get(name) || {};
+  const cfg = config(name);
+  return String(cfg.resolution || detail.resolution || '');
+}
+
+function syncResolution() {
+  const select = $('output-resolution');
+  const current = resolutionOf(state.selected);
+  select.value = state.resolutionDraft || current || '720p';
+  $('btn-resolution-apply').disabled = !current || select.value === current;
+}
+
+async function applyResolution() {
+  const name = state.selected;
+  const target = $('output-resolution').value;
+  const current = resolutionOf(name);
+  if (!name || !target || target === current) return;
+
+  // A stopped channel has no stream to interrupt: it simply starts at the new size.
+  const live = (state.channels.get(name) || {}).state !== 'stopped';
+  if (live) {
+    const ok = await confirmRestart({
+      title: `Change ${name} to ${target}?`,
+      body: `The compositor is currently encoding at ${current}. Resolution is compiled into the `
+        + 'filtergraph when FFmpeg launches, so it cannot be changed on a running graph the way a '
+        + 'color or a visualization can.',
+      cost: 'The channel restarts make-before-break: roughly a 1s gap on air, and a new YouTube ingest session.',
+      note: 'Higher resolutions cost substantially more CPU per channel. Check headroom under System '
+        + 'before moving up.',
+      okText: `Restart ${name} at ${target}`,
+    });
+    if (!ok) {
+      state.resolutionDraft = null;
+      syncResolution();
+      return;
+    }
+  }
+
+  await guard(`resolution ${name}`, () => api.setResolution(name, target),
+    live ? `restarting at ${target}` : `${target} \u2014 takes effect on the next start`);
+  state.resolutionDraft = null;
+  scheduleRefresh(800);
 }
 
 function syncDeleteButton() {
@@ -466,19 +572,36 @@ function renderOrderedList(listEl, items, onChange) {
   });
 }
 
+/** Renders the right-hand column and reports what an Add all would append, in list order. */
 function renderAvailableList(listEl, groups, used, filterText, onAdd) {
   clear(listEl);
   const usedSet = new Set(used);
   const needle = filterText.trim().toLowerCase();
+  const addable = [];
   let count = 0;
+  let total = 0;
   for (const group of groups) {
     for (const item of group.items) {
+      total += 1;
       if (needle && !item.path.toLowerCase().includes(needle)) continue;
-      listEl.append(availableRow(item.path, group.tree, usedSet.has(item.path), onAdd));
+      const isUsed = usedSet.has(item.path);
+      listEl.append(availableRow(item.path, group.tree, isUsed, onAdd));
+      if (!isUsed) addable.push(item.path);
       count += 1;
     }
   }
   if (!count) listEl.append(el('li', { class: 'muted small', text: 'no media matches' }));
+  return { addable, filtered: Boolean(needle), total };
+}
+
+function syncAddAll(button, { addable, filtered, total }, noun) {
+  button.disabled = addable.length === 0;
+  button.textContent = addable.length ? `Add all ${addable.length}` : 'Add all';
+  button.title = addable.length === 0
+    ? `Every available ${noun} is already in the list.`
+    : filtered
+      ? `Appends the ${addable.length} unselected ${noun}s matching the filter (${total} available in total). Revert undoes it.`
+      : `Appends all ${addable.length} unselected ${noun}s in the order shown. Revert undoes it.`;
 }
 
 function renderAudioTab() {
@@ -486,13 +609,16 @@ function renderAudioTab() {
   if (!name) return;
 
   renderOrderedList($('playlist-selected'), state.playlist.draft, () => renderAudioTab());
-  renderAvailableList($('audio-available'), state.media.audio, state.playlist.draft, $('audio-filter').value, (path) => {
+  const available = renderAvailableList($('audio-available'), state.media.audio, state.playlist.draft, $('audio-filter').value, (path) => {
     state.playlist.draft.push(path);
     renderAudioTab();
   });
+  state.addable.audio = available.addable;
+  syncAddAll($('btn-playlist-add-all'), available, 'track');
 
   $('playlist-count').textContent = String(state.playlist.draft.length);
   $('playlist-dirty').hidden = !isDirty(state.playlist);
+  syncUpload('audio');
 }
 
 // Form fields are seeded from config on load only. Re-deriving them on every list
@@ -510,13 +636,30 @@ function renderSlidesTab() {
   if (!name) return;
 
   renderOrderedList($('slides-selected'), state.slides.draft, () => renderSlidesTab());
-  renderAvailableList($('image-available'), state.media.images, state.slides.draft, $('image-filter').value, (path) => {
+  const available = renderAvailableList($('image-available'), state.media.images, state.slides.draft, $('image-filter').value, (path) => {
     state.slides.draft.push(path);
     renderSlidesTab();
   });
+  state.addable.images = available.addable;
+  syncAddAll($('btn-slides-add-all'), available, 'image');
 
   $('slides-count').textContent = String(state.slides.draft.length);
   $('slides-dirty').hidden = !isDirty(state.slides);
+  syncUpload('images');
+}
+
+/** Appends rather than replaces, so the operator's existing order survives. */
+function addAll(kind) {
+  const pair = kind === 'audio' ? state.playlist : state.slides;
+  const paths = state.addable[kind === 'audio' ? 'audio' : 'images'];
+  if (!paths.length) return;
+  const already = new Set(pair.draft);
+  const added = paths.filter((path) => !already.has(path));
+  pair.draft.push(...added);
+  if (kind === 'audio') renderAudioTab();
+  else renderSlidesTab();
+  toast('ok', `added ${added.length} ${kind === 'audio' ? 'tracks' : 'slides'}`,
+    'not saved yet — Revert undoes it, Save writes the whole ordered list');
 }
 
 function syncSlidesForm() {
@@ -568,58 +711,357 @@ async function saveSlides() {
 }
 
 // --------------------------------------------------------------------------
-// Detail: look (visualisation, colour, preset)
+// Detail: media upload
+//
+// One row per file, updated in place. Rows live in state.uploads and in a list
+// no render function clears, so a status refresh arriving mid-transfer cannot
+// take the panel away from under the operator.
+// --------------------------------------------------------------------------
+
+let uploadSeq = 0;
+
+function destPath(kind, destination, channel) {
+  const folder = UPLOAD[kind].folder;
+  return destination === 'common' ? `common/${folder}/` : `channels/${channel || '\u2026'}/${folder}/`;
+}
+
+function finished(entry) {
+  return entry.status !== 'queued' && entry.status !== 'uploading';
+}
+
+function syncUpload(kind) {
+  const dest = state.uploadDest[kind];
+  const zone = $(`${kind}-dropzone`);
+  zone.dataset.dest = dest;
+  $(`${kind}-dz-tree`).textContent = dest === 'common' ? 'common' : 'channel';
+  $(`${kind}-dz-path`).textContent = destPath(kind, dest, state.selected);
+  $(`${kind}-dest-channel`).textContent = destPath(kind, 'channel', state.selected);
+  const radio = document.querySelector(`input[name="${kind}-dest"][value="${dest}"]`);
+  if (radio) radio.checked = true;
+  $(`btn-${kind}-upload-clear`).hidden = !state.uploads[kind].some(finished);
+}
+
+function enqueue(kind, files) {
+  const spec = UPLOAD[kind];
+  const destination = state.uploadDest[kind];
+  const channel = state.selected;
+  const list = [...(files || [])];
+  if (!list.length) return;
+  if (destination === 'channel' && !channel) {
+    toast('warn', 'upload', 'Select a channel first, or upload to the shared library.');
+    return;
+  }
+
+  let large = 0;
+  for (const file of list) {
+    const known = spec.extensions.some((ext) => file.name.toLowerCase().endsWith(ext));
+    const entry = {
+      id: (uploadSeq += 1),
+      kind,
+      file,
+      name: file.name,
+      size: file.size,
+      destination,
+      channel,
+      target: destPath(kind, destination, channel),
+      status: known ? 'queued' : 'skipped',
+      progress: 0,
+      detail: known
+        ? ''
+        : `not one of ${spec.extensions.join(' ')} \u2014 not sent. The control plane decides what a `
+          + 'file really is; this only saves you the upload.',
+      abort: null,
+      reported: false,
+    };
+    entry.path = entry.target + entry.name;
+    if (known && file.size >= spec.largeBytes) {
+      large += 1;
+      entry.detail = `${fmtBytes(file.size)} \u2014 large; this will take a while and cannot be resumed.`;
+    }
+    const row = uploadRow(entry, cancelUpload);
+    entry.row = row;
+    state.uploads[kind].push(entry);
+    $(`${kind}-upload-list`).append(row.root);
+  }
+
+  if (large) toast('warn', 'upload', `${large} file${large === 1 ? ' is' : 's are'} very large \u2014 the transfer will take a while.`);
+  $(`${kind}-upload-summary`).hidden = true;
+  syncUpload(kind);
+  pump(kind);
+}
+
+function pump(kind) {
+  const rows = state.uploads[kind];
+  let running = rows.filter((entry) => entry.status === 'uploading').length;
+  for (const entry of rows) {
+    if (running >= UPLOAD_CONCURRENCY) break;
+    if (entry.status !== 'queued') continue;
+    running += 1;
+    send(entry);
+  }
+  if (!running) finishBatch(kind);
+}
+
+async function send(entry) {
+  entry.status = 'uploading';
+  entry.progress = 0;
+  entry.detail = '';
+  entry.row.update();
+
+  try {
+    const data = await uploadMedia({
+      kind: entry.kind,
+      destination: entry.destination,
+      channel: entry.channel,
+      file: entry.file,
+      onProgress: (value) => {
+        entry.progress = value;
+        entry.row.update();
+      },
+      onOpen: (abort) => {
+        entry.abort = abort;
+      },
+    });
+    const results = asUploadResults(data, entry.name);
+    const result = results.find((r) => r.name === entry.name) || results[0] || { ok: true };
+    if (result.ok) {
+      entry.status = 'done';
+      entry.progress = 1;
+      entry.path = result.path || entry.path;
+      entry.detail = `stored as ${entry.path}`;
+    } else {
+      entry.status = 'failed';
+      entry.detail = [result.error, result.detail].filter(Boolean).join(' \u2014 ') || 'rejected';
+    }
+  } catch (err) {
+    if (err instanceof ApiError && err.error === 'canceled') {
+      entry.status = 'canceled';
+      entry.detail = 'canceled';
+    } else {
+      entry.status = 'failed';
+      entry.detail = err instanceof ApiError ? `${err.error} \u2014 ${err.detail}` : String((err && err.message) || err);
+      if (err instanceof ApiError && err.status === 401) openTokenDialog('The control plane rejected that token.');
+    }
+  }
+
+  entry.abort = null;
+  entry.file = null; // the transfer is over; nothing should keep the File alive
+  entry.row.update();
+  pump(entry.kind);
+}
+
+function cancelUpload(entry) {
+  if (entry.status === 'queued') {
+    entry.status = 'canceled';
+    entry.detail = 'canceled before it was sent';
+    entry.file = null;
+    entry.row.update();
+    pump(entry.kind);
+    return;
+  }
+  if (entry.status === 'uploading' && entry.abort) entry.abort();
+}
+
+/**
+ * Directories this channel's selection is watched on. A watched folder picks a
+ * new file up on its own; an explicit list never does, by design.
+ */
+function watchedDirs(kind) {
+  const pair = UPLOAD[kind].list();
+  const dirs = new Set(pair.watched.map((path) => `${String(path).replace(/\/+$/, '')}/`));
+  if (dirs.size) return [...dirs];
+
+  // The backend did not report `watched`, so read it off the selection form:
+  // empty means the channel's own folder, and a glob means its parent.
+  if (!pair.saved.length && state.selected) dirs.add(destPath(kind, 'channel', state.selected));
+  for (const entry of pair.saved) {
+    const star = entry.indexOf('*');
+    if (star < 0) continue;
+    const cut = entry.lastIndexOf('/', star);
+    if (cut > 0) dirs.add(entry.slice(0, cut + 1));
+  }
+  return [...dirs];
+}
+
+function summarize(kind, stored) {
+  const dirs = watchedDirs(kind);
+  const targets = [...new Set(stored.map((entry) => entry.target))];
+  const live = targets.filter((target) => dirs.some((dir) => target === dir || target.startsWith(dir)));
+  const noun = stored.length === 1 ? UPLOAD[kind].noun : `${UPLOAD[kind].noun}s`;
+  const where = `${stored.length} ${noun} stored in ${targets.join(', ')}.`;
+
+  // The verdict below is about the channel on screen. If the operator moved on
+  // while the transfer ran, say where the files went and claim nothing more.
+  if (stored.some((entry) => entry.destination === 'channel' && entry.channel !== state.selected)) return where;
+
+  if (live.length === targets.length) {
+    return `${where} That folder is directory-watched for this channel, so the upload is already `
+      + 'live \u2014 the list was rewritten in place and there is nothing further to save.';
+  }
+  if (!live.length) {
+    return `${where} This channel selects ${kind === 'audio' ? 'tracks' : 'slides'} explicitly, so `
+      + 'nothing changes on air until you add them on the left and Save.';
+  }
+  return `${where} Some of it landed in a watched folder and is already live; the rest needs adding `
+    + 'on the left and saving.';
+}
+
+async function finishBatch(kind) {
+  const rows = state.uploads[kind];
+  if (rows.some((entry) => entry.status === 'queued' || entry.status === 'uploading')) return;
+  const batch = rows.filter((entry) => !entry.reported);
+  if (!batch.length) return;
+  for (const entry of batch) entry.reported = true;
+
+  const stored = batch.filter((entry) => entry.status === 'done');
+  const failed = batch.filter((entry) => entry.status === 'failed');
+  const skipped = batch.filter((entry) => entry.status === 'skipped');
+
+  if (stored.length && state.selected) {
+    await loadMedia(state.selected);
+    renderAudioTab();
+    renderSlidesTab();
+  }
+
+  const summary = $(`${kind}-upload-summary`);
+  const parts = [];
+  if (stored.length) parts.push(summarize(kind, stored));
+  if (failed.length) parts.push(`${failed.length} rejected by the control plane \u2014 the reason is on each row.`);
+  if (skipped.length) parts.push(`${skipped.length} not sent: the extension is not one this channel can play.`);
+  summary.textContent = parts.join(' ');
+  summary.dataset.tone = failed.length ? 'bad' : stored.length ? 'ok' : 'warn';
+  summary.hidden = !parts.length;
+
+  if (batch.length) {
+    const tone = failed.length ? (stored.length ? 'warn' : 'bad') : 'ok';
+    toast(tone, `upload \u00B7 ${kind}`,
+      `${stored.length} stored, ${failed.length} rejected${skipped.length ? `, ${skipped.length} skipped` : ''}`);
+  }
+  syncUpload(kind);
+}
+
+function clearFinished(kind) {
+  const keep = [];
+  for (const entry of state.uploads[kind]) {
+    if (finished(entry)) entry.row.root.remove();
+    else keep.push(entry);
+  }
+  state.uploads[kind] = keep;
+  $(`${kind}-upload-summary`).hidden = true;
+  syncUpload(kind);
+}
+
+function wireUpload(kind) {
+  const zone = $(`${kind}-dropzone`);
+  const input = $(`${kind}-file-input`);
+
+  $(`btn-${kind}-pick`).addEventListener('click', () => input.click());
+  input.addEventListener('change', () => {
+    enqueue(kind, input.files);
+    input.value = ''; // so the same file can be chosen twice in a row
+  });
+
+  for (const radio of document.querySelectorAll(`input[name="${kind}-dest"]`)) {
+    radio.addEventListener('change', () => {
+      if (radio.checked) state.uploadDest[kind] = radio.value;
+      syncUpload(kind);
+    });
+  }
+
+  const over = (event) => {
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
+    zone.dataset.over = 'true';
+  };
+  zone.addEventListener('dragenter', over);
+  zone.addEventListener('dragover', over);
+  zone.addEventListener('dragleave', (event) => {
+    if (!zone.contains(event.relatedTarget)) zone.dataset.over = 'false';
+  });
+  zone.addEventListener('drop', (event) => {
+    event.preventDefault();
+    zone.dataset.over = 'false';
+    enqueue(kind, event.dataTransfer && event.dataTransfer.files);
+  });
+
+  $(`btn-${kind}-upload-clear`).addEventListener('click', () => clearFinished(kind));
+  syncUpload(kind);
+}
+
+// --------------------------------------------------------------------------
+// Detail: look (visualization, color, preset)
 // --------------------------------------------------------------------------
 
 function renderLookTab() {
   const name = state.selected;
   if (!name) return;
   const cfg = config(name);
-  const active = (state.channels.get(name) || {}).visualisation || (cfg.visualisation || {}).active || '';
+  const active = (state.channels.get(name) || {}).visualization || (cfg.visualization || {}).active || '';
   const hot = hotSet(name);
+  const live = (state.channels.get(name) || {}).state !== 'stopped';
 
   const list = $('plugin-list');
   clear(list);
 
   const known = new Set(state.plugins.map((p) => p.name));
   const rows = [...state.plugins];
-  for (const plugin of hot) if (!known.has(plugin)) rows.push({ name: plugin, display_name: plugin });
+  // A hot plugin the backend does not report as installed is the one genuinely
+  // broken case here: the graph names a branch that cannot be built.
+  for (const plugin of hot) if (!known.has(plugin)) rows.push({ name: plugin, display_name: plugin, missing: true });
 
   if (!rows.length) list.append(el('li', { class: 'muted small', text: 'no plugins reported' }));
 
   for (const plugin of rows) {
     const isHot = hot.includes(plugin.name);
     const isActive = plugin.name === active;
+    const missing = Boolean(plugin.missing) || plugin.available === false;
     const cost = plugin.cost && typeof plugin.cost.cores_720p30 === 'number'
       ? `${plugin.cost.cores_720p30.toFixed(2)} cores @720p30`
       : '';
-    list.append(el('li', { class: 'plugin', dataset: { hot: String(isHot), active: String(isActive) } }, [
+
+    const tag = missing
+      ? { tone: 'bad', text: 'not installed' }
+      : isHot
+        ? { tone: 'ok', text: 'instant' }
+        : { tone: 'warn', text: live ? '~1s gap' : 'on next start' };
+
+    const where = missing
+      ? 'in hot_set but not installed \u2014 this channel cannot build that branch'
+      : isHot
+        ? `hot set \u00B7 always rendering${cost ? ` \u00B7 ${cost}` : ''}`
+        : `installed, not instantiated${cost ? ` \u00B7 ${cost}` : ''}`;
+
+    list.append(el('li', { class: 'plugin', dataset: { hot: String(isHot), active: String(isActive), missing: String(missing) } }, [
       el('div', { class: 'pmeta' }, [
         el('div', { class: 'pname' }, [
           plugin.display_name || plugin.name,
           el('span', { class: 'pid', text: `  ${plugin.name}` }),
         ]),
         plugin.description ? el('div', { class: 'pdesc', text: plugin.description }) : null,
-        el('div', { class: 'pcost', text: isHot ? `hot set \u00B7 ${cost}` : `not in hot set${cost ? ` \u00B7 ${cost}` : ''}` }),
+        el('div', { class: 'pcost', text: where }),
       ]),
-      isActive
-        ? el('span', { class: 'chip', dataset: { tone: 'info' }, text: 'on air' })
-        : el('button', {
-            type: 'button',
-            text: isHot ? 'Switch' : 'Switch (not hot)',
-            onclick: () => switchVisualisation(plugin.name),
-          }),
+      el('div', { class: 'pactions' }, [
+        el('span', { class: 'chip', dataset: { tone: tag.tone }, text: tag.text }),
+        isActive
+          ? el('span', { class: 'chip', dataset: { tone: 'info' }, text: 'on air' })
+          : el('button', {
+              type: 'button',
+              disabled: missing,
+              text: isHot || !live ? 'Switch' : 'Switch \u2014 restarts',
+              onclick: () => switchVisualization(plugin.name, isHot || !live),
+            }),
+      ]),
     ]));
   }
 
-  const colour = cfg.colour || {};
-  const manual = colour.manual || {};
-  for (const radio of document.querySelectorAll('input[name="colour-mode"]')) {
-    radio.checked = radio.value === (colour.mode || 'automatic');
+  const color = cfg.color || {};
+  const manual = color.manual || {};
+  for (const radio of document.querySelectorAll('input[name="color-mode"]')) {
+    radio.checked = radio.value === (color.mode || 'automatic');
   }
-  setColourInput('colour-accent', 'colour-accent-hex', manual.accent || '#4FC3F7');
-  setColourInput('colour-tint', 'colour-tint-hex', manual.tint || '#101820');
-  $('colour-transition').value = numberOr(colour.transition_seconds, 2);
+  setColorInput('color-accent', 'color-accent-hex', manual.accent || '#4FC3F7');
+  setColorInput('color-tint', 'color-tint-hex', manual.tint || '#101820');
+  $('color-transition').value = numberOr(color.transition_seconds, 2);
 
   const select = $('preset-select');
   if (document.activeElement !== select) {
@@ -633,9 +1075,9 @@ function renderLookTab() {
   showPresetDescription();
 }
 
-function setColourInput(colourId, hexId, value) {
+function setColorInput(colorId, hexId, value) {
   const hex = /^#[0-9a-fA-F]{6}$/.test(value) ? value : '#000000';
-  if (document.activeElement !== $(colourId)) $(colourId).value = hex;
+  if (document.activeElement !== $(colorId)) $(colorId).value = hex;
   if (document.activeElement !== $(hexId)) $(hexId).value = hex.toUpperCase();
 }
 
@@ -644,36 +1086,61 @@ function showPresetDescription() {
   $('preset-description').textContent = preset ? preset.description || '' : '';
 }
 
-async function switchVisualisation(plugin) {
+async function switchVisualization(plugin, instant) {
   const name = state.selected;
   if (!name) return;
+  const live = (state.channels.get(name) || {}).state !== 'stopped';
   const error = $('viz-error');
   error.hidden = true;
+
+  if (!instant) {
+    const label = (state.plugins.find((p) => p.name === plugin) || {}).display_name || plugin;
+    const ok = await confirmRestart({
+      title: `Switch ${name} to ${label}?`,
+      body: `${label} is installed but is not in this channel's hot set, so its branch was never `
+        + 'built. An FFmpeg filtergraph is fixed at launch, so there is nothing running to cut to.',
+      cost: 'The channel restarts make-before-break: roughly a 1s gap on air, and a new YouTube '
+        + 'ingest session.',
+      note: 'To make this switch instant in future, add the plugin to hot_set \u2014 at the cost of '
+        + 'about 0.28 cores per idle branch at 720p, measured, whether or not it is on screen.',
+      okText: 'Restart and switch',
+    });
+    if (!ok) return;
+  }
+
   try {
-    await api.setVisualisation(name, plugin);
-    toast('ok', 'visualisation', plugin);
+    await api.setVisualization(name, plugin);
+    if (!instant) {
+      toast('warn', 'visualization', `${plugin} \u2014 staged; the channel is restarting`);
+      scheduleRefresh(800);
+    } else if (live) {
+      toast('ok', 'visualization', `${plugin} \u2014 switched on the running graph`);
+    } else {
+      toast('ok', 'visualization', `${plugin} \u2014 will be on air at the next start`);
+      scheduleRefresh(400);
+    }
   } catch (err) {
     if (err instanceof ApiError && err.error === 'not_in_hot_set') {
       error.hidden = false;
       error.textContent =
-        `“${plugin}” is not in this channel's hot set, so its branch was never instantiated. ` +
-        'Promoting it rebuilds the filtergraph, which needs a compositor restart — the API will not ' +
-        'do that behind your back. Add it to hot_set and restart the channel deliberately.';
+        `The control plane refused to switch to “${plugin}”: it is not in this channel's hot set, `
+        + 'and this build of the API will not stage a restart for you. Add it to hot_set and restart '
+        + 'the channel deliberately.';
       toast('warn', 'not_in_hot_set', plugin);
       return;
     }
-    report('visualisation', err);
+    report('visualization', err);
   }
 }
 
-async function saveColour() {
+async function saveColor() {
   const name = state.selected;
   if (!name) return;
-  const mode = document.querySelector('input[name="colour-mode"]:checked');
-  await guard('colour', () => api.setColour(name, {
+  const mode = document.querySelector('input[name="color-mode"]:checked');
+  await guard('color', () => api.setColor(name, {
     mode: mode ? mode.value : 'automatic',
-    manual: { accent: $('colour-accent').value, tint: $('colour-tint').value },
-    transition_seconds: Number($('colour-transition').value),
+    manual: { accent: $('color-accent').value, tint: $('color-tint').value },
+    transition_seconds: Number($('color-transition').value),
   }), 'applied');
   loadChannelDetail(name);
 }
@@ -692,7 +1159,7 @@ async function applyPreset() {
     if (err instanceof ApiError && err.error === 'not_in_hot_set') {
       error.hidden = false;
       error.textContent =
-        `Preset “${preset}” selects a visualisation outside this channel's hot set, so it was rejected ` +
+        `Preset “${preset}” selects a visualization outside this channel's hot set, so it was rejected ` +
         'rather than silently promoted. Add that plugin to hot_set and restart the channel first.';
       toast('warn', 'not_in_hot_set', preset);
       return;
@@ -807,15 +1274,21 @@ let logTimer = null;
 async function refreshLogs() {
   const name = state.selected;
   if (!name) return;
-  const data = await guard('logs', () => api.logs({
+  const body = await guard('logs', () => api.logs({
     channel: name,
     service: $('log-service').value,
     lines: $('log-lines').value,
   }));
-  if (data === undefined) return;
+  if (body === undefined) return;
+
+  const { text, path } = asLog(body);
+  const pathEl = $('log-path');
+  pathEl.textContent = path;
+  pathEl.title = path;
+
   const out = $('log-output');
   const pinned = out.scrollTop + out.clientHeight >= out.scrollHeight - 24;
-  out.textContent = asText(data) || '(empty)';
+  out.textContent = text || '(empty)';
   if (pinned) out.scrollTop = out.scrollHeight;
 }
 
@@ -911,7 +1384,7 @@ const STREAM_TONE = {
   connecting: 'info',
   reconnecting: 'warn',
   dropped: 'warn',
-  unauthorised: 'bad',
+  unauthorized: 'bad',
   idle: 'idle',
 };
 
@@ -923,7 +1396,7 @@ function setStreamState(status) {
     // No event log exists upstream, so a reconnect re-reads rather than replays.
     refreshChannels();
   }
-  if (status === 'unauthorised') openTokenDialog('The event stream rejected that token.');
+  if (status === 'unauthorized') openTokenDialog('The event stream rejected that token.');
 }
 
 function mergeStatus(name, payload) {
@@ -970,10 +1443,10 @@ function handleEvent(name, payload) {
     case 'channel.slide':
       mergeStatus(channel, { current_slide: data.current_slide || data.slide });
       break;
-    case 'channel.visualisation':
-      mergeStatus(channel, { visualisation: data.visualisation || data.active });
+    case 'channel.visualization':
+      mergeStatus(channel, { visualization: data.visualization || data.active });
       if (state.selected === channel) renderLookTab();
-      logEvent({ tone: 'info', channel, at: data.at, text: `visualisation ${data.visualisation || data.active || ''}` });
+      logEvent({ tone: 'info', channel, at: data.at, text: `visualization ${data.visualization || data.active || ''}` });
       break;
     case 'watchdog.event':
       logEvent({
@@ -1069,6 +1542,41 @@ function openTokenDialog(message) {
   if (!dialog.open) dialog.showModal();
 }
 
+/**
+ * Gate for anything that is not a live change. The stream stops for about a second,
+ * so the cost is stated before the operator commits, never after.
+ */
+function confirmRestart({ title, body, cost, note, okText }) {
+  const dialog = $('confirm-dialog');
+  $('confirm-title').textContent = title;
+  $('confirm-body').textContent = body;
+  $('confirm-cost').textContent = cost;
+  $('confirm-note').textContent = note || '';
+  $('confirm-note').hidden = !note;
+  $('btn-confirm-ok').textContent = okText;
+
+  return new Promise((resolve) => {
+    const finish = (value) => {
+      dialog.removeEventListener('close', onClose);
+      $('btn-confirm-ok').removeEventListener('click', onOk);
+      $('btn-confirm-cancel').removeEventListener('click', onCancel);
+      resolve(value);
+    };
+    const onOk = () => {
+      dialog.removeEventListener('close', onClose);
+      dialog.close();
+      finish(true);
+    };
+    const onCancel = () => dialog.close();
+    const onClose = () => finish(false);
+
+    $('btn-confirm-ok').addEventListener('click', onOk);
+    $('btn-confirm-cancel').addEventListener('click', onCancel);
+    dialog.addEventListener('close', onClose);
+    dialog.showModal();
+  });
+}
+
 function openCreateDialog() {
   const viz = $('create-viz');
   const hotset = $('create-hotset');
@@ -1099,7 +1607,7 @@ async function submitCreate() {
     resolution: $('create-resolution').value,
     fps: Number($('create-fps').value),
     encoder: $('create-encoder').value,
-    visualisation: { active, hot_set: hot },
+    visualization: { active, hot_set: hot },
   };
 
   try {
@@ -1177,6 +1685,11 @@ function wire() {
   $('btn-restart').addEventListener('click', () => lifecycle(state.selected, 'restart'));
   $('delete-confirm').addEventListener('input', syncDeleteButton);
   $('btn-delete').addEventListener('click', () => deleteChannel());
+  $('output-resolution').addEventListener('change', (event) => {
+    state.resolutionDraft = event.target.value;
+    syncResolution();
+  });
+  $('btn-resolution-apply').addEventListener('click', () => applyResolution());
 
   $('tabs').addEventListener('click', (event) => {
     const tab = event.target.closest('.tab');
@@ -1192,6 +1705,8 @@ function wire() {
 
   $('audio-filter').addEventListener('input', () => renderAudioTab());
   $('image-filter').addEventListener('input', () => renderSlidesTab());
+  $('btn-playlist-add-all').addEventListener('click', () => addAll('audio'));
+  $('btn-slides-add-all').addEventListener('click', () => addAll('images'));
   $('btn-playlist-save').addEventListener('click', () => savePlaylist());
   $('btn-playlist-revert').addEventListener('click', () => {
     state.playlist.draft = [...state.playlist.saved];
@@ -1214,9 +1729,20 @@ function wire() {
     renderSlidesTab();
   });
 
-  bindColour('colour-accent', 'colour-accent-hex');
-  bindColour('colour-tint', 'colour-tint-hex');
-  $('btn-colour-save').addEventListener('click', () => saveColour());
+  wireUpload('audio');
+  wireUpload('images');
+  // A file dropped anywhere else would otherwise navigate away from the panel,
+  // taking any unsaved list edit with it.
+  for (const type of ['dragover', 'drop']) {
+    document.addEventListener(type, (event) => {
+      const target = event.target instanceof Element ? event.target : null;
+      if (!target || !target.closest('.dropzone')) event.preventDefault();
+    });
+  }
+
+  bindColor('color-accent', 'color-accent-hex');
+  bindColor('color-tint', 'color-tint-hex');
+  $('btn-color-save').addEventListener('click', () => saveColor());
   $('preset-select').addEventListener('change', showPresetDescription);
   $('btn-preset-apply').addEventListener('click', () => applyPreset());
 
@@ -1229,14 +1755,14 @@ function wire() {
   $('log-follow').addEventListener('change', syncLogFollow);
 }
 
-function bindColour(colourId, hexId) {
-  $(colourId).addEventListener('input', () => {
-    $(hexId).value = $(colourId).value.toUpperCase();
+function bindColor(colorId, hexId) {
+  $(colorId).addEventListener('input', () => {
+    $(hexId).value = $(colorId).value.toUpperCase();
   });
   $(hexId).addEventListener('change', () => {
     const value = $(hexId).value.trim();
-    if (/^#[0-9a-fA-F]{6}$/.test(value)) $(colourId).value = value;
-    else $(hexId).value = $(colourId).value.toUpperCase();
+    if (/^#[0-9a-fA-F]{6}$/.test(value)) $(colorId).value = value;
+    else $(hexId).value = $(colorId).value.toUpperCase();
   });
 }
 

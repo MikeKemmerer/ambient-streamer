@@ -1,6 +1,6 @@
 # Plugin development
 
-A visualisation plugin is a filtergraph fragment plus a manifest. Any plugin can occupy the
+A visualization plugin is a filtergraph fragment plus a manifest. Any plugin can occupy the
 same position in a channel's graph, so switching between them at runtime is a single command
 and never a restart.
 
@@ -32,7 +32,7 @@ does not insert a rescaler — the smaller buffer is read as the larger geometry
 
 Every other mismatch is handled for you:
 
-| Mismatch | FFmpeg behaviour |
+| Mismatch | FFmpeg behavior |
 |---|---|
 | pixel format | inserts `auto_scale`, renders correctly |
 | frame rate | framesync resolves it |
@@ -107,13 +107,13 @@ Substituted by `ffmpeg/entrypoint.sh` at launch, by literal string replacement.
 | `${WIDTH}` | channel output width | `1280` |
 | `${HEIGHT}` | channel output height | `720` |
 | `${FPS}` | channel output frame rate | `30` |
-| `${ACCENT}` | current accent colour, **as `0xRRGGBB`** | `0x4FC3F7` |
+| `${ACCENT}` | current accent color, **as `0xRRGGBB`** | `0x4FC3F7` |
 | `${OUT}` | the output label the compositor assigns | `viz0` |
 
 `${ACCENT}` is converted from `#RRGGBB` to `0xRRGGBB` before substitution, because `#` is a
 filtergraph escaping problem. Use it directly; do not add a `#`.
 
-`${ACCENT}` is a **launch-time** value. It is not re-substituted later — live colour comes from
+`${ACCENT}` is a **launch-time** value. It is not re-substituted later — live color comes from
 `eq` and `hue` downstream of your branch, not from re-writing your fragment. See
 [color-profiles.md](color-profiles.md).
 
@@ -187,7 +187,7 @@ docker run --rm ambient-composer:dev ffmpeg -hide_banner -h filter=showfreqs
 ```
 
 Only options carrying the `T` flag in that output are commandable. If your filter has none —
-which is the common case — write `"commandable": []` and let colour ride on `eq`/`hue`
+which is the common case — write `"commandable": []` and let color ride on `eq`/`hue`
 downstream. That is what `showfreqs-bars` does.
 
 ### `requires_filters`
@@ -237,7 +237,7 @@ composer at start. **Always use the placeholders.**
 
 The backend additionally checks, per channel:
 
-- every name in `visualisation.hot_set` exists in the registry;
+- every name in `visualization.hot_set` exists in the registry;
 - the projected core cost of the whole `hot_set`, surfaced through
   `GET /api/channels/{name}` as `projected_cores` and enforced on `POST .../start`.
 
@@ -265,7 +265,7 @@ streamselect@sel map <index>
 ```
 
 where `<index>` is the plugin's position in `hot_set`. The backend owns that mapping and sends
-it for you via `PUT /api/channels/{name}/visualisation`.
+it for you via `PUT /api/channels/{name}/visualization`.
 
 **Measured:** the switch is frame-exact — six switches, zero frame error, including two 200 ms
 apart. Frame *N−1* is entirely the old branch, frame *N* entirely the new one. No blended, torn
@@ -280,7 +280,7 @@ configuration, so a lone plugin is a supported case, not a degenerate one, but t
 to switch to.
 
 **Changing `hot_set` requires a compositor restart.** The filtergraph is fixed at launch, so a
-plugin that is not instantiated cannot be switched to. `PUT .../visualisation` with a name
+plugin that is not instantiated cannot be switched to. `PUT .../visualization` with a name
 outside `hot_set` returns `409 not_in_hot_set` rather than silently promoting it and forcing a
 restart the caller did not ask for. A restart is not free — measured at ~13.7 s of YouTube
 outage for a plain container restart, ~1.03 s for a supervised make-before-break swap.
@@ -359,7 +359,7 @@ $EDITOR plugins/my-viz/viz.ffmpeg plugins/my-viz/config.json
 Add it to a channel's `hot_set` in `channels/<name>/config.yaml`:
 
 ```yaml
-visualisation:
+visualization:
   active: showfreqs-bars
   hot_set:
     - showfreqs-bars
@@ -408,5 +408,5 @@ be reconciled with the channel's.
 | [`contracts/plugin.md`](contracts/plugin.md) | the normative package contract |
 | [`contracts/zmq-control.md`](contracts/zmq-control.md) | the runtime command protocol and targeting rules |
 | [visualization-filters.md](visualization-filters.md) | what each FFmpeg visualiser does in this pipeline |
-| [color-profiles.md](color-profiles.md) | why colour lives in `eq`/`hue`, not in the plugin |
+| [color-profiles.md](color-profiles.md) | why color lives in `eq`/`hue`, not in the plugin |
 | [scaling.md](scaling.md) | turning per-branch cost into a channel count |

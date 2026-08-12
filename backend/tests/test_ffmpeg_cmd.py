@@ -12,7 +12,9 @@ from ambient.ffmpeg_cmd import (
     PreviewOutput,
     ProbeResult,
     build_composer_command,
+    docker_probe_argv,
     geometry,
+    probe_failure_detail,
     rates,
     select_encoder,
     video_flags,
@@ -142,3 +144,26 @@ def test_working_encoder_is_not_substituted(monkeypatch: pytest.MonkeyPatch) -> 
     selection = select_encoder(Encoder.LIBX264, [Encoder.LIBX264], Encoder.LIBX264)
     assert selection.substituted is False
     assert selection.encoder == "libx264"
+
+
+def test_the_docker_probe_runs_a_real_encode_in_the_composer_image() -> None:
+    argv = docker_probe_argv("ambient-composer:dev", Encoder.LIBX264)
+    assert argv[:3] == ["docker", "run", "--rm"]
+    assert argv[argv.index("--entrypoint") + 1] == "ffmpeg"
+    assert argv[argv.index("-c:v") + 1] == "libx264"
+    # A real encode, not `-encoders`: the list advertises absent hardware.
+    assert argv[-2:] == ["-f", "null"] or "null" in argv
+    assert "-encoders" not in argv
+    assert argv.index("ambient-composer:dev") < argv.index("-c:v")
+
+
+def test_the_docker_probe_passes_through_the_encoder_hardware() -> None:
+    assert "--gpus" in docker_probe_argv("img", Encoder.NVENC)
+    assert "/dev/dri" in docker_probe_argv("img", Encoder.QSV)
+    assert "--gpus" not in docker_probe_argv("img", Encoder.LIBX264)
+
+
+def test_probe_failure_detail_keeps_the_last_real_line() -> None:
+    stderr = "Cannot load libnvidia-encode.so.1\nOpenEncodeSessionEx failed: no device (1)\n\n"
+    assert probe_failure_detail(stderr, 1) == "OpenEncodeSessionEx failed: no device (1)"
+    assert probe_failure_detail("", 125) == "rc=125"

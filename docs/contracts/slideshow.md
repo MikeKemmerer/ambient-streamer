@@ -22,7 +22,7 @@ unchanged (2363420 throughout), 780 frames covering exactly 26.0 s, no gap.
 | Codec | **JPEG** |
 | Quality | 88 |
 | Chroma | 4:4:4 (`subsampling=0`) |
-| Colour | RGB; the compositor converts to `yuv420p` |
+| Color | RGB; the compositor converts to `yuv420p` |
 | Geometry | exactly the channel's output size, every frame |
 | Rate | `producer_fps`, default 10 |
 
@@ -39,7 +39,7 @@ after must match it.
 | PNG | 4.7 % | 39.7 % | **0.941x** |
 
 PNG doubled producer CPU and **broke real-time pacing**. Worth noting that the
-test images were flat colour, which is PNG's best case for size — real
+test images were flat color, which is PNG's best case for size — real
 photographs would make PNG considerably larger. PNG loses on content that
 flatters it.
 
@@ -111,7 +111,7 @@ not from frame arrival time, so the producer cannot vary its rate to save CPU.
 4. Exit 0 on `BrokenPipeError` — that is the compositor shutting down normally.
 5. Read its slide list from `images.list`; see
    [media-selection.md](media-selection.md).
-6. Emit colour transitions as zmq commands derived from the upcoming slide's
+6. Emit color transitions as zmq commands derived from the upcoming slide's
    profile; see [zmq-control.md](zmq-control.md).
 
 ## Lifecycle

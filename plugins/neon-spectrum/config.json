@@ -1,7 +1,7 @@
 {
   "name": "neon-spectrum",
   "display_name": "Neon Spectrum",
-  "description": "Scrolling spectrogram at high colour saturation, log frequency axis.",
+  "description": "Scrolling spectrogram at high color saturation, log frequency axis.",
   "version": "1.0.0",
   "author": "ambient-streamer",
   "commandable": [],

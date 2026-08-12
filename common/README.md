@@ -10,13 +10,13 @@ common/
 ├── images/         <- slideshow images available to every channel
 ├── bumpers/        <- station IDs / jingles available to every channel
 │   └── beds/       <- short instrumental loops the voice is mixed over
-└── profiles/       <- generated colour profiles, one JSON per common image
+└── profiles/       <- generated color profiles, one JSON per common image
 ```
 
 ## Bumpers
 
 Radio-style station IDs, inserted periodically between tracks. A bumper is a
-synthesised voice line mixed over a music bed, normalised to the same
+synthesised voice line mixed over a music bed, normalized to the same
 **-14 LUFS** as the music so it does not jump out at listeners.
 
 Voice is generated locally with [kokoro-onnx](https://github.com/thewh1teagle/kokoro-onnx)
@@ -62,7 +62,7 @@ carries the directory it is given; a symlink whose target sits outside that
 mount resolves to a path the container cannot see, and the file silently fails
 to open. Selection lists are used instead precisely to avoid this.
 
-## Colour profiles
+## Color profiles
 
 Profiles for shared images are generated once into `common/profiles/` and
 reused by every channel, since a profile describes the image rather than the

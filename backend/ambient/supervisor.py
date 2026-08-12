@@ -36,6 +36,7 @@ from jinja2 import Environment, FileSystemLoader, StrictUndefined, TemplateError
 
 from .config import ConfigError, ResolvedChannel, Workspace, channel_directory
 from .events import CHANNEL_STATUS, EventHub
+from .ffmpeg_cmd import ProbeResult, docker_probe_argv, probe_failure_detail
 from .media import atomic_write_lines
 from .models import ChannelState
 from .zmqctl import SUCCESS, ZmqCommandError, validate_address, validate_message
@@ -50,11 +51,22 @@ LIQUIDSOAP_SUFFIX = "-liquidsoap"
 # The replacement slot used by a make-before-break restart.
 NEXT_SUFFIX = "-next"
 
-LOG_SERVICES = frozenset({"compositor", "liquidsoap", "producer", "watchdog"})
+# Which container's stdout carries each service. The producer and the nowstate
+# writer are threads inside the composer, so they share its stream.
+LOG_SERVICE_CONTAINERS: dict[str, str] = {
+    "compositor": "composer",
+    "producer": "composer",
+    "liquidsoap": "liquidsoap",
+    "watchdog": "",
+}
+LOG_SERVICES = frozenset(LOG_SERVICE_CONTAINERS)
 
 DEFAULT_TIMEOUT = 180.0
 TAKEOVER_TIMEOUT = 60.0
+PROBE_TIMEOUT = 120.0
 RUN_DIR = "/run/ambient"
+# Matches docker/compose.channel.yml.j2, which pins ambient-composer:dev.
+DEFAULT_COMPOSER_IMAGE = "ambient-composer:dev"
 # Matches ZMQ_BIND_HOST/ZMQ_BIND_PORT in docker/compose.channel.yml.j2.
 ZMQ_ENDPOINT = "tcp://127.0.0.1:5555"
 
@@ -101,6 +113,11 @@ def compose_context(workspace: Workspace, channel: ResolvedChannel) -> dict[str,
         # channel.liq reads CROSSFADE_SECONDS; without this the value resolved
         # from config.yaml never reaches it and the script default silently wins.
         "crossfade_seconds": str(channel.crossfade_seconds),
+        # The entrypoint defaults HOT_SET to a single plugin, so without these the
+        # channel's whole visualization selection is silently ignored.
+        "active_plugin": channel.active_plugin,
+        "hot_set": ",".join(channel.hot_set),
+        "run_dir": str(workspace.run_dir),
     }
 
 
@@ -231,6 +248,16 @@ class ChannelContainers:
         return ChannelState.STOPPED
 
 
+@dataclass(frozen=True)
+class LogTail:
+    text: str
+    source: str
+    path: Path
+    line_count: int
+    container: str = ""
+    detail: str = ""
+
+
 # --------------------------------------------------------------------------
 # Supervisor
 # --------------------------------------------------------------------------
@@ -267,7 +294,12 @@ class Supervisor:
     runner: Runner = run_command
     takeover_timeout: float = TAKEOVER_TIMEOUT
     takeover_poll: float = 1.0
+    composer_image: str = field(
+        default_factory=lambda: (os.environ.get("AMBIENT_COMPOSER_IMAGE") or "").strip()
+        or DEFAULT_COMPOSER_IMAGE
+    )
     _locks: dict[str, asyncio.Lock] = field(default_factory=dict, repr=False)
+    _probes: dict[str, ProbeResult] = field(default_factory=dict, repr=False)
 
     # ---------------------------------------------------------------- naming
 
@@ -334,6 +366,34 @@ class Supervisor:
         return await self.runner([self.docker, *args], timeout)
 
     # ------------------------------------------------------------ inspection
+
+    async def probe_encoder(
+        self, encoder: str, *, refresh: bool = False
+    ) -> ProbeResult:
+        """Test-encode inside the composer image, because that is where encoding runs.
+
+        A cached result is reused: each probe is a container start. Listing an
+        encoder is not evidence — h264_qsv is advertised with no Intel device
+        present, and h264_nvenc fails `OpenEncodeSessionEx` on a mismatched
+        driver — so only a real encode counts.
+        """
+        if not refresh and encoder in self._probes:
+            return self._probes[encoder]
+        argv = docker_probe_argv(self.composer_image, encoder, docker=self.docker)
+        result = await self.runner(argv, PROBE_TIMEOUT)
+        if result.ok:
+            probe = ProbeResult(encoder, True)
+        else:
+            probe = ProbeResult(
+                encoder, False, probe_failure_detail(result.stderr or result.stdout, result.returncode)
+            )
+        self._probes[encoder] = probe
+        return probe
+
+    async def probe_encoders(
+        self, encoders: Sequence[str], *, refresh: bool = False
+    ) -> list[ProbeResult]:
+        return [await self.probe_encoder(e, refresh=refresh) for e in encoders]
 
     async def inspect(self, container: str) -> ContainerInfo:
         result = await self.docker_argv(
@@ -561,4 +621,38 @@ class Supervisor:
             handle.seek(max(0, size - wanted * 400))
             text = handle.read().decode("utf-8", "replace")
         return text.splitlines()[-wanted:]
+
+    async def log_container(self, name: str, service: str) -> str:
+        """The container whose stdout carries this service, or '' if none does."""
+        role = LOG_SERVICE_CONTAINERS.get(service, "")
+        if role == "liquidsoap":
+            return self.liquidsoap_container(name)
+        if role == "composer":
+            return self.composer_container(name, slot_next=await self.live_slot(name))
+        return ""
+
+    async def read_log(self, name: str, service: str, lines: int = 200) -> "LogTail":
+        """The file if it has content, else `docker logs`.
+
+        Nothing under `/var/log/ambient` is written today — every process logs
+        to stdout — so the file alone shows the operator an empty box.
+        """
+        path = self.log_path(name, service)
+        wanted = max(1, min(int(lines), 2000))
+        from_file = self.tail_log(name, service, wanted)
+        if from_file:
+            return LogTail("\n".join(from_file), "file", path, len(from_file))
+
+        container = await self.log_container(name, service)
+        if not container:
+            return LogTail("", "none", path, 0)
+        result = await self.docker_argv(
+            ["logs", "--tail", str(wanted), container], timeout=30.0
+        )
+        if not result.ok:
+            return LogTail("", "none", path, 0, detail=(result.stderr or "").strip())
+        # FFmpeg writes progress to stderr, so both streams matter.
+        text = "\n".join(part for part in (result.stdout, result.stderr) if part.strip())
+        body = text.splitlines()[-wanted:]
+        return LogTail("\n".join(body), "docker", path, len(body), container=container)
 

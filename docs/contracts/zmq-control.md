@@ -74,7 +74,7 @@ accepted — `eq@eq brightness 99` succeeds although the valid range is −1 to 
 
 Every addressable filter instance carries an explicit `@label`.
 
-| Target form | Behaviour |
+| Target form | Behavior |
 |---|---|
 | `eq@eq` | the labelled instance — **the only permitted form** |
 | `all` | every filter |
@@ -97,9 +97,9 @@ filters the caller did not intend to touch.
 - Throughput ceiling **~31.5 commands/s** — one per frame, on a single REQ
   socket. Each send blocks for a frame period.
 
-## Colour: use expressions, not command streams
+## Color: use expressions, not command streams
 
-The 31.5 commands/s ceiling would make per-frame colour ramping impossible.
+The 31.5 commands/s ceiling would make per-frame color ramping impossible.
 It does not need to be done that way.
 
 **Measured:** a single command can install a self-animating expression.
@@ -110,7 +110,7 @@ hue@hue h mod(t*120,360)                 -> 97.6 % of frames change
 ```
 
 One command, then the value moves every frame with no further traffic. This is
-how colour transitions are implemented.
+how color transitions are implemented.
 
 **`eq` must be instantiated with `eval=frame` at launch.** `eval` is not
 commandable, so this cannot be fixed later — with the default `eval=init` the
@@ -135,7 +135,7 @@ way.
 
 Consequences:
 
-- **Colour-adaptive output rides on `eq` and `hue`, never `drawbox`.**
+- **Color-adaptive output rides on `eq` and `hue`, never `drawbox`.**
 - `drawbox color` takes no expression, so it could only ever hard-cut anyway.
 - If a `drawbox` must be addressed at all, only send values already proven
   valid by the range check.

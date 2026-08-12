@@ -82,3 +82,9 @@ channels/*/.env.example
 # Spike run artifacts - regenerable, never versioned
 spikes/*/out/
 spikes/*/logs/
+
+# Shared runtime state when AMBIENT_RUN_DIR points inside the repo
+.run/
+
+# Upload staging area; empty in normal operation, may orphan a .part on a crash
+/.uploads/

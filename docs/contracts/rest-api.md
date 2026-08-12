@@ -50,7 +50,7 @@ is unset while bound to anything other than loopback.
   "current_track": "rain-loop.mp3",
   "next_track": "lofi-only.mp3",
   "current_slide": "forest.jpg",
-  "visualisation": "showfreqs-bars",
+  "visualization": "showfreqs-bars",
   "encoder": "libx264",
   "encoder_requested": "h264_nvenc",
   "fps": 30.0,
@@ -89,19 +89,65 @@ lost-update races between two open browsers.
 Every path is validated against the two-tree rule in
 [media-selection.md](media-selection.md) before it is written.
 
-## Plugins, presets, colour
+## Plugins, presets, color
 
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/api/plugins` | installed plugins + manifests |
-| PUT | `/api/channels/{name}/visualisation` | switch active plugin (must be in `hot_set`) |
+| PUT | `/api/channels/{name}/visualization` | switch active plugin (must be in `hot_set`) |
 | GET | `/api/presets` | available presets |
 | POST | `/api/channels/{name}/preset` | apply a preset |
-| PUT | `/api/channels/{name}/colour` | set mode and manual colours |
+| PUT | `/api/channels/{name}/color` | set mode and manual colors |
 
-Switching to a plugin outside `hot_set` returns `409` with
-`error: "not_in_hot_set"`. It is not silently promoted, because that would
-require a restart the caller did not ask for.
+Switching to a plugin **in** `hot_set` returns `200` and switches in one frame.
+
+Switching to an installed plugin **outside** `hot_set` returns `202`: the plugin
+is staged into the running configuration and the channel performs a
+make-before-break restart, which costs a brief gap (~1 s measured). An
+installed plugin is always *usable* — it simply cannot switch instantly,
+because an FFmpeg filtergraph is fixed at launch and a switchable branch has to
+already be rendering. Callers that will not accept a restart pass
+`?allow_restart=false` and get `409 restart_required` instead.
+
+A plugin that is not installed at all returns `404 unknown_plugin`.
+
+## Media upload
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/api/media/upload` | upload audio or images |
+
+`multipart/form-data`. Fields: `files` (repeated), `destination`
+(`common` \| `channel`), `channel` (only when `destination=channel`), and
+`kind` — both `audio`/`images` and the singular `image` are accepted.
+
+Returns one entry per file so a partial batch reports precisely what failed:
+`200` all stored, `207` mixed, `400` none.
+
+```json
+{"results": [
+  {"name": "rain.mp3", "ok": true,  "path": "common/audio/rain.mp3", "error": null},
+  {"name": "bad.mp3",  "ok": false, "error": "unsupported_content", "detail": "..."}
+]}
+```
+
+Error tokens: `invalid_filename`, `unsupported_extension`, `unsupported_content`,
+`file_too_large`, `already_exists`, `no_space`.
+
+A colliding name is **rejected**, never overwritten — a running channel may be
+mid-read on that file. `?on_conflict=rename` opts into de-duplication and
+reports the real stored path.
+
+Uploads are validated by **probing the actual bytes**, not the extension or
+`Content-Type`; both are attacker-controlled. The write is atomic (same-directory
+temp then `rename()`) so a directory-watched folder never sees a partial file.
+
+| Method | Path | Purpose |
+|---|---|---|
+| PUT | `/api/channels/{name}/resolution` | change output resolution |
+
+Returns `202`. Resolution changes the filtergraph, so this is **not** a live
+change — the channel performs a make-before-break restart.
 
 ## Bumpers
 
@@ -141,7 +187,7 @@ data: {"channel":"lofi","state":"running","health":"healthy","speed":1.0}
 | `channel.progress` | periodic; speed, fps, bitrate, uptime |
 | `channel.track` | track change |
 | `channel.slide` | slide change |
-| `channel.visualisation` | plugin switched |
+| `channel.visualization` | plugin switched |
 | `watchdog.event` | fault detected or recovery performed |
 | `capacity.warning` | projected cost approaching the limit |
 | `job.progress` | long-running job, e.g. bumper generation |

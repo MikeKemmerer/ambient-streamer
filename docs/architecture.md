@@ -2,7 +2,7 @@
 
 **Status: built and running on real hardware.** The full streaming path —
 Liquidsoap → Icecast → composer → MediaMTX → YouTube, plus the HLS preview — has been
-verified live, and the control plane, watchdog, scheduler, colour extraction, plugin packs and
+verified live, and the control plane, watchdog, scheduler, color extraction, plugin packs and
 preset packs are all in the tree. Measured steady state on a running 720p channel:
 `speed=0.996x`, 3085–3137 kbits/s, `drop_frames=0`, `dup_frames=0`.
 
@@ -22,7 +22,7 @@ The practical effect of each is spelled out in
 `backend/ambient/` holds the whole control plane: the config layer, the media resolver, the
 FFmpeg command builder, the ZMQ validator, the Compose renderer and the `compile` CLI, plus the
 FastAPI app, the SSE hub, the supervisor, the watchdog, the scheduler, the preset registry and
-colour-profile extraction. It runs as the `ambient-backend` container
+color-profile extraction. It runs as the `ambient-backend` container
 ([§5](#5-control-plane)). Channels can still be compiled and started by hand with
 `python -m ambient.compile` and `scripts/channel.sh` ([§5.1](#51-channel-lifecycle)).
 
@@ -219,7 +219,7 @@ a time expression later.
 
 Only parameters whose filters implement a command interface are addressable this way. That
 list is part of the media-pipeline contract, not something a caller may assume. `drawbox` is
-excluded from the live colour surface for a separate reason — see [§2.7](#27-two-defects-the-escape-hatches-carry).
+excluded from the live color surface for a separate reason — see [§2.7](#27-two-defects-the-escape-hatches-carry).
 
 ### 2.5 Visualization plugins: pre-instantiated branches
 
@@ -380,7 +380,7 @@ boundary that validates every message before it is sent.
 **2. A failed `drawbox` command disables that filter instance permanently.** `drawbox` re-runs
 its `init()` on every runtime command and does not roll back on failure, so one rejected value
 leaves that instance broken for the remaining life of the process. `eq` and `hue` do not have
-this flaw. `drawbox` is therefore not usable as the live colour surface; palette-driven colour
+this flaw. `drawbox` is therefore not usable as the live color surface; palette-driven color
 goes through `eq` and `hue`.
 
 ## 3. Container topology
@@ -483,11 +483,11 @@ browser, and does not serve the UI (§5.3). A channel can also be compiled with
    the images, renders crossfades, and writes encoded frames to stdout.
 4. **Image ingest.** FFmpeg reads those frames with `-f image2pipe`, then paces them with
    `fps=<rate>` followed by `realtime`.
-5. **Color application.** The slideshow producer reads the incoming image's colour profile as it
+5. **Color application.** The slideshow producer reads the incoming image's color profile as it
    advances a slide and sends ZMQ runtime commands to the named filter instances that carry
    palette-driven parameters. Each command installs a self-animating `eq`/`hue` expression
    rather than a per-frame stream. The graph is not re-parsed. The backend sends the same class
-   of command for a manual colour or a preset.
+   of command for a manual color or a preset.
 6. **Visualization.** The audio stream also feeds the visualization branches. All configured
    plugin branches run; `streamselect` routes the active one into the composite.
 7. **Composite and encode.** Slideshow, visualization, and any overlay are composited, then
@@ -551,7 +551,7 @@ file; the producer rescans the image list between slides. Neither rewrite interr
 symlink from a channel directory into `common/` resolves to a path the container cannot see and
 the file fails to open. The selection lists exist to avoid that, not as a stylistic preference.
 
-Full rules — sort order, extension filter, duplicate handling, path validation, colour profile
+Full rules — sort order, extension filter, duplicate handling, path validation, color profile
 placement — are in [`contracts/media-selection.md`](contracts/media-selection.md).
 
 ## 5. Control plane
@@ -574,7 +574,7 @@ It is the only component that talks to Docker, which makes it root-equivalent on
 | `watchdog.py` | Detect unhealthy channels, restart with exponential backoff. Health is "output is advancing", not "process is alive" (§4) |
 | `scheduler.py` | Time-based preset changes, resolved most-specific-first in the channel's timezone |
 | `colorprofile.py` | Extract palettes from images into profile JSON |
-| `presets.py` | Discover and validate preset packs; turn a colour pair into `eq`/`hue` ramps |
+| `presets.py` | Discover and validate preset packs; turn a color pair into `eq`/`hue` ramps |
 | `events.py` | SSE event hub — one bounded queue per subscriber plus a lock, no broker |
 | `metrics.py` | Prometheus text exposition |
 

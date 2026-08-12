@@ -170,7 +170,7 @@ The composer base is Ubuntu 24.04 because its distro FFmpeg 6.1.1 is built with
 `--enable-libzmq`, which is the entire live-control mechanism. The build **hard-fails** if the
 base ever ships an FFmpeg without libzmq, libx264, or any of `zmq`, `azmq`, `streamselect`,
 `astreamselect`, `showfreqs`, `showwaves`, `avectorscope`. Silent loss of libzmq would present
-as "colour commands stopped working" months later.
+as "color commands stopped working" months later.
 
 `ubuntu:24.04` is a moving tag. For a 24/7 service, pin the digest:
 
@@ -462,7 +462,7 @@ shell.
 | Add an Icecast mount | `echo <ch> >> channels/mounts.list && docker kill -s HUP ambient-icecast` | none — **never restart Icecast**, it takes every channel's audio with it |
 | Fill in a stream key | edit `channels/<ch>/.env` | none — the relay reads it at path-ready time |
 | Change media or playlist | recompile the channel | none — watched paths update live |
-| Change colour or plugin | API, or a ZMQ command | one frame |
+| Change color or plugin | API, or a ZMQ command | one frame |
 | Change `hot_set`, resolution, fps, encoder | `POST /api/channels/<ch>/restart` | ~1.03 s, make-before-break |
 | Blunt restart | `scripts/channel.sh restart <ch>` (stop-then-start) | ~13.7 s of YouTube outage, and a new ingest session |
 | Upgrade a channel image | rebuild, then `POST .../restart` per channel, one at a time | as above, per channel |

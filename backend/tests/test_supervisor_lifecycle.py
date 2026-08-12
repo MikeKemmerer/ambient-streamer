@@ -234,3 +234,110 @@ def test_tail_returns_the_last_lines(repo: Path, docker: FakeDocker) -> None:
     path.write_text("\n".join(f"line {i}" for i in range(500)) + "\n", encoding="utf-8")
     assert sup.tail_log("lofi", "compositor", 5) == [f"line {i}" for i in range(495, 500)]
     assert sup.tail_log("lofi", "producer", 5) == []
+
+
+def test_read_log_falls_back_to_docker_logs(repo: Path, docker: FakeDocker) -> None:
+    """Nothing writes /var/log/ambient today; every process logs to stdout."""
+    docker.logs["lofi-composer"] = "starting\nframe=1\n"
+    tail = asyncio.run(supervisor(repo, docker).read_log("lofi", "compositor", 10))
+    assert tail.source == "docker"
+    assert tail.container == "lofi-composer"
+    assert tail.text == "starting\nframe=1"
+    assert tail.path.name == "compositor.log"
+    assert docker.calls_matching("logs", "lofi-composer")
+
+
+def test_read_log_uses_the_live_slot(repo: Path, docker: FakeDocker) -> None:
+    docker.states["lofi-composer-next"] = RUNNING_STATE
+    docker.logs["lofi-composer-next"] = "from the replacement\n"
+    tail = asyncio.run(supervisor(repo, docker).read_log("lofi", "compositor", 10))
+    assert tail.container == "lofi-composer-next"
+
+
+def test_read_log_maps_liquidsoap_to_its_own_container(repo: Path, docker: FakeDocker) -> None:
+    docker.logs["lofi-liquidsoap"] = "icecast_connected\n"
+    tail = asyncio.run(supervisor(repo, docker).read_log("lofi", "liquidsoap", 10))
+    assert tail.container == "lofi-liquidsoap"
+    assert tail.text == "icecast_connected"
+
+
+def test_read_log_reports_a_missing_container_rather_than_pretending(
+    repo: Path, docker: FakeDocker
+) -> None:
+    tail = asyncio.run(supervisor(repo, docker).read_log("lofi", "compositor", 10))
+    assert tail.source == "none"
+    assert tail.text == ""
+    assert "No such container" in tail.detail
+
+
+def test_read_log_prefers_a_file_that_has_content(repo: Path, docker: FakeDocker) -> None:
+    sup = supervisor(repo, docker)
+    docker.logs["lofi-composer"] = "from docker\n"
+    path = sup.log_path("lofi", "compositor")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("from the file\n", encoding="utf-8")
+    tail = asyncio.run(sup.read_log("lofi", "compositor", 10))
+    assert tail.source == "file"
+    assert tail.text == "from the file"
+    assert not docker.calls_matching("logs")
+
+
+# --------------------------------------------------------------------------
+# Encoder probes
+# --------------------------------------------------------------------------
+
+
+def test_the_probe_runs_inside_the_composer_image(repo: Path, docker: FakeDocker) -> None:
+    """The backend image has no ffmpeg; the composer is where encoding happens."""
+    sup = supervisor(repo, docker)
+    result = asyncio.run(sup.probe_encoder("libx264"))
+    assert result.available is True
+    argv = docker.calls_matching("run")[0]
+    assert argv[:3] == ["docker", "run", "--rm"]
+    assert "ambient-composer:dev" in argv
+    assert "-f" in argv and "null" in argv
+
+
+def test_a_failed_test_encode_reports_the_reason(repo: Path, docker: FakeDocker) -> None:
+    from ambient.supervisor import CommandResult
+
+    docker.runs["h264_nvenc"] = CommandResult(
+        (),
+        1,
+        "",
+        "[h264_nvenc @ 0x55] Cannot load libnvidia-encode.so.1\n"
+        "[h264_nvenc @ 0x55] OpenEncodeSessionEx failed: unsupported device (2)\n",
+    )
+    result = asyncio.run(supervisor(repo, docker).probe_encoder("h264_nvenc"))
+    assert result.available is False
+    assert result.detail == "[h264_nvenc @ 0x55] OpenEncodeSessionEx failed: unsupported device (2)"
+
+
+def test_a_probe_with_no_output_still_reports_something(repo: Path, docker: FakeDocker) -> None:
+    from ambient.supervisor import CommandResult
+
+    docker.runs["h264_qsv"] = CommandResult((), 125, "", "")
+    result = asyncio.run(supervisor(repo, docker).probe_encoder("h264_qsv"))
+    assert result.available is False
+    assert result.detail == "rc=125"
+
+
+def test_probes_are_cached_and_refreshable(repo: Path, docker: FakeDocker) -> None:
+    sup = supervisor(repo, docker)
+    asyncio.run(sup.probe_encoders(["libx264", "h264_nvenc"]))
+    assert len(docker.calls_matching("run")) == 2
+    asyncio.run(sup.probe_encoders(["libx264", "h264_nvenc"]))
+    assert len(docker.calls_matching("run")) == 2
+    asyncio.run(sup.probe_encoders(["libx264"], refresh=True))
+    assert len(docker.calls_matching("run")) == 3
+
+
+def test_the_probe_asks_for_the_hardware_the_encoder_needs(
+    repo: Path, docker: FakeDocker
+) -> None:
+    sup = supervisor(repo, docker)
+    asyncio.run(sup.probe_encoders(["libx264", "h264_nvenc", "h264_qsv"]))
+    by_encoder = {c[c.index("-c:v") + 1]: c for c in docker.calls_matching("run")}
+    assert "--gpus" in by_encoder["h264_nvenc"]
+    assert "/dev/dri" in by_encoder["h264_qsv"]
+    assert "--gpus" not in by_encoder["libx264"]

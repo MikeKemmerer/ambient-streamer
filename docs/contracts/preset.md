@@ -15,10 +15,10 @@ name: calm-ocean
 display_name: "Calm Ocean"
 description: "Cool blues, slow fades, gentle spectrum."
 
-visualisation:
+visualization:
   active: showfreqs-bars
 
-colour:
+color:
   mode: manual
   manual:
     accent: "#4FC3F7"
@@ -45,8 +45,8 @@ effects:
 
 | May set | May not set |
 |---|---|
-| active visualisation | `hot_set` |
-| colour mode and values | resolution, fps, encoder |
+| active visualization | `hot_set` |
+| color mode and values | resolution, fps, encoder |
 | slideshow hold/fade/order | which tracks or images are selected |
 | audio crossfade | stream key, mounts, limits |
 | `eq` / `hue` effect values | anything in `.env` |
@@ -56,7 +56,7 @@ only touch things reachable through the escape hatches — zmq commands,
 `streamselect`, and the generated lists.
 
 `hot_set` is excluded specifically because changing it means a new filtergraph.
-A preset whose `visualisation.active` is not in the channel's current `hot_set`
+A preset whose `visualization.active` is not in the channel's current `hot_set`
 is rejected with `409`, not silently promoted.
 
 ## Applying
@@ -70,7 +70,7 @@ is rejected with `409`, not silently promoted.
 
 None of these interrupt the stream.
 
-Colour changes are applied as `eq`/`hue` time expressions rather than stepped
+Color changes are applied as `eq`/`hue` time expressions rather than stepped
 commands, so `transition_seconds` is honoured smoothly with a single message
 per filter — see [zmq-control.md](zmq-control.md).
 

@@ -84,14 +84,14 @@ Common `error` tokens: `unauthorized`, `unknown_channel`, `invalid_channel_name`
 | GET | `/api/channels/{name}/preview` | **extension** — resolves the HLS URL |
 | GET | `/api/media/audio` | contract |
 | GET | `/api/media/images` | contract |
-| POST | `/api/media/profiles` | **extension** — colour extraction |
+| POST | `/api/media/profiles` | **extension** — color extraction |
 | GET / PUT | `/api/channels/{name}/playlist` | contract |
 | GET / PUT | `/api/channels/{name}/images` | contract |
 | GET | `/api/plugins` | contract |
-| PUT | `/api/channels/{name}/visualisation` | contract |
+| PUT | `/api/channels/{name}/visualization` | contract |
 | GET | `/api/presets` | contract |
 | POST | `/api/channels/{name}/preset` | contract |
-| PUT | `/api/channels/{name}/colour` | contract |
+| PUT | `/api/channels/{name}/color` | contract |
 | GET / PUT | `/api/channels/{name}/bumpers` | contract |
 | POST | `/api/channels/{name}/bumpers/generate` | contract |
 | GET | `/api/channels/{name}/bumpers/{id}/preview` | contract |
@@ -166,7 +166,7 @@ Projected versus measured CPU, per channel and in total.
 }
 ```
 
-**`projected_cores` counts only the visualisation branches.** It is the sum of each hot
+**`projected_cores` counts only the visualization branches.** It is the sum of each hot
 plugin's declared `cost.cores_720p30`, scaled for geometry and frame rate. It does **not**
 include the encoder, the preview encode, MP3 decode or JPEG decode — which is why a channel
 projecting 0.24 measures around 1.5. Use `measured_cores` for capacity decisions and read
@@ -238,7 +238,7 @@ blank the whole page.
       "current_track": null,
       "next_track": null,
       "current_slide": null,
-      "visualisation": "showfreqs-bars",
+      "visualization": "showfreqs-bars",
       "encoder": "libx264",
       "encoder_requested": "libx264",
       "fps": 30.0,
@@ -299,7 +299,7 @@ than the socket timeout.
 
 > `current_track`, `next_track` and `current_slide` are read from
 > `/run/ambient/<channel>/now.json`, which **nothing currently writes.** They are always `null`
-> on a running channel. `visualisation` and `encoder` fall back to the configured values.
+> on a running channel. `visualization` and `encoder` fall back to the configured values.
 
 ### `POST /api/channels`
 
@@ -354,7 +354,7 @@ Creates `audio/`, `images/`, `bumpers/` and `profiles/`, plus `config.yaml` and 
 Only the live-editable surface. Anything needing a container recreated lives in `.env` and is
 not patchable.
 
-Accepted keys: `genre`, `audio`, `images`, `visualisation`, `colour`, `preset`, `bumpers`,
+Accepted keys: `genre`, `audio`, `images`, `visualization`, `color`, `preset`, `bumpers`,
 `schedule`. Dict-valued keys are shallow-merged into the existing value; everything else is
 replaced.
 
@@ -385,7 +385,7 @@ Refuses while **any** container for the channel still exists, running or exited:
 
 `409 insufficient_capacity` when the channel's `projected_cores` on top of currently measured
 usage would exceed `cores − limits.reserved_cores`. Because `projected_cores` counts only
-visualisation branches, this guard is generous — it will not save you from oversubscribing.
+visualization branches, this guard is generous — it will not save you from oversubscribing.
 
 ### `POST /api/channels/{name}/stop`
 
@@ -463,7 +463,7 @@ The library, grouped by tree. Paths are relative to the repository root.
 
 ### `POST /api/media/profiles`
 
-Extract missing colour profiles. See [color-profiles.md](color-profiles.md#extracting-profiles).
+Extract missing color profiles. See [color-profiles.md](color-profiles.md#extracting-profiles).
 
 ### `GET`/`PUT /api/channels/{name}/playlist` and `/images`
 
@@ -495,7 +495,7 @@ Replacement rather than positional patching is deliberate: reordering is the com
 and a positional patch API for a drag-and-drop UI invites lost-update races between two open
 browsers.
 
-Every path is normalised, prefix-checked against the two allowed trees, symlink-resolved, and
+Every path is normalized, prefix-checked against the two allowed trees, symlink-resolved, and
 prefix-checked **again** before it is written. These paths arrive over HTTP; a `../` traversal
 would otherwise mount arbitrary host files into a broadcast. A rejected path is
 `400 invalid_media_path`. More than 5000 entries is `400 selection_too_large`.
@@ -510,7 +510,7 @@ values are persisted but do not currently reach the producer — see
 
 ---
 
-## Plugins, presets, colour
+## Plugins, presets, color
 
 ### `GET /api/plugins`
 
@@ -538,7 +538,7 @@ Five plugins ship: `showfreqs-bars`, `showwaves-classic`, `minimal-line`, `neon-
 `output_size` is `null` for every shipped plugin, meaning "derive it from the channel" — see
 [plugin-development.md](plugin-development.md#validation).
 
-### `PUT /api/channels/{name}/visualisation`
+### `PUT /api/channels/{name}/visualization`
 
 ```json
 { "active": "showwaves-line" }
@@ -565,10 +565,10 @@ with a log warning rather than breaking the list.
 
 A preset has no field for anything that would need a restart — not `hot_set`, not resolution,
 fps or encoder, not media selection. What it can reach is exactly what the escape hatches
-reach: `visualisation.active`, colour, slideshow timing, crossfade, and constant `eq`/`hue`
+reach: `visualization.active`, color, slideshow timing, crossfade, and constant `eq`/`hue`
 effects.
 
-> A preset whose `visualisation.active` names a plugin outside the channel's `hot_set` is
+> A preset whose `visualization.active` names a plugin outside the channel's `hot_set` is
 > rejected with `409`. Since `hot_set` does not currently reach the compositor, a preset that
 > switches plugin changes `config.yaml` and sends a `streamselect` command that has no branch
 > to select.
@@ -580,13 +580,13 @@ effects.
 ```
 
 ```json
-{ "accepted": true, "channel": "lofi", "preset": "evening", "changed": ["visualisation.active", "colour"], "commands": 4 }
+{ "accepted": true, "channel": "lofi", "preset": "evening", "changed": ["visualization.active", "color"], "commands": 4 }
 ```
 
 `409 not_in_hot_set` if the preset names a plugin this channel did not instantiate.
 `400 invalid_preset` if the preset is unknown or malformed.
 
-### `PUT /api/channels/{name}/colour`
+### `PUT /api/channels/{name}/color`
 
 ```json
 { "mode": "manual", "manual": { "accent": "#8FD6A8", "tint": "#101820" }, "transition_seconds": 3.0 }
@@ -595,7 +595,7 @@ effects.
 ```json
 {
   "channel": "lofi",
-  "colour": { "mode": "manual", "manual": { "accent": "#8FD6A8", "tint": "#101820" }, "transition_seconds": 3.0 },
+  "color": { "mode": "manual", "manual": { "accent": "#8FD6A8", "tint": "#101820" }, "transition_seconds": 3.0 },
   "commands": [
     "hue@hue h -22.7+(...)*min(max((t-412.4)/3,0),1)",
     "eq@eq saturation 1+(...)*min(max((t-412.4)/3,0),1)",
@@ -607,7 +607,7 @@ effects.
 Commands are emitted only in `manual` mode. Each is a single self-animating expression, not a
 command stream — the ZMQ path ceilings at about 31.5 commands/s.
 
-See [color-profiles.md](color-profiles.md#the-two-appliers) for why a manual colour on a channel
+See [color-profiles.md](color-profiles.md#the-two-appliers) for why a manual color on a channel
 with extracted profiles only holds until the next slide.
 
 ---
@@ -663,7 +663,7 @@ event.
 |-------|------|---------------|
 | `channel.status` | state or health changes; also on create, start, stop, restart, patch | yes |
 | `channel.progress` | periodic — `speed`, `fps`, `bitrate_kbps`, `uptime_seconds` | yes |
-| `channel.visualisation` | plugin switched | yes |
+| `channel.visualization` | plugin switched | yes |
 | `watchdog.event` | fault detected or recovery performed | yes |
 | `job.progress` | long-running job, e.g. bumper generation | yes |
 | `channel.track` | track change | **no — nothing publishes it** |

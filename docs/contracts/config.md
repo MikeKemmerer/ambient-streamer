@@ -19,7 +19,7 @@ browser by the control plane.
 | `.env` | ports, host paths, uid/gid, Icecast credentials, backend auth | install | no | no (`.env.example` is) |
 | `ambient.yaml` | global defaults, limits, registries | install | **yes** | no (`ambient.yaml.example` is) |
 | `channels/<n>/.env` | stream key, resolution, fps, encoder, CPU/memory limits, mounts | channel | no | no |
-| `channels/<n>/config.yaml` | media selection, visualisation, colour, preset, schedule, bumpers | channel | **yes** | no |
+| `channels/<n>/config.yaml` | media selection, visualization, color, preset, schedule, bumpers | channel | **yes** | no |
 
 Resolution and encoder sit in `.env` rather than YAML because changing either
 means a new FFmpeg filtergraph, which means recreating the compositor
@@ -106,16 +106,16 @@ images:
   hold_seconds: 20.0
   fade_seconds: 2.0
 
-visualisation:
+visualization:
   active: showfreqs-bars
   # Every plugin in hot_set is instantiated at launch and can be switched to
   # with no restart. Idle branches are NOT free — roughly 0.2-0.25 cores each
   # at 720p30. This list is a budget, not a wish list. See plugin.md.
   hot_set: [showfreqs-bars, showwaves-classic, avectorscope-lissajous]
 
-colour:
+color:
   mode: automatic            # automatic | manual
-  # automatic: derived per-slide from the image's colour profile
+  # automatic: derived per-slide from the image's color profile
   # manual: the fixed values below
   manual:
     accent: "#4FC3F7"
@@ -148,7 +148,7 @@ these are hard errors, not warnings:
 | every path in `audio.tracks` / `images.slides` exists and is under `common/` or this channel's directory | a path outside both trees is not mounted into the container and will silently fail to open |
 | globs are validated on their **expanded results**, not the pattern | a pattern is not a path; `**` or a symlinked subdirectory can match outside the intended tree |
 | `audio.tracks` resolves to at least one file | a channel with no audio cannot stream. An empty *glob* is only a warning; an empty *result* is fatal |
-| `visualisation.active` ∈ `visualisation.hot_set` | you cannot switch to a graph that was not instantiated |
+| `visualization.active` ∈ `visualization.hot_set` | you cannot switch to a graph that was not instantiated |
 | every plugin in `hot_set` exists and declares the channel's output size | a size mismatch silently corrupts output — FFmpeg does not check. See plugin.md |
 | `bumpers.sources` non-empty when `bumpers.enabled` | otherwise the rotate operator starves |
 | projected core cost + running channels ≤ cores − `reserved_cores` | prevents oversubscribing the host into a stream that cannot hold 1.0x |
@@ -164,10 +164,10 @@ depends on the field:
 | `audio.tracks` | `playlist.m3u` rewritten; Liquidsoap picks it up. No restart |
 | `images.slides`, `hold_seconds`, `fade_seconds` | `images.list` rewritten; producer picks it up. No restart |
 | **file added to a watched folder** | list rewritten automatically. No restart, no config edit |
-| `visualisation.active` | `streamselect` command. One frame |
-| `colour.*` | zmq commands. One frame |
+| `visualization.active` | `streamselect` command. One frame |
+| `color.*` | zmq commands. One frame |
 | `bumpers.*` | Liquidsoap reconfigured. No compositor restart |
-| `visualisation.hot_set` | **requires a compositor restart** — the graph is fixed at launch |
+| `visualization.hot_set` | **requires a compositor restart** — the graph is fixed at launch |
 | anything in `.env` | requires the container to be recreated |
 
 A folder is watched when its channel selected it by glob or by leaving the list

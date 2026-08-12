@@ -118,7 +118,7 @@ Runs inside the backend, polling every channel on a timer. Configured under `wat
 | `restart_backoff_seconds` | `[5, 15, 45, 120, 300]` | ascending; must ascend |
 
 Two timers are not configurable: a **45-second startup grace** (the producer is throttled to
-~1.5 fps for 4–6 s while FFmpeg initialises, and that offset is benign) and a **30-second
+~1.5 fps for 4–6 s while FFmpeg initializes, and that offset is benign) and a **30-second
 settle window** after a restart, during which no new verdict can trigger another one.
 
 ### Faults it detects
@@ -316,8 +316,8 @@ rule. Nothing records video: MediaMTX has `record: no` and HLS segments are held
 | Add or reorder tracks | edit `config.yaml` / `PUT .../playlist`, recompile | **0 s** — Liquidsoap reloads a watched playlist |
 | Add or reorder images | edit `config.yaml` / `PUT .../images`, recompile | **0 s** — producer rescans between slides, FFmpeg PID unchanged |
 | Drop a file into a watched folder | copy it in | **0 s** — globs and empty selections are watched; explicit lists are not |
-| Change colour | `PUT .../colour`, or a preset | one frame |
-| Switch plugin | `PUT .../visualisation` | one frame, clean cut |
+| Change color | `PUT .../color`, or a preset | one frame |
+| Switch plugin | `PUT .../visualization` | one frame, clean cut |
 | Apply a preset | `POST .../preset` | one frame |
 | Restart Liquidsoap | `docker restart <ch>-liquidsoap` | **0 s** on the stream — Icecast's fallback absorbs it |
 | Add a channel to Icecast | `mounts.list` + `SIGHUP` | none |
@@ -367,7 +367,7 @@ already uses it as its Docker healthcheck.
 | `.env` | Icecast credentials, API token, `AMBIENT_REPO_ROOT` |
 | `ambient.yaml` | global operational settings |
 | `channels/*/.env` | stream keys and per-channel settings |
-| `channels/*/config.yaml` | selection, visualisation, colour, schedule |
+| `channels/*/config.yaml` | selection, visualization, color, schedule |
 | `channels/*/bumpers.yaml` | hand-written station-ID text |
 | `channels/mounts.list` | the Icecast mount registry — nothing regenerates it |
 | media under `common/` and `channels/*/` | your library |
@@ -384,7 +384,7 @@ password files: mode 600, never committed, encrypted at rest wherever the backup
 
 ## Restart discipline
 
-1. **Prefer a mechanism that is not a restart.** Playlist, images, colour and plugin switching
+1. **Prefer a mechanism that is not a restart.** Playlist, images, color and plugin switching
    are all gap-free.
 2. **If a restart is genuinely required, use `POST /api/channels/{name}/restart`.** It is
    make-before-break: the replacement composer starts in a second Compose project, claims the

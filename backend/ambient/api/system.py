@@ -2,12 +2,13 @@
 
 `GET /api/health` is the only unauthenticated endpoint. `GET /api/system`
 reports probe results rather than the encoder list — an encoder present in
-`ffmpeg -encoders` whose device is missing is reported unavailable.
+`ffmpeg -encoders` whose device is missing is reported unavailable. The probe
+runs a real test encode inside the composer image, which is where encoding
+happens and the only image in the stack that ships ffmpeg.
 """
 
 from __future__ import annotations
 
-import asyncio
 import os
 import time
 from typing import Any
@@ -16,9 +17,9 @@ from fastapi import APIRouter, Depends, Query, Request
 from starlette.responses import PlainTextResponse, StreamingResponse
 
 from .. import metrics as metrics_module
-from ..config import ConfigError
-from ..ffmpeg_cmd import probe_encoder
+from ..config import ConfigError, ignored_channel_names
 from ..main import ApiError, AppState
+from ..supervisor import LOG_SERVICES
 from .deps import Authed, get_state
 
 router = APIRouter(prefix="/api", tags=["system"])
@@ -43,12 +44,14 @@ async def health(state: AppState = Depends(get_state)) -> dict[str, Any]:
 
 
 @router.get("/system")
-async def system(state: AppState = Authed) -> dict[str, Any]:
+async def system(
+    refresh: bool = Query(False, description="re-run the encoder probes"),
+    state: AppState = Authed,
+) -> dict[str, Any]:
     ambient = state.workspace.ambient
-    loop = asyncio.get_running_loop()
-    probes = [
-        await loop.run_in_executor(None, probe_encoder, encoder) for encoder in ambient.encoders.probe_order
-    ]
+    probes = await state.supervisor.probe_encoders(
+        [encoder.value for encoder in ambient.encoders.probe_order], refresh=refresh
+    )
     cores = float(os.cpu_count() or 1)
     return {
         "cores": cores,
@@ -58,9 +61,12 @@ async def system(state: AppState = Authed) -> dict[str, Any]:
         "encoders": [
             {"encoder": p.encoder, "available": p.available, "detail": p.detail} for p in probes
         ],
+        "encoder_probe_image": state.supervisor.composer_image,
         "fallback_encoder": ambient.encoders.fallback.value,
         "bind_address": state.bind_address,
         "authenticated": bool(state.token),
+        "ignored_channels": ignored_channel_names(state.workspace),
+        "log_services": sorted(LOG_SERVICES),
         "paths": {
             "root": str(state.workspace.root),
             "common": str(state.workspace.common_dir),
@@ -87,6 +93,7 @@ async def capacity(state: AppState = Authed) -> dict[str, Any]:
             {
                 "channel": name,
                 "projected_cores": round(channel.projected_cores, 3),
+                "cores_breakdown": channel.cores_breakdown,
                 "measured_cores": state.channel_cores(name),
                 "state": running.state.value if running else "stopped",
             }
@@ -112,16 +119,22 @@ async def logs(
     lines: int = Query(200, ge=1, le=2000),
     state: AppState = Authed,
 ) -> dict[str, Any]:
+    """`text` is one plain-text blob, not an array: the UI shows it in a textarea."""
     state.channel(channel, resolve_media=False)
     try:
-        tail = state.supervisor.tail_log(channel, service, lines)
+        tail = await state.supervisor.read_log(channel, service, lines)
     except ConfigError as exc:
         raise ApiError(400, "invalid_log_service", str(exc)) from exc
     return {
         "channel": channel,
         "service": service,
-        "lines": tail,
-        "path": str(state.supervisor.log_path(channel, service)),
+        "services": sorted(LOG_SERVICES),
+        "text": tail.text,
+        "line_count": tail.line_count,
+        "source": tail.source,
+        "container": tail.container,
+        "path": str(tail.path),
+        "detail": tail.detail,
     }
 
 
