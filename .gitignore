@@ -78,3 +78,7 @@ Thumbs.db
 # directory is leftover scaffolding, not something to version.
 channels/*/.env.example
 !channels/example/.env.example
+
+# Spike run artifacts - regenerable, never versioned
+spikes/*/out/
+spikes/*/logs/
