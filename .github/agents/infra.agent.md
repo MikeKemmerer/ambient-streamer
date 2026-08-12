@@ -26,11 +26,17 @@ it rather than editing the other lane's files.
 
 ## Topology
 
-Two containers per channel, two global. At the maximum of 8 channels that is 18 containers.
+Two containers per channel, three global. At the maximum of 8 channels that is 19 containers.
 Do not expand this to a container per concern.
 
-- Global: `backend` (FastAPI control plane), `mediamtx` (RTMP relay + HLS)
+- Global: `backend` (FastAPI control plane), `mediamtx` (RTMP relay + HLS),
+  `icecast` (audio relay — one instance serves every channel's mount)
 - Per channel: `<ch>-liquidsoap`, `<ch>-composer`
+
+Icecast is not optional and not per channel. It exists because a Liquidsoap restart must not
+reach the compositor: `output.harbor` was measured stalling the compositor's output for 18.19s
+on a 9.41s outage, while Icecast with a fallback mount measured 0s. See
+`docs/contracts/audio-transport.md` before touching it.
 
 Per-channel Compose files are **generated** from `compose.channel.yml.j2` by the backend
 supervisor into `channels/<name>/docker-compose.yml` and are gitignored. Your template is
