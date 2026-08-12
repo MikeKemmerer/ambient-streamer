@@ -55,13 +55,19 @@ to mix two source trees.
 ### `channels/<name>/images.list`
 
 ```
-/media/common/images/forest.jpg      20.0  2.0
-/media/channel/images/city-night.jpg 20.0  2.0
+/media/common/images/forest.jpg
+/media/channel/images/city night.jpg
 ```
 
-`<path> <hold_seconds> <fade_seconds>`, whitespace-separated. Consumed by the
-slideshow producer, which rescans **only between slides**; see
+One absolute path per line, same as the playlist. Consumed by the slideshow
+producer, which rescans **only between slides**; see
 [slideshow.md](slideshow.md).
+
+Hold and fade timings are **not** in this file. They are channel-level settings
+in `config.yaml`, and putting them here would have made the format
+whitespace-delimited — which silently breaks on any filename containing a
+space. Media filenames routinely contain spaces, so the format carries paths
+and nothing else.
 
 ## Writing the lists safely
 
