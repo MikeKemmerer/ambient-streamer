@@ -25,8 +25,15 @@ channels/*/images/*
 # Shared media library — available to every channel, never duplicated per channel.
 common/audio/*
 common/images/*
+common/bumpers/*
 !common/audio/.gitkeep
 !common/images/.gitkeep
+!common/bumpers/.gitkeep
+
+# Station bumpers — generated audio. The source text lives in bumpers.yaml,
+# which IS tracked: it is small, human-written, and worth versioning.
+channels/*/bumpers/*
+!channels/*/bumpers/.gitkeep
 *.mp3
 *.flac
 *.ogg

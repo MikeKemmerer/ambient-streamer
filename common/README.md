@@ -8,6 +8,7 @@ channel.
 common/
 ├── audio/     <- music available to every channel
 ├── images/    <- slideshow images available to every channel
+├── bumpers/   <- station IDs / jingles available to every channel
 └── profiles/  <- generated colour profiles, one JSON per common image
 ```
 
