@@ -41,7 +41,7 @@ services:
     volumes:
       - ./docker/icecast-entrypoint.sh:/usr/local/bin/icecast-entrypoint.sh:ro
       - ./docker/icecast.xml:/etc/ambient/icecast.xml:ro
-      # mounts.list — one channel mount per line, written by the backend.
+      # mounts.list — one channel mount per line, written by scripts/new-channel.sh.
       # Adding a channel is a SIGHUP, never a restart:
       #   docker kill -s HUP ambient-icecast
       - ${AMBIENT_DATA_DIR:-./channels}:/etc/ambient/channels:ro

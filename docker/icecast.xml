@@ -24,7 +24,12 @@
     <limits>
         <clients>@MAX_CLIENTS@</clients>
         <sources>@MAX_SOURCES@</sources>
-        <queue-size>131072</queue-size>
+        <!-- 2 MB is ~64s at MP3 256k. The default 128 KB is only ~4s, and the
+             compositor is a CPU-bound encoder: any transient dip below realtime
+             overran the queue, Icecast dropped it, and the reconnect left FFmpeg
+             clamping audio DTS to the last high value so out_time froze for good
+             and the watchdog restarted the channel in a loop. -->
+        <queue-size>2097152</queue-size>
         <client-timeout>30</client-timeout>
         <header-timeout>15</header-timeout>
         <!-- A source that goes quiet for 10s is treated as gone, which is what

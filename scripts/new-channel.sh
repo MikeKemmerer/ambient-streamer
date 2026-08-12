@@ -171,6 +171,25 @@ else
 	ok "common/fallback/$CHANNEL.mp3 (mp3 256k / 44.1k / stereo)"
 fi
 
+# Registering the mount is what gives Icecast a <fallback-mount> for this
+# channel. Liquidsoap connects either way, so a missing entry has no visible
+# symptom until a Liquidsoap restart takes the compositor down with it.
+MOUNTS_LIST="${AMBIENT_DATA_DIR:-$REPO_ROOT/channels}/mounts.list"
+if [[ -f "$MOUNTS_LIST" ]] && grep -qx "$CHANNEL" "$MOUNTS_LIST"; then
+	ok "channels/mounts.list already lists $CHANNEL"
+else
+	[[ -f "$MOUNTS_LIST" ]] || printf '# One channel mount per line.\n' >"$MOUNTS_LIST"
+	printf '%s\n' "$CHANNEL" >>"$MOUNTS_LIST"
+	ok "channels/mounts.list += $CHANNEL"
+	if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx ambient-icecast; then
+		docker kill -s HUP ambient-icecast >/dev/null 2>&1 \
+			&& ok "icecast reloaded (SIGHUP, no restart)" \
+			|| warn "could not SIGHUP ambient-icecast — reload it before starting the channel"
+	else
+		log "icecast not running; it will pick this up at start"
+	fi
+fi
+
 # ---------------------------------------------------------------------------
 head1 "next"
 
@@ -191,15 +210,13 @@ cat >&2 <<EOF
        cp /path/to/*.jpg  channels/$CHANNEL/images/
      Anything shared by several channels belongs in common/ instead.
 
-  3. Register the Icecast mount and reload — this step is manual, and without
-     it Liquidsoap is refused by Icecast:
-       echo $CHANNEL >> channels/mounts.list
-       docker kill -s HUP ambient-icecast
-
-  4. Check the host has room for it
+  3. Check the host has room for it
        scripts/capacity-check.sh
+     Every plugin in hot_set renders on every frame, whether or not it is the
+     one on air, so the hot set is the main thing that decides whether a channel
+     holds realtime.
 
-  5. Compile and start
+  4. Compile and start
        docker exec ambient-backend python -m ambient.compile $CHANNEL
        scripts/channel.sh start $CHANNEL
 
