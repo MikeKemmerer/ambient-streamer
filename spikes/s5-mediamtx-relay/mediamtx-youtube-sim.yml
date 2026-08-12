@@ -1,0 +1,38 @@
+# Stand-in for YouTube's RTMP ingest. Deliberately permissive and minimal: the only thing
+# measured here is when a publisher is present on the "live" path.
+
+logLevel: info
+logDestinations: [stdout]
+
+api: yes
+apiAddress: :9997
+
+# MediaMTX's default admin user only grants API access from 127.0.0.1, which is not where a
+# request from the host or another container arrives. Without this the API returns 401 —
+# the same trap the real relay config has to avoid for the backend supervisor.
+authInternalUsers:
+  - user: any
+    pass:
+    ips: []
+    permissions:
+      - action: publish
+      - action: read
+      - action: api
+
+metrics: no
+pprof: no
+
+rtmp: yes
+rtmpAddress: :1935
+
+rtsp: no
+hls: no
+webrtc: no
+srt: no
+
+pathDefaults:
+  source: publisher
+  record: no
+
+paths:
+  all_others:

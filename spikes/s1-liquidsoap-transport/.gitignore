@@ -1,0 +1,8 @@
+media/
+media-watch/
+hold/
+out/
+fifo/
+liq/gen/
+icecast/web/
+icecast/icecast.xml

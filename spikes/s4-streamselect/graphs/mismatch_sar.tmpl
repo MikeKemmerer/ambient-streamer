@@ -1,0 +1,5 @@
+[0:a]asplit=2[a1][a2];
+[a1]showwaves=s=320x180:mode=cline:rate=30:colors=red|red,format=yuv420p,setsar=1[v1];
+[a2]showfreqs=s=320x180:rate=30:mode=bar:colors=lime|lime,format=yuv420p,setsar=2/1[v2];
+[v1][v2]streamselect@sel=inputs=2:map=0[vsel];
+[vsel]zmq@ctl=bind_address=tcp\\://127.0.0.1\\:__PORT__[v]

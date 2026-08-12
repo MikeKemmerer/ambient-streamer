@@ -1,0 +1,7 @@
+[0:a]asplit=4[a1][a2][a3][a4];
+[a1]showwaves=s=__W__x__H__:mode=cline:rate=30:colors=red|red,format=yuv420p,setsar=1[v1];
+[a2]showfreqs=s=__W__x__H__:rate=30:mode=bar:colors=lime|lime,format=yuv420p,setsar=1[v2];
+[a3]avectorscope=s=__W__x__H__:rate=30:rc=0:gc=0:bc=255:rf=0:gf=0:bf=30,format=yuv420p,setsar=1[v3];
+[v1][v2][v3]streamselect@sel=inputs=3:map=0[vsel];
+[vsel]zmq@ctl=bind_address=tcp\\://127.0.0.1\\:__PORT__[v];
+[a4]aresample=44100:async=1000:first_pts=0[aout]
