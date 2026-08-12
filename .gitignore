@@ -73,3 +73,8 @@ build/
 # Editor / OS
 .DS_Store
 Thumbs.db
+
+# Only the template channel ships an .env.example; a copy inside a real channel
+# directory is leftover scaffolding, not something to version.
+channels/*/.env.example
+!channels/example/.env.example
