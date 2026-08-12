@@ -318,9 +318,12 @@ class GlobalEnv(EnvModel):
     icecast_source_password: SecretStr = Field(SecretStr(""), alias="ICECAST_SOURCE_PASSWORD")
     icecast_admin_password: SecretStr = Field(SecretStr(""), alias="ICECAST_ADMIN_PASSWORD")
     icecast_relay_password: SecretStr = Field(SecretStr(""), alias="ICECAST_RELAY_PASSWORD")
-    default_encoder: Encoder = Field(Encoder.LIBX264, alias="AMBIENT_DEFAULT_ENCODER")
-    default_resolution: Resolution = Field(Resolution.R720, alias="AMBIENT_DEFAULT_RESOLUTION")
-    default_fps: int = Field(30, alias="AMBIENT_DEFAULT_FPS", ge=1, le=60)
+    # None, not a concrete default: these are OVERRIDES layered over ambient.yaml.
+    # Giving them a value here would make `defaults:` in ambient.yaml unreachable,
+    # because it sits later in the same `or` chain.
+    default_encoder: Encoder | None = Field(None, alias="AMBIENT_DEFAULT_ENCODER")
+    default_resolution: Resolution | None = Field(None, alias="AMBIENT_DEFAULT_RESOLUTION")
+    default_fps: int | None = Field(None, alias="AMBIENT_DEFAULT_FPS", ge=1, le=60)
 
 
 class ChannelEnv(EnvModel):

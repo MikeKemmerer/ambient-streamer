@@ -59,6 +59,7 @@ services:
       ICECAST_HOST: icecast
       ICECAST_PORT: ${AMBIENT_ICECAST_PORT:-8081}
       ICECAST_SOURCE_PASSWORD: ${ICECAST_SOURCE_PASSWORD:?required}
+      CROSSFADE_SECONDS: "{{ crossfade_seconds }}"
       # Telnet control socket for track/queue status. Bound inside the container
       # only — it is never published.
       LIQ_TELNET_PORT: 1234

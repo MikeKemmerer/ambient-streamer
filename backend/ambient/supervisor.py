@@ -38,6 +38,9 @@ def compose_context(workspace: Workspace, channel: ResolvedChannel) -> dict[str,
         # Per-channel, because both containers mount it at /var/log/ambient.
         "log_dir": str(workspace.log_dir / channel.name),
         "encoder": channel.encoder.value,
+        # channel.liq reads CROSSFADE_SECONDS; without this the value resolved
+        # from config.yaml never reaches it and the script default silently wins.
+        "crossfade_seconds": str(channel.crossfade_seconds),
     }
 
 
