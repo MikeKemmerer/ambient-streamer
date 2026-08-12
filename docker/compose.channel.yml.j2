@@ -30,8 +30,10 @@ name: ambient-{{ channel }}
 
 x-channel-common: &channel-common
   restart: unless-stopped
-  env_file:
-    - {{ channel_dir }}/.env
+  # No env_file. channels/<name>/.env holds the YouTube stream key, and loading
+  # it wholesale would put that key in `docker inspect` for both containers.
+  # It is read for INTERPOLATION instead (scripts/channel.sh passes it with
+  # --env-file), and only the values below are handed to a container.
   networks: [ambient]
   logging:
     driver: json-file
@@ -93,10 +95,10 @@ services:
       CHANNEL_NAME: {{ channel }}
       CHANNEL_MOUNT: ${CHANNEL_MOUNT:-/{{ channel }}}
       AUDIO_URL: http://icecast:${AMBIENT_ICECAST_PORT:-8081}${CHANNEL_MOUNT:-/{{ channel }}}
-      RTMP_PROGRAM: rtmp://mediamtx:${AMBIENT_RTMP_PORT:-1935}/{{ channel }}
-      RTMP_PREVIEW: rtmp://mediamtx:${AMBIENT_RTMP_PORT:-1935}/{{ channel }}/preview
-      # Read from the channel .env. Never baked into an image, never logged.
-      YOUTUBE_STREAM_KEY: ${YOUTUBE_STREAM_KEY:?set in channels/{{ channel }}/.env}
+      RELAY_RTMP: rtmp://mediamtx:${AMBIENT_RTMP_PORT:-1935}
+      # No YOUTUBE_STREAM_KEY. The compositor publishes to the relay and never
+      # to YouTube, so it has no reason to hold the credential — and holding it
+      # would expose it through `docker inspect` on every channel container.
       ENCODER: ${ENCODER:-{{ encoder | default('libx264') }}}
       RESOLUTION: ${RESOLUTION:-720p}
       FPS: ${FPS:-30}

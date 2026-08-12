@@ -4,8 +4,11 @@
 # start on an unknown config key, so re-read the release notes before bumping the image.
 #
 # Topology:
-#   <channel>-composer --RTMP--> mediamtx --RTMP--> YouTube
+#   <channel>-composer --RTMP--> mediamtx --RTMP--> YouTube  (runOnReady publisher)
 #                                        `--HLS--> backend preview proxy
+#
+# The YouTube leg runs inside this container, started by runOnReady below. It is the one
+# place a stream key exists at runtime; composer containers never hold one.
 #
 # Path layout — each composer publishes two RTMP streams per channel:
 #   rtmp://mediamtx:1935/<channel>            program feed, relayed on to YouTube
@@ -88,5 +91,15 @@ pathDefaults:
 paths:
   # <channel> — program feed
   "~^[a-z0-9][a-z0-9-]{0,30}$":
+    # The YouTube leg. Runs only while this path is ready, and is killed the moment the
+    # composer stops publishing — which is exactly the supervision the publisher needs:
+    # FFmpeg's -reconnect* flags do not apply to the RTMP demuxer, so a publisher left to
+    # fend for itself dies permanently on the first composer restart (S5, variants A/C).
+    #
+    # The command carries no credential. It resolves the key for $MTX_PATH itself, so a
+    # channel can be added or given a key without restarting this container.
+    runOnReady: /usr/local/bin/publish-youtube.sh
+    runOnReadyRestart: yes
   # <channel>/preview — low-resolution operator feed
   "~^[a-z0-9][a-z0-9-]{0,30}/preview$":
+    # No publisher here. The preview exists for operators and must never reach YouTube.

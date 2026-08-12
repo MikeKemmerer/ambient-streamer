@@ -59,15 +59,31 @@ services:
   #
   # Publishes NO host ports, by design. It does not hold a YouTube session open
   # across a composer restart; it turns an 18s backoff gap into a ~1s one.
+  #
+  # Built rather than pulled: the stock image has no ffmpeg, and the publisher
+  # needs the argv shim that keeps stream keys out of `ps`. See
+  # docker/Dockerfile.mediamtx.
   # ---------------------------------------------------------------------------
   mediamtx:
-    image: bluenviron/mediamtx:1.9.3
+    image: ${AMBIENT_MEDIAMTX_IMAGE:-ambient-mediamtx:dev}
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.mediamtx
     container_name: ambient-mediamtx
     restart: unless-stopped
     environment:
+      AMBIENT_RTMP_PORT: ${AMBIENT_RTMP_PORT:-1935}
       TZ: ${TZ:-UTC}
     volumes:
       - ./docker/mediamtx.yml:/mediamtx.yml:ro
+      # The relay is the only runtime holder of a stream key: it reads
+      # YOUTUBE_STREAM_KEY out of channels/<name>/.env when a path goes ready.
+      # A bind mount, so adding a channel never needs this container restarted.
+      - ${AMBIENT_DATA_DIR:-./channels}:/etc/ambient/channels:ro
+    tmpfs:
+      # Where the publisher stages a 0600 key file for the argv shim. tmpfs so
+      # a stream key never touches a disk here.
+      - /run/ambient:mode=0700,size=1m
     networks: [ambient]
     # No ports. RTMP 1935, HLS 8888 and the API 9997 stay internal.
 
