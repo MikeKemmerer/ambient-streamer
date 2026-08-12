@@ -6,11 +6,30 @@ channel.
 
 ```
 common/
-├── audio/     <- music available to every channel
-├── images/    <- slideshow images available to every channel
-├── bumpers/   <- station IDs / jingles available to every channel
-└── profiles/  <- generated colour profiles, one JSON per common image
+├── audio/          <- music available to every channel
+├── images/         <- slideshow images available to every channel
+├── bumpers/        <- station IDs / jingles available to every channel
+│   └── beds/       <- short instrumental loops the voice is mixed over
+└── profiles/       <- generated colour profiles, one JSON per common image
 ```
+
+## Bumpers
+
+Radio-style station IDs, inserted periodically between tracks. A bumper is a
+synthesised voice line mixed over a music bed, normalised to the same
+**-14 LUFS** as the music so it does not jump out at listeners.
+
+Voice is generated locally with [kokoro-onnx](https://github.com/thewh1teagle/kokoro-onnx)
+(MIT wrapper, Apache-2.0 weights) — local synthesis means no watermark, no API
+key, and no network dependency in a system meant to run unattended. Generation
+runs as a **one-shot container**: it produces the file and exits, so the TTS
+model is never part of the 24/7 footprint.
+
+Source text lives in `bumpers.yaml` and is version-controlled; the generated
+audio is not. Regenerating is cheap, so the text is the artefact worth keeping.
+
+Beds belong in `beds/` rather than `audio/` — a bed is a short loopable
+instrumental written to sit *under* speech, not a track that plays on its own.
 
 ## How a channel uses it
 

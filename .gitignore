@@ -30,6 +30,13 @@ common/bumpers/*
 !common/images/.gitkeep
 !common/bumpers/.gitkeep
 
+# beds/ has to be re-included as a DIRECTORY before its contents can be filtered:
+# `common/bumpers/*` above already excluded the directory itself, and a file
+# inside an excluded directory can never be re-included.
+!common/bumpers/beds/
+common/bumpers/beds/*
+!common/bumpers/beds/.gitkeep
+
 # Station bumpers — generated audio. The source text lives in bumpers.yaml,
 # which IS tracked: it is small, human-written, and worth versioning.
 channels/*/bumpers/*
