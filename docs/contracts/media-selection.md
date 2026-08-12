@@ -22,6 +22,97 @@ container cannot see, and the file fails to open with no useful error.
 
 Selection lists exist to avoid this. They are not a stylistic choice.
 
+## Selection forms
+
+`audio.tracks` and `images.slides` each accept three forms, which may be mixed
+in one list.
+
+### 1. Omitted or empty — use the channel's own folder
+
+```yaml
+audio:
+  tracks: []          # or omit the key entirely
+```
+
+Resolves to everything in `channels/<name>/audio/`, recursively.
+
+**It does not pull in `common/`.** The shared library is a library to select
+*from*; a channel that silently played every shared track the moment its config
+was blank would be a surprise, and would get worse as the library grew. To
+include shared media, ask for it — see form 3.
+
+### 2. Explicit paths — exactly these, in this order
+
+```yaml
+audio:
+  tracks:
+    - common/audio/intro.mp3
+    - "channels/lofi/audio/01 - track.m4a"
+```
+
+Nothing is added or removed. Quote any path containing spaces.
+
+### 3. Glob — everything matching, re-expanded as the folder changes
+
+```yaml
+images:
+  slides:
+    - common/images/*          # direct children only
+    - channels/lofi/images/**  # recursive
+```
+
+`*` matches within one directory, `**` recurses. Both are relative to the repo
+root and subject to the same two-tree rule as any other path.
+
+### Mixing
+
+Order is preserved as written; each glob expands in place.
+
+```yaml
+audio:
+  tracks:
+    - common/audio/station-open.mp3   # always first
+    - channels/lofi/audio/**          # then everything else
+```
+
+## Expansion rules
+
+| Rule | Behaviour |
+|---|---|
+| Sort | natural sort, so `track2` precedes `track10` |
+| Extension filter | only known media extensions; anything else is skipped |
+| Duplicates | first occurrence wins, later ones dropped |
+| Hidden files | `.gitkeep` and any dotfile are skipped |
+| Empty glob | warning, not an error — a folder may legitimately be empty for now |
+| Empty result overall | **hard error.** A channel with no audio cannot stream |
+
+Recognised extensions:
+
+| Kind | Extensions |
+|---|---|
+| audio | `.mp3` `.flac` `.ogg` `.opus` `.m4a` `.aac` `.wav` |
+| image | `.jpg` `.jpeg` `.png` `.webp` `.bmp` |
+
+The extension filter is what makes folder mode safe. Without it a stray
+`.DS_Store`, `README`, or half-finished download would enter the playlist and
+fail to open mid-stream.
+
+## Directory watching
+
+The selection form decides whether the backend watches a directory:
+
+| Form | Watched | Effect of dropping a new file in |
+|---|---|---|
+| explicit paths | no | nothing until the config changes |
+| glob | **yes** | list rewritten, picked up live |
+| omitted/empty | **yes** | list rewritten, picked up live |
+
+Rewrites go through the same atomic replace as any other list change, so
+adding a file to a watched folder never interrupts the stream.
+
+Explicit lists are deliberately not watched: the operator asked for exactly
+those files, and quietly appending to a hand-curated playlist would be wrong.
+
 ## Generated lists
 
 The backend compiles `config.yaml` selections into two files per channel.
@@ -90,6 +181,12 @@ normalising is the classic way to get this wrong.
 
 Symlinks inside either tree are resolved and re-validated after resolution, for
 the same reason.
+
+**Globs are validated on their expanded results, not on the pattern.** A
+pattern is not a path and cannot be prefix-checked meaningfully — `**` in the
+wrong position, or a symlinked subdirectory, can produce matches outside the
+intended tree even when the pattern reads as though it could not. Expand first,
+then validate every result individually and discard the ones that escape.
 
 ## Colour profiles
 

@@ -85,19 +85,23 @@ name: lofi
 genre: "lo-fi hip hop"
 
 audio:
-  # Ordered. Paths are relative to the repo root and may cross both trees.
-  # See media-selection.md — the backend compiles these into playlist.m3u.
+  # Three forms, mixable: explicit paths, globs, or omitted/empty to use the
+  # channel's own folder. See media-selection.md.
+  #   tracks: []                        -> everything in channels/<name>/audio/
+  #   - channels/lofi/audio/**          -> glob, re-expanded as the folder changes
+  #   - common/audio/intro.mp3          -> exactly this file
+  # Order is preserved as written; each glob expands in place.
   tracks:
     - common/audio/rain-loop.mp3
-    - channels/lofi/audio/lofi-only.mp3
+    - channels/lofi/audio/**
   shuffle: false
   crossfade_seconds: 5.0
 
 images:
-  # Ordered. Same two-tree rule as audio.
+  # Same three forms as audio.
   slides:
     - common/images/forest.jpg
-    - channels/lofi/images/city-night.jpg
+    - channels/lofi/images/*
   order: sequential          # sequential | shuffle
   hold_seconds: 20.0
   fade_seconds: 2.0
@@ -142,6 +146,8 @@ these are hard errors, not warnings:
 | Rule | Why |
 |---|---|
 | every path in `audio.tracks` / `images.slides` exists and is under `common/` or this channel's directory | a path outside both trees is not mounted into the container and will silently fail to open |
+| globs are validated on their **expanded results**, not the pattern | a pattern is not a path; `**` or a symlinked subdirectory can match outside the intended tree |
+| `audio.tracks` resolves to at least one file | a channel with no audio cannot stream. An empty *glob* is only a warning; an empty *result* is fatal |
 | `visualisation.active` ∈ `visualisation.hot_set` | you cannot switch to a graph that was not instantiated |
 | every plugin in `hot_set` exists and declares the channel's output size | a size mismatch silently corrupts output — FFmpeg does not check. See plugin.md |
 | `bumpers.sources` non-empty when `bumpers.enabled` | otherwise the rotate operator starves |
@@ -157,11 +163,15 @@ depends on the field:
 |---|---|
 | `audio.tracks` | `playlist.m3u` rewritten; Liquidsoap picks it up. No restart |
 | `images.slides`, `hold_seconds`, `fade_seconds` | `images.list` rewritten; producer picks it up. No restart |
+| **file added to a watched folder** | list rewritten automatically. No restart, no config edit |
 | `visualisation.active` | `streamselect` command. One frame |
 | `colour.*` | zmq commands. One frame |
 | `bumpers.*` | Liquidsoap reconfigured. No compositor restart |
 | `visualisation.hot_set` | **requires a compositor restart** — the graph is fixed at launch |
 | anything in `.env` | requires the container to be recreated |
+
+A folder is watched when its channel selected it by glob or by leaving the list
+empty. Explicit lists are not watched — see media-selection.md.
 
 The last two rows are the only ones that interrupt the stream. Both must be
 make-before-break; see [on-disk.md](on-disk.md).

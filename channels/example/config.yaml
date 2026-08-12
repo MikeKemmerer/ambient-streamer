@@ -14,17 +14,24 @@ name: example
 genre: "ambient"
 
 audio:
-  # Ordered. Paths are relative to the repo root and may draw from common/ and
-  # from this channel's own directory. Anything outside both is rejected: it is
-  # not mounted into the container and would silently fail to open.
-  tracks:
-    - common/audio/example-track.mp3
+  # Three forms, mixable. See docs/contracts/media-selection.md.
+  #
+  #   tracks: []                     everything in channels/<name>/audio/
+  #                                  (does NOT pull in common/ — ask for it)
+  #   - channels/x/audio/**          glob; ** recurses, * is one level
+  #   - common/audio/intro.mp3       exactly this file
+  #
+  # Order is preserved as written and each glob expands in place, so an intro
+  # can be pinned first and the rest left to a glob. Quote paths with spaces.
+  # Globs and empty lists are watched: dropping a file in the folder updates
+  # the stream with no restart. Explicit lists are not.
+  tracks: []
   shuffle: false
   crossfade_seconds: 5.0
 
 images:
-  slides:
-    - common/images/example-slide.jpg
+  # Same three forms as audio.
+  slides: []
   order: sequential           # sequential | shuffle
   hold_seconds: 20.0
   fade_seconds: 2.0
