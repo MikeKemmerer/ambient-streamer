@@ -65,17 +65,7 @@ faded = if crossfade_s > 0. then crossfade(id="xfade", duration=crossfade_s, pl)
 radio = mksafe(faded)
 
 current = ref("")
-started = ref(0.)
-
-def log_track(m) =
-  fn = m["filename"]
-  ti = m["title"]
-  ar = m["artist"]
-  current := fn
-  started := time()
-  logf("track", "file='#{fn}' title='#{ti}' artist='#{ar}'")
-end
-radio.on_track(synchronous=false, log_track)
+started = ref(time())
 
 def next_file() =
   try
@@ -85,10 +75,42 @@ def next_file() =
   end
 end
 
+# on_track does not report the first track of a freshly started source, and the
+# mksafe blank fallback carries no filename at all, so the ref is seeded from
+# the playlist rather than left empty until the first transition.
+def seed_current() =
+  if current() == "" then
+    fn = next_file()
+    if fn != "" then
+      current := fn
+      started := time()
+      logf("track_seeded", "file='#{fn}'")
+    end
+  end
+end
+
+def log_track(m) =
+  fn = m["filename"]
+  if fn == "" then
+    held = current()
+    logf("track_unnamed", "held='#{held}'")
+  else
+    ti = m["title"]
+    ar = m["artist"]
+    current := fn
+    started := time()
+    logf("track", "file='#{fn}' title='#{ti}' artist='#{ar}'")
+  end
+end
+radio.on_track(synchronous=false, log_track)
+
+seed_current()
+
 server.register(
   namespace="ambient", description="Current track, next track and buffer state.",
   usage="status", "status",
   fun (_) -> begin
+    seed_current()
     cur = current()
     nxt = next_file()
     el  = time() - started()
@@ -101,7 +123,11 @@ server.register(
 
 server.register(
   namespace="ambient", description="Absolute path of the track now playing.",
-  usage="current", "current", fun (_) -> current()
+  usage="current", "current",
+  fun (_) -> begin
+    seed_current()
+    current()
+  end
 )
 
 server.register(

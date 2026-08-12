@@ -13,6 +13,7 @@ lives in `ambient.uploads`.
 from __future__ import annotations
 
 import asyncio
+import logging
 from pathlib import Path
 from typing import Any, Callable, Literal
 
@@ -43,9 +44,11 @@ from ..uploads import (
     receive,
     relative_dir,
 )
-from .deps import Authed, recompile, save_channel_config
+from .deps import Authed, recompile, save_channel_config, write_list
 
 router = APIRouter(prefix="/api", tags=["media"])
+
+LOG = logging.getLogger("ambient.api")
 
 MAX_ENTRIES = 5000
 
@@ -224,6 +227,40 @@ def _refused(exc: UploadAborted) -> ApiError:
     return ApiError(exc.status_code, exc.error, exc.detail)
 
 
+def _within(path: Path, root: Path) -> bool:
+    return path == root or root in path.parents
+
+
+def _recompile_uploaded(state: AppState, upload: UploadTarget) -> list[str]:
+    """Rewrite the generated list of every channel this upload changes.
+
+    A watched directory is the contract's own rule for "picked up live": folder
+    mode and globs are watched, an explicit list is pinned and is never rewritten
+    underneath the operator — not even by an upload to the shared library, which
+    is why a `common/` upload has to be considered against every channel rather
+    than one. The write is an atomic replace of a file Liquidsoap is watching, so
+    it lands at the next track boundary with nothing restarted.
+    """
+    candidates = [upload.channel] if upload.channel else state.names()
+    touched: list[str] = []
+    for name in candidates:
+        try:
+            channel = state.channel(name)
+        except ApiError as exc:
+            LOG.warning("upload: channel %s not recompiled: %s", name, exc.detail)
+            continue
+        selection = channel.audio if upload.kind is MediaKind.AUDIO else channel.images
+        if not any(_within(upload.directory, w) for w in selection.watched_dirs):
+            continue
+        try:
+            write_list(channel, upload.kind)
+        except OSError as exc:
+            LOG.warning("upload: channel %s not recompiled: %s", name, exc)
+            continue
+        touched.append(name)
+    return touched
+
+
 async def _upload(
     request: Request,
     state: AppState,
@@ -279,6 +316,10 @@ async def _upload(
         raise _refused(exc) from exc
 
     stored = [r for r in results if r.ok]
+    # A rejected batch stored nothing, so rewriting a watched list would be churn.
+    recompiled = (
+        await asyncio.to_thread(_recompile_uploaded, state, upload) if stored else []
+    )
     body = {
         "target": upload.name,
         "destination": COMMON_TARGET if upload.channel is None else "channel",
@@ -287,6 +328,7 @@ async def _upload(
         "directory": relative_dir(upload.directory, state.workspace.root),
         "uploaded": len(stored),
         "failed": len(results) - len(stored),
+        "recompiled": recompiled,
         "results": [r.as_dict() for r in results],
     }
     if stored:

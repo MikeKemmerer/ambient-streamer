@@ -61,14 +61,19 @@ def env_int(name: str, default: int) -> int:
 # image list
 # --------------------------------------------------------------------------
 
+LIST_POLL_SECONDS = 1.0
+
+
 def read_list(path: str) -> list[str]:
-    """One absolute path per line. No timings — see media-selection.md."""
-    try:
-        with open(path, "r", encoding="utf-8") as handle:
-            raw = handle.read().splitlines()
-    except OSError as exc:
-        log("list_unreadable", path=path, error=type(exc).__name__)
-        return []
+    """One absolute path per line. No timings — see media-selection.md.
+
+    Opened fresh every time: the backend replaces this file with an atomic
+    same-directory rename, so a retained handle would read the old inode
+    forever. Lines are never split on whitespace — filenames contain spaces.
+    Raises OSError; the caller owns the policy for a list it cannot read.
+    """
+    with open(path, "r", encoding="utf-8") as handle:
+        raw = handle.read().splitlines()
     slides: list[str] = []
     for line in raw:
         entry = line.strip()
@@ -79,6 +84,15 @@ def read_list(path: str) -> list[str]:
             continue
         slides.append(entry)
     return slides
+
+
+def list_key(path: str) -> Optional[tuple[int, int, int, int]]:
+    """Cheap change token: st_ino catches the rename, st_ctime_ns catches chmod."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    return (st.st_ino, st.st_mtime_ns, st.st_ctime_ns, st.st_size)
 
 
 def fit(path: str, width: int, height: int) -> Image.Image:
@@ -100,6 +114,16 @@ def encode(img: Image.Image, quality: int) -> bytes:
     return buf.getvalue()
 
 
+@dataclass(frozen=True)
+class Slide:
+    """Everything the write loop needs, resolved before it asks for it."""
+
+    path: str
+    image: Image.Image
+    jpeg: bytes
+    profile: Optional[dict]
+
+
 # --------------------------------------------------------------------------
 # color transitions (slideshow.md obligation 6)
 # --------------------------------------------------------------------------
@@ -111,6 +135,21 @@ def profile_path(image: str) -> Optional[str]:
     if tail != "images":
         return None
     return os.path.join(head, "profiles", os.path.splitext(name)[0] + ".json")
+
+
+def read_profile(image: str) -> Optional[dict]:
+    """Read on the loader thread, applied later on the write loop."""
+    path = profile_path(image)
+    if path is None:
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            return json.load(handle)
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError) as exc:
+        log("profile_unreadable", path=path, error=type(exc).__name__)
+        return None
 
 
 def hex_to_hue(value: str) -> Optional[float]:
@@ -199,16 +238,7 @@ class ColorSender:
                 f"*min(max((t-{t0:.3f})/{self.transition:.3f},0),1))")
         return f"{target} {param} {expr}"
 
-    def apply(self, image: str, stream_time: float) -> None:
-        path = profile_path(image)
-        if not path or not os.path.exists(path):
-            return
-        try:
-            with open(path, "r", encoding="utf-8") as handle:
-                profile = json.load(handle)
-        except (OSError, ValueError) as exc:
-            log("profile_unreadable", path=path, error=type(exc).__name__)
-            return
+    def apply(self, profile: dict, stream_time: float) -> None:
         hue = hex_to_hue(str(profile.get("accent", "")))
         brightness = clamp(float(profile.get("brightness", 0.5)), 0.0, 1.0)
         warmth = clamp(float(profile.get("warmth", 0.0)), -1.0, 1.0)
@@ -245,6 +275,114 @@ class Settings:
     transition: float
 
 
+class SlideLoader:
+    """Owns images.list, slide order and image decode, off the write loop.
+
+    Filesystem work between frames is a pause in a pipe FFmpeg is reading:
+    decoding one 4000x3000 upload down to 720p was measured at 315-453 ms,
+    four frame periods at 10 fps. This thread prepares the next slide during
+    the current slide's hold, and re-reads the list only when a stat() shows
+    it changed.
+    """
+
+    def __init__(self, cfg: Settings) -> None:
+        self.cfg = cfg
+        self.lock = threading.Lock()
+        self.wake = threading.Event()
+        self.playlist: list[str] = []
+        self.order: list[str] = []
+        self.index = 0
+        self.key: Optional[tuple[int, int, int, int]] = None
+        self.ready: Optional[Slide] = None
+        self.current = ""
+        self.holding = False
+
+    def start(self) -> None:
+        self.poll()
+        self.prepare()
+        threading.Thread(target=self._run, daemon=True, name="slides").start()
+
+    def _run(self) -> None:
+        while True:
+            self.wake.wait(LIST_POLL_SECONDS)
+            self.wake.clear()
+            try:
+                self.poll()
+                self.prepare()
+            except Exception as exc:  # a loader fault must never stop frames
+                log("loader_error", error=type(exc).__name__)
+
+    # -- list --------------------------------------------------------------
+    def poll(self) -> None:
+        key = list_key(self.cfg.images_list)
+        if key is not None and key == self.key:
+            return
+        try:
+            found, reason = read_list(self.cfg.images_list), "empty"
+        except OSError as exc:
+            found, reason = [], type(exc).__name__
+        if not found:
+            if not self.holding:
+                self.holding = True
+                log("list_holding", path=self.cfg.images_list, reason=reason,
+                    held=len(self.order))
+            self.key = None  # chmod does not move mtime; re-read next poll
+            return
+        self.holding = False
+        self.key = key
+        if found != self.playlist:
+            self.adopt(found)
+
+    def adopt(self, found: list[str]) -> None:
+        log("list_changed", was=len(self.playlist), now=len(found))
+        order = list(found)
+        if self.cfg.order == "shuffle":
+            random.shuffle(order)
+        self.playlist = found
+        self.order = order
+        with self.lock:
+            current = self.current
+            if self.ready is not None and self.ready.path not in found:
+                self.ready = None  # dropped from the list, so it loses its turn
+        self.index = order.index(current) + 1 if current in order else 0
+        self.index %= len(order)
+
+    # -- slide selection ---------------------------------------------------
+    def prepare(self) -> None:
+        """Decode and encode the next slide before the write loop asks for it."""
+        with self.lock:
+            if self.ready is not None:
+                return
+            current = self.current
+        order = self.order
+        for _ in range(len(order)):
+            path = order[self.index]
+            self.index = (self.index + 1) % len(order)
+            if path == current and len(order) > 1:
+                continue
+            try:
+                img = fit(path, self.cfg.width, self.cfg.height)
+            except (OSError, ValueError) as exc:
+                log("slide_unreadable", path=path, error=type(exc).__name__)
+                continue
+            slide = Slide(path, img, encode(img, self.cfg.quality),
+                          read_profile(path))
+            with self.lock:
+                self.ready = slide
+            return
+
+    def take(self) -> Optional[Slide]:
+        """Never blocks. None means keep showing what is already on screen."""
+        with self.lock:
+            slide = self.ready
+            if slide is None:
+                return None
+            self.ready = None
+            self.current = slide.path
+        self.wake.set()
+        return slide
+
+
 class Producer:
     def __init__(self, cfg: Settings) -> None:
         self.cfg = cfg
@@ -263,9 +401,7 @@ class Producer:
         self.color = (ColorSender(cfg.zmq_endpoint, cfg.transition)
                        if cfg.zmq_endpoint else None)
         self.now = nowstate.start_writer()
-        self.playlist: list[str] = []
-        self.order: list[str] = []
-        self.index = 0
+        self.loader = SlideLoader(cfg)
 
     # -- pacing ------------------------------------------------------------
     def emit(self, payload: bytes) -> None:
@@ -305,59 +441,22 @@ class Producer:
         self.next_stat += self.cfg.stats_interval
         log("stats", t=f"{elapsed:.1f}", frames=self.frame,
             avg_fps=f"{self.frame / elapsed:.2f}", late=self.late,
-            slides=self.slides, slide_count=len(self.playlist),
+            slides=self.slides, slide_count=len(self.loader.playlist),
             mbps=f"{self.emitted_bytes * 8 / elapsed / 1e6:.2f}")
-
-    # -- slide selection ---------------------------------------------------
-    def rescan(self) -> None:
-        """Called only between slides — never mid-fade."""
-        found = read_list(self.cfg.images_list)
-        if not found:
-            if self.playlist:
-                log("list_empty_holding", count=len(self.playlist))
-            return
-        if found == self.playlist:
-            return
-        log("list_changed", was=len(self.playlist), now=len(found))
-        self.playlist = found
-        self.order = list(found)
-        if self.cfg.order == "shuffle":
-            random.shuffle(self.order)
-        self.index = 0
-
-    def advance(self, current: str) -> Optional[tuple[str, Image.Image, bytes]]:
-        """Next loadable slide, or None when nothing in the list opens."""
-        if not self.order:
-            return None
-        if current in self.order:
-            self.index = (self.order.index(current) + 1) % len(self.order)
-        for _ in range(len(self.order)):
-            path = self.order[self.index]
-            self.index = (self.index + 1) % len(self.order)
-            if path == current and len(self.order) > 1:
-                continue
-            try:
-                img = fit(path, self.cfg.width, self.cfg.height)
-            except (OSError, ValueError) as exc:
-                log("slide_unreadable", path=path, error=type(exc).__name__)
-                continue
-            return path, img, encode(img, self.cfg.quality)
-        return None
 
     # -- main loop ---------------------------------------------------------
     def run(self) -> int:
-        self.rescan()
-        if not self.order:
+        self.loader.start()
+        if not self.loader.order:
             log("fatal", reason="no_slides", list=self.cfg.images_list)
             return 2
-        first = self.advance("")
-        if first is None:
+        cur = self.loader.take()
+        if cur is None:
             log("fatal", reason="no_loadable_slides", list=self.cfg.images_list)
             return 2
-        cur_path, cur_img, cur_bytes = first
         if self.now is not None:
-            self.now.set_slide(cur_path)
-        log("start", list=self.cfg.images_list, slides=len(self.order),
+            self.now.set_slide(cur.path)
+        log("start", list=self.cfg.images_list, slides=len(self.loader.order),
             geometry=f"{self.cfg.width}x{self.cfg.height}", fps=self.cfg.fps,
             hold_frames=self.hold_frames, fade_frames=self.fade_frames,
             quality=self.cfg.quality, order=self.cfg.order)
@@ -367,27 +466,30 @@ class Producer:
 
         while True:
             for _ in range(self.hold_frames):
-                self.emit(cur_bytes)
+                self.emit(cur.jpeg)
 
-            self.rescan()
-            nxt = self.advance(cur_path)
-            if nxt is None:
-                continue
-            nxt_path, nxt_img, nxt_bytes = nxt
+            nxt = self.loader.take()
+            while nxt is None:
+                # Empty list, nothing loadable, or the next slide still
+                # decoding. Hold the frame: black or a stalled pipe would end
+                # the broadcast, a longer hold is invisible.
+                self.emit(cur.jpeg)
+                nxt = self.loader.take()
+
             self.slides += 1
             # Published as the crossfade starts, with the color ramp, because
             # that is when the viewer sees the new slide arrive.
             if self.now is not None:
-                self.now.set_slide(nxt_path)
-            if self.color is not None:
-                self.color.apply(nxt_path, self.stream_time())
+                self.now.set_slide(nxt.path)
+            if self.color is not None and nxt.profile is not None:
+                self.color.apply(nxt.profile, self.stream_time())
 
             for step in range(1, self.fade_frames + 1):
                 alpha = step / (self.fade_frames + 1)
-                self.emit(encode(Image.blend(cur_img, nxt_img, alpha),
+                self.emit(encode(Image.blend(cur.image, nxt.image, alpha),
                                  self.cfg.quality))
 
-            cur_path, cur_img, cur_bytes = nxt_path, nxt_img, nxt_bytes
+            cur = nxt
 
 
 def parse_args() -> Settings:

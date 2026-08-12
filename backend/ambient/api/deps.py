@@ -18,7 +18,7 @@ from fastapi import Depends, Request
 from ..config import ResolvedChannel
 from ..events import CHANNEL_STATUS
 from ..main import ApiError, AppState, compare_token
-from ..media import atomic_write_lines, write_images_list, write_playlist
+from ..media import MediaKind, atomic_write_lines, write_images_list, write_playlist
 from ..models import ChannelConfig, ChannelState
 from ..supervisor import write_compose
 
@@ -52,12 +52,25 @@ def save_channel_config(directory: Path, config: ChannelConfig) -> Path:
     return path
 
 
+def write_list(
+    channel: ResolvedChannel, kind: MediaKind, rng: random.Random | None = None
+) -> list[str]:
+    """Rewrite one generated list. Atomic, because a live process reads it."""
+    if kind is MediaKind.AUDIO:
+        return write_playlist(
+            channel.playlist_path, channel.audio, channel.config.audio.shuffle, rng
+        )
+    return write_images_list(
+        channel.images_list_path, channel.images, channel.shuffle_images, rng
+    )
+
+
 def recompile(state: AppState, name: str, *, seed: int | None = None) -> ResolvedChannel:
     """Rewrite the generated lists and the Compose file from config.yaml."""
     channel = state.channel(name)
     rng = random.Random(seed) if seed is not None else None
-    write_playlist(channel.playlist_path, channel.audio, channel.config.audio.shuffle, rng)
-    write_images_list(channel.images_list_path, channel.images, channel.shuffle_images, rng)
+    write_list(channel, MediaKind.AUDIO, rng)
+    write_list(channel, MediaKind.IMAGE, rng)
     write_compose(state.workspace, channel)
     return channel
 

