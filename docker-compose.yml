@@ -1,0 +1,114 @@
+# ambient-streamer — global stack.
+#
+# Three global containers, plus two per channel started as separate compose
+# projects from docker/compose.channel.yml.j2. At the maximum of 8 channels that
+# is 19 containers, not 40.
+#
+#   docker compose -p ambient up -d
+#
+# Nothing here is published to the LAN except the backend. MediaMTX (RTMP + HLS)
+# and Icecast stay on the internal network; the backend proxies the HLS preview.
+# Keeping the relay and the ZMQ control sockets off the LAN is the point.
+
+name: ambient
+
+services:
+  # ---------------------------------------------------------------------------
+  # Icecast — the audio relay between Liquidsoap and every compositor.
+  #
+  # ONE instance serves every channel's mount. It is not optional and not per
+  # channel: it is what makes a Liquidsoap restart invisible to the compositor
+  # (measured 0s / 0.00% silence, versus 18.19s for output.harbor).
+  # See docs/contracts/audio-transport.md.
+  # ---------------------------------------------------------------------------
+  icecast:
+    image: libretime/icecast:2.4.4
+    container_name: ambient-icecast
+    restart: unless-stopped
+    user: "${PUID:-1000}:${PGID:-1000}"
+    entrypoint: ["/usr/local/bin/icecast-entrypoint.sh"]
+    environment:
+      ICECAST_SOURCE_PASSWORD: ${ICECAST_SOURCE_PASSWORD:?set in .env — openssl rand -hex 16}
+      ICECAST_ADMIN_PASSWORD: ${ICECAST_ADMIN_PASSWORD:?set in .env — openssl rand -hex 16}
+      ICECAST_RELAY_PASSWORD: ${ICECAST_RELAY_PASSWORD:?set in .env — openssl rand -hex 16}
+      ICECAST_PORT: ${AMBIENT_ICECAST_PORT:-8081}
+      ICECAST_ADMIN_USER: ${ICECAST_ADMIN_USER:-admin}
+      ICECAST_MAX_SOURCES: ${ICECAST_MAX_SOURCES:-16}
+      # Rendered config lives on tmpfs so the container needs no writable /etc.
+      ICECAST_CONFIG: /run/icecast/icecast.xml
+      TZ: ${TZ:-UTC}
+    volumes:
+      - ./docker/icecast-entrypoint.sh:/usr/local/bin/icecast-entrypoint.sh:ro
+      - ./docker/icecast.xml:/etc/ambient/icecast.xml:ro
+      # mounts.list — one channel mount per line, written by the backend.
+      # Adding a channel is a SIGHUP, never a restart:
+      #   docker kill -s HUP ambient-icecast
+      - ${AMBIENT_DATA_DIR:-./channels}:/etc/ambient/channels:ro
+      # Fallback MP3s, served through fileserve as /fallback/<channel>.mp3.
+      # Generate with scripts/make-fallback.sh — they must be MP3 256k/44.1k/stereo.
+      - ${AMBIENT_COMMON_DIR:-./common}/fallback:/usr/share/icecast/web/fallback:ro
+    tmpfs:
+      # 1777 (sticky, like /tmp): Docker creates a tmpfs owned by root, and this
+      # container runs as PUID/PGID, so a stricter mode blocks the render.
+      - /run/icecast:mode=1777,size=1m
+    networks: [ambient]
+    # No ports. The compositor reaches this at http://icecast:8081/<mount>.
+
+  # ---------------------------------------------------------------------------
+  # MediaMTX — RTMP relay to YouTube plus the low-resolution HLS preview.
+  #
+  # Publishes NO host ports, by design. It does not hold a YouTube session open
+  # across a composer restart; it turns an 18s backoff gap into a ~1s one.
+  # ---------------------------------------------------------------------------
+  mediamtx:
+    image: bluenviron/mediamtx:1.9.3
+    container_name: ambient-mediamtx
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ:-UTC}
+    volumes:
+      - ./docker/mediamtx.yml:/mediamtx.yml:ro
+    networks: [ambient]
+    # No ports. RTMP 1935, HLS 8888 and the API 9997 stay internal.
+
+  # ---------------------------------------------------------------------------
+  # Backend control plane — FastAPI, owned by the backend-api lane.
+  #
+  # Profile-gated: `docker compose -p ambient up -d` brings up the streaming
+  # path without it, so infra is testable before the backend image exists.
+  # Start it with:  docker compose -p ambient --profile backend up -d
+  # ---------------------------------------------------------------------------
+  backend:
+    profiles: [backend]
+    image: ${AMBIENT_BACKEND_IMAGE:-ambient-backend:dev}
+    container_name: ambient-backend
+    restart: unless-stopped
+    environment:
+      AMBIENT_BIND_ADDRESS: ${AMBIENT_BIND_ADDRESS:-127.0.0.1}
+      AMBIENT_API_TOKEN: ${AMBIENT_API_TOKEN:?set in .env — openssl rand -hex 32}
+      AMBIENT_DATA_DIR: /app/channels
+      AMBIENT_COMMON_DIR: /app/common
+      AMBIENT_LOG_DIR: /var/log/ambient
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      TZ: ${TZ:-UTC}
+    volumes:
+      # Root-equivalent on the host. This is why the published port below is
+      # bound to ${AMBIENT_BIND_ADDRESS}, which defaults to loopback, and why
+      # AMBIENT_API_TOKEN is required rather than optional.
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./ambient.yaml:/app/ambient.yaml:ro
+      - ${AMBIENT_DATA_DIR:-./channels}:/app/channels
+      - ${AMBIENT_COMMON_DIR:-./common}:/app/common:ro
+      - ${AMBIENT_LOG_DIR:-/var/log/ambient}:/var/log/ambient
+    ports:
+      - "${AMBIENT_BIND_ADDRESS:-127.0.0.1}:${AMBIENT_BACKEND_PORT:-8090}:8090"
+    networks: [ambient]
+    depends_on: [icecast, mediamtx]
+
+networks:
+  ambient:
+    # Fixed name so per-channel compose projects can join it as an external
+    # network without depending on this project's name.
+    name: ambient
+    driver: bridge

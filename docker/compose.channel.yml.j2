@@ -1,0 +1,146 @@
+{#-
+  ambient-streamer — per-channel compose template.
+
+  Rendered by the backend supervisor into channels/<name>/docker-compose.yml and
+  run as its own project:
+
+      docker compose -p ambient-{{ channel }} \
+        -f channels/{{ channel }}/docker-compose.yml up -d
+
+  The generated file is gitignored and never hand-edited, but operators DO read
+  it when something is wrong — keep it readable.
+
+  Variables (all supplied by the backend):
+    channel        channel name, [a-z0-9-]
+    repo_root      absolute host path of the repository
+    common_dir     absolute host path of the shared media library
+    channel_dir    absolute host path of channels/<name>
+    log_dir        absolute host path of the channel's log directory
+    encoder        libx264 | h264_nvenc | h264_qsv
+-#}
+# GENERATED — do not edit. Source: docker/compose.channel.yml.j2
+# Channel: {{ channel }}
+#
+# Two containers. Liquidsoap owns audio and may restart freely; Icecast's
+# fallback mount absorbs it. The compositor must NOT restart — its filtergraph
+# is fixed at launch, and every live-editable feature routes around that
+# (image2pipe for slides, zmq for colour, streamselect for plugins).
+
+name: ambient-{{ channel }}
+
+x-channel-common: &channel-common
+  restart: unless-stopped
+  env_file:
+    - {{ channel_dir }}/.env
+  networks: [ambient]
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "5"
+
+services:
+  # ---------------------------------------------------------------------------
+  # Audio engine. Source client to the global Icecast; never talks to the
+  # compositor directly.
+  # ---------------------------------------------------------------------------
+  {{ channel }}-liquidsoap:
+    <<: *channel-common
+    container_name: {{ channel }}-liquidsoap
+    image: ambient-liquidsoap:{{ image_tag | default('dev') }}
+    build:
+      context: {{ repo_root }}
+      dockerfile: docker/Dockerfile.liquidsoap
+    environment:
+      CHANNEL_NAME: {{ channel }}
+      CHANNEL_MOUNT: ${CHANNEL_MOUNT:-/{{ channel }}}
+      ICECAST_HOST: icecast
+      ICECAST_PORT: ${AMBIENT_ICECAST_PORT:-8081}
+      ICECAST_SOURCE_PASSWORD: ${ICECAST_SOURCE_PASSWORD:?required}
+      # Telnet control socket for track/queue status. Bound inside the container
+      # only — it is never published.
+      LIQ_TELNET_PORT: 1234
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      TZ: ${TZ:-UTC}
+    volumes:
+      - {{ repo_root }}/liquidsoap:/opt/ambient:ro
+      - {{ common_dir }}:/media/common:ro
+      - {{ channel_dir }}:/media/channel:ro
+      - {{ log_dir }}:/var/log/ambient
+    tmpfs:
+      - /run/ambient:mode=0755,size=16m
+    deploy:
+      resources:
+        limits:
+          cpus: "${LIQUIDSOAP_CPU_LIMIT:-0.5}"
+          memory: ${LIQUIDSOAP_MEMORY_LIMIT:-512m}
+
+  # ---------------------------------------------------------------------------
+  # Compositor. Reads audio from Icecast, slides from a Python producer on
+  # image2pipe, and publishes RTMP to the MediaMTX relay.
+  #
+  # This container restarting is the failure this whole design exists to avoid.
+  # ---------------------------------------------------------------------------
+  {{ channel }}-composer:
+    <<: *channel-common
+    container_name: {{ channel }}-composer
+    image: ambient-composer:{{ image_tag | default('dev') }}
+    build:
+      context: {{ repo_root }}
+      dockerfile: docker/Dockerfile.composer
+    environment:
+      CHANNEL_NAME: {{ channel }}
+      CHANNEL_MOUNT: ${CHANNEL_MOUNT:-/{{ channel }}}
+      AUDIO_URL: http://icecast:${AMBIENT_ICECAST_PORT:-8081}${CHANNEL_MOUNT:-/{{ channel }}}
+      RTMP_PROGRAM: rtmp://mediamtx:${AMBIENT_RTMP_PORT:-1935}/{{ channel }}
+      RTMP_PREVIEW: rtmp://mediamtx:${AMBIENT_RTMP_PORT:-1935}/{{ channel }}/preview
+      # Read from the channel .env. Never baked into an image, never logged.
+      YOUTUBE_STREAM_KEY: ${YOUTUBE_STREAM_KEY:?set in channels/{{ channel }}/.env}
+      ENCODER: ${ENCODER:-{{ encoder | default('libx264') }}}
+      RESOLUTION: ${RESOLUTION:-720p}
+      FPS: ${FPS:-30}
+      # ipc:// on tmpfs, not tcp://. A published ZMQ port is a remote kill surface.
+      ZMQ_ADDRESS: ipc:///run/ambient/zmq.sock
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      TZ: ${TZ:-UTC}
+    volumes:
+      - {{ repo_root }}/ffmpeg:/opt/ambient:ro
+      - {{ repo_root }}/plugins:/opt/ambient/plugins:ro
+      - {{ common_dir }}:/media/common:ro
+      - {{ channel_dir }}:/media/channel:ro
+      - {{ log_dir }}:/var/log/ambient
+    tmpfs:
+      # now.json, progress, zmq.sock, health.json. Not persisted — it is a cache
+      # of what the process is doing now, never a source of truth.
+      - /run/ambient:mode=0755,size=64m
+    deploy:
+      resources:
+        limits:
+          # Real requirements, not decoration: 8 channels on one host means the
+          # host must refuse to oversubscribe itself into a sub-1.0x stream.
+          cpus: "${CHANNEL_CPU_LIMIT:-2.0}"
+          memory: ${CHANNEL_MEMORY_LIMIT:-2g}
+{%- if encoder == 'h264_nvenc' %}
+        reservations:
+          devices:
+            - driver: nvidia
+              # Pinned by UUID or index so channels do not all land on card 0.
+              device_ids: ["${NVIDIA_DEVICE_ID:-0}"]
+              capabilities: [gpu, video]
+{%- elif encoder == 'h264_qsv' %}
+    # QSV needs a real render node. Not available on Docker Desktop / WSL2 —
+    # /dev/dri is not exposed there. Bare-metal Linux only.
+    devices:
+      - /dev/dri:/dev/dri
+{%- endif %}
+    depends_on:
+      {{ channel }}-liquidsoap:
+        condition: service_started
+
+networks:
+  ambient:
+    # Created by the global stack. Channels join it; they never create it.
+    external: true
+    name: ambient

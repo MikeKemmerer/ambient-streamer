@@ -13,7 +13,7 @@
 # HLS reuses those same path names, so the preview is served here as
 #   http://mediamtx:8888/<channel>/preview/index.m3u8
 # and the backend re-exposes it to operators as
-#   http://<host>:8080/<channel>/preview/index.m3u8
+#   http://<host>:8090/<channel>/preview/index.m3u8
 
 ###############################################
 # Global
