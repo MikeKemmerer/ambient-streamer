@@ -1,0 +1,13 @@
+{
+  "name": "showfreqs-bars",
+  "display_name": "Spectrum Bars",
+  "description": "Frequency spectrum drawn as vertical bars, log-scaled on both axes.",
+  "version": "1.0.0",
+  "author": "ambient-streamer",
+  "commandable": [],
+  "cost": {
+    "cores_720p30": 0.24,
+    "scale_1080p": 1.9
+  },
+  "requires_filters": ["showfreqs"]
+}

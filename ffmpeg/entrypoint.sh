@@ -1,0 +1,223 @@
+#!/usr/bin/env bash
+# Compositor entrypoint: slideshow producer -> FFmpeg -> MediaMTX (full + preview).
+#
+# This process must run for the life of the channel. A restart is a new YouTube
+# ingest session, so nothing here may depend on relaunching FFmpeg: images
+# arrive on image2pipe, colours change over zmq, plugins switch via streamselect.
+#
+# See docs/contracts/{audio-transport,slideshow,plugin,zmq-control}.md and the
+# youtube-ingest skill. Encoder flags are verbatim from that skill.
+set -euo pipefail
+
+RED=$'\033[0;31m'; GRN=$'\033[0;32m'; YLW=$'\033[0;33m'; BLU=$'\033[0;34m'; NC=$'\033[0m'
+log()  { printf '%s[..]%s composer %s\n' "$BLU" "$NC" "$*" >&2; }
+ok()   { printf '%s[ok]%s composer %s\n' "$GRN" "$NC" "$*" >&2; }
+warn() { printf '%s[!!]%s composer %s\n' "$YLW" "$NC" "$*" >&2; }
+die()  { printf '%s[XX]%s composer %s\n' "$RED" "$NC" "$*" >&2; exit 1; }
+
+# ---------------------------------------------------------------- environment
+CHANNEL_NAME="${CHANNEL_NAME:-}"
+[[ -n "$CHANNEL_NAME" ]] || die "CHANNEL_NAME is required"
+
+WIDTH="${WIDTH:-1280}"
+HEIGHT="${HEIGHT:-720}"
+FPS="${FPS:-30}"
+PRODUCER_FPS="${PRODUCER_FPS:-10}"
+ENCODER="${ENCODER:-libx264}"
+PRESET="${X264_PRESET:-veryfast}"
+
+ICECAST_HOST="${ICECAST_HOST:-icecast}"
+ICECAST_PORT="${ICECAST_PORT:-8081}"
+CHANNEL_MOUNT="${CHANNEL_MOUNT:-/${CHANNEL_NAME}}"
+AUDIO_URL="${AUDIO_URL:-http://${ICECAST_HOST}:${ICECAST_PORT}${CHANNEL_MOUNT}}"
+
+RELAY_RTMP="${RELAY_RTMP:-rtmp://mediamtx:1935}"
+PREVIEW_WIDTH="${PREVIEW_WIDTH:-640}"
+PREVIEW_HEIGHT="${PREVIEW_HEIGHT:-360}"
+PREVIEW_FPS="${PREVIEW_FPS:-15}"
+
+PLUGIN_DIR="${PLUGIN_DIR:-/plugins}"
+HOT_SET="${HOT_SET:-showfreqs-bars}"
+ACTIVE_PLUGIN="${ACTIVE_PLUGIN:-}"
+ACCENT="${ACCENT:-#4FC3F7}"
+VIZ_OPACITY="${VIZ_OPACITY:-0.65}"
+
+# NEVER tcp://*:5555. That default plus one malformed message is a remote kill
+# of a live encoder — see docs/contracts/zmq-control.md.
+ZMQ_BIND_HOST="${ZMQ_BIND_HOST:-127.0.0.1}"
+ZMQ_BIND_PORT="${ZMQ_BIND_PORT:-5555}"
+
+RUN_DIR="${RUN_DIR:-/run/ambient/${CHANNEL_NAME}}"
+PROGRESS_FILE="${PROGRESS_FILE:-${RUN_DIR}/progress}"
+GRAPH_FILE="${RUN_DIR}/filtergraph.txt"
+FIFO="${RUN_DIR}/slides.pipe"
+
+PYTHON_BIN="${PYTHON_BIN:-python3}"
+SLIDESHOW_BIN="${SLIDESHOW_BIN:-$(dirname "$0")/slideshow.py}"
+FFMPEG_BIN="${FFMPEG_BIN:-ffmpeg}"
+FFMPEG_LOGLEVEL="${FFMPEG_LOGLEVEL:-level+warning}"
+
+PRODUCER_PID=""
+FFMPEG_PID=""
+
+cleanup() {
+  local rc=$?
+  trap - EXIT INT TERM
+  for pid in "$FFMPEG_PID" "$PRODUCER_PID"; do
+    [[ -n "$pid" ]] || continue
+    kill -INT "$pid" 2>/dev/null || true
+  done
+  for _ in $(seq 1 20); do
+    local live=0
+    for pid in "$FFMPEG_PID" "$PRODUCER_PID"; do
+      [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null && live=1
+    done
+    [[ "$live" == 0 ]] && break
+    sleep 0.25
+  done
+  for pid in "$FFMPEG_PID" "$PRODUCER_PID"; do
+    [[ -n "$pid" ]] && kill -9 "$pid" 2>/dev/null || true
+  done
+  [[ -p "$FIFO" ]] && unlink "$FIFO" 2>/dev/null || true
+  log "cleaned up (rc=$rc)"
+  exit "$rc"
+}
+trap cleanup EXIT INT TERM
+
+# ------------------------------------------------------------- bitrate ladder
+# youtube-ingest skill. Bufsize is always 2x video bitrate.
+ladder() {
+  case "$1" in
+    [0-9]*) : ;;
+    *) die "ladder: bad height '$1'" ;;
+  esac
+  if   (( $1 <= 144  )); then echo "400k 800k 96k"
+  elif (( $1 <= 240  )); then echo "700k 1400k 96k"
+  elif (( $1 <= 360  )); then echo "1000k 2000k 128k"
+  elif (( $1 <= 480  )); then echo "1500k 3000k 128k"
+  elif (( $1 <= 720  )); then echo "3000k 6000k 128k"
+  elif (( $1 <= 1080 )); then echo "5000k 10000k 192k"
+  elif (( $1 <= 1440 )); then echo "8000k 16000k 192k"
+  else                        echo "16000k 32000k 256k"
+  fi
+}
+
+read -r RATE BUFSIZE AUDIO_BR <<<"$(ladder "$HEIGHT")"
+read -r P_RATE P_BUFSIZE P_AUDIO_BR <<<"$(ladder "$PREVIEW_HEIGHT")"
+GOP=$(( FPS * 2 ))
+P_GOP=$(( PREVIEW_FPS * 2 ))
+
+# --------------------------------------------------------------------- plugins
+# ffmpeg takes colours as 0xRRGGBB; '#' is a filtergraph escaping problem.
+ACCENT_FF="0x${ACCENT#\#}"
+
+IFS=',' read -r -a PLUGINS <<<"$HOT_SET"
+(( ${#PLUGINS[@]} > 0 )) || die "HOT_SET is empty"
+
+AVAILABLE_FILTERS="$("$FFMPEG_BIN" -hide_banner -loglevel error -filters </dev/null | awk '{print $2}')"
+
+ACTIVE_INDEX=0
+VIZ_FRAGMENTS=""
+VIZ_LABELS=""
+for i in "${!PLUGINS[@]}"; do
+  name="${PLUGINS[$i]}"
+  frag="${PLUGIN_DIR}/${name}/viz.ffmpeg"
+  manifest="${PLUGIN_DIR}/${name}/config.json"
+  [[ -f "$frag" ]] || die "plugin '$name' has no viz.ffmpeg at $frag"
+  [[ -f "$manifest" ]] || die "plugin '$name' has no config.json"
+
+  # The exact-size rule: FFmpeg silently corrupts a mis-sized branch, exit 0,
+  # no error. A fragment that does not take its size from the channel cannot
+  # be proven correct, so refuse it.
+  grep -q '\${WIDTH}' "$frag" && grep -q '\${HEIGHT}' "$frag" \
+    || die "plugin '$name' does not derive its size from \${WIDTH}x\${HEIGHT}"
+
+  while read -r required; do
+    [[ -n "$required" ]] || continue
+    grep -qx "$required" <<<"$AVAILABLE_FILTERS" \
+      || die "plugin '$name' requires filter '$required', absent from this build"
+  done < <("$PYTHON_BIN" -c 'import json,sys;print("\n".join(json.load(open(sys.argv[1])).get("requires_filters",[])))' "$manifest")
+
+  [[ "$name" == "$ACTIVE_PLUGIN" ]] && ACTIVE_INDEX="$i"
+
+  body="$(tr '\n' ' ' < "$frag" | sed 's/  */ /g; s/^ //; s/ $//')"
+  body="${body//\$\{WIDTH\}/$WIDTH}"
+  body="${body//\$\{HEIGHT\}/$HEIGHT}"
+  body="${body//\$\{FPS\}/$FPS}"
+  body="${body//\$\{ACCENT\}/$ACCENT_FF}"
+  body="${body//\$\{OUT\}/viz$i}"
+  VIZ_FRAGMENTS+="${body};"
+  VIZ_LABELS+="[viz$i]"
+done
+ok "plugins: ${HOT_SET} (active index ${ACTIVE_INDEX}, ${#PLUGINS[@]} hot branches)"
+
+# ----------------------------------------------------------------- filtergraph
+# Written to a file so neither bash nor the filtergraph tokenizer has to survive
+# the zmq bind_address escaping, which needs two levels.
+mkdir -p "$RUN_DIR"
+{
+  # Input 0 is audio so a plugin fragment's literal [0:a] is correct as written.
+  printf '%s' "[1:v]fps=${FPS}:start_time=0,realtime,"
+  printf '%s' "zmq@ctl=bind_address=tcp\\\\://${ZMQ_BIND_HOST}\\\\:${ZMQ_BIND_PORT},"
+  # eval=frame is not commandable, so it can only be set here.
+  printf '%s' "eq@eq=eval=frame:contrast=1:brightness=0:saturation=1,"
+  printf '%s' "hue@hue=h=0,format=yuv420p,setsar=1[base];"
+  printf '%s' "$VIZ_FRAGMENTS"
+  # streamselect rejects inputs=1 (range is 2..INT_MAX), so a single hot plugin
+  # has no selector — there is nothing to switch to. See the report to the lead.
+  if (( ${#PLUGINS[@]} > 1 )); then
+    printf '%s' "${VIZ_LABELS}streamselect@sel=inputs=${#PLUGINS[@]}:map=${ACTIVE_INDEX}[viz];"
+  else
+    printf '%s' "[viz0]null[viz];"
+  fi
+  printf '%s' "[base][viz]blend=all_mode=screen:all_opacity=${VIZ_OPACITY},format=yuv420p[vfull];"
+  printf '%s' "[vfull]split=2[vmain][vpre];"
+  printf '%s' "[vpre]scale=${PREVIEW_WIDTH}:${PREVIEW_HEIGHT}:flags=fast_bilinear,fps=${PREVIEW_FPS}[vpreview];"
+  printf '%s' "[0:a]aresample=44100:async=1000:first_pts=0,loudnorm=I=-14:TP=-1:LRA=11,asplit=2[amain][apreview]"
+} > "$GRAPH_FILE"
+log "filtergraph -> $GRAPH_FILE ($(wc -c < "$GRAPH_FILE") bytes)"
+
+# -------------------------------------------------------------------- producer
+[[ -p "$FIFO" ]] || mkfifo "$FIFO"
+"$PYTHON_BIN" "$SLIDESHOW_BIN" \
+  --width "$WIDTH" --height "$HEIGHT" --fps "$PRODUCER_FPS" \
+  --zmq-endpoint "tcp://${ZMQ_BIND_HOST}:${ZMQ_BIND_PORT}" \
+  > "$FIFO" &
+PRODUCER_PID=$!
+ok "producer pid $PRODUCER_PID at ${PRODUCER_FPS} fps, ${WIDTH}x${HEIGHT}"
+
+# ------------------------------------------------------------------- compositor
+# -reconnect_on_network_error 1 is MANDATORY: compose starts both containers at
+# once, so the first connect always finds nothing listening and plain
+# -reconnect only covers a drop mid-stream.
+# -probesize/-analyzeduration: without them FFmpeg takes 8.4 s to first sample.
+# stdin is the producer FIFO, never a terminal, so </dev/null is not used here.
+"$FFMPEG_BIN" -nostdin -hide_banner -loglevel "$FFMPEG_LOGLEVEL" \
+  -progress "$PROGRESS_FILE" \
+  -probesize 32k -analyzeduration 500000 \
+  -reconnect 1 -reconnect_streamed 1 -reconnect_on_network_error 1 \
+  -reconnect_delay_max 5 \
+  -i "$AUDIO_URL" \
+  -f image2pipe -framerate "$PRODUCER_FPS" -i pipe:0 \
+  -filter_complex_script "$GRAPH_FILE" \
+  -map '[vmain]' -map '[amain]' \
+    -c:v "$ENCODER" -preset "$PRESET" -r "$FPS" -fps_mode cfr \
+    -b:v "$RATE" -minrate "$RATE" -maxrate "$RATE" -bufsize "$BUFSIZE" \
+    -g "$GOP" -keyint_min "$GOP" -sc_threshold 0 \
+    -x264-params "nal-hrd=cbr:force-cfr=1" -pix_fmt yuv420p \
+    -c:a aac -b:a "$AUDIO_BR" -ar 44100 \
+    -f flv "${RELAY_RTMP}/${CHANNEL_NAME}" \
+  -map '[vpreview]' -map '[apreview]' \
+    -c:v "$ENCODER" -preset "$PRESET" -r "$PREVIEW_FPS" -fps_mode cfr \
+    -b:v "$P_RATE" -minrate "$P_RATE" -maxrate "$P_RATE" -bufsize "$P_BUFSIZE" \
+    -g "$P_GOP" -keyint_min "$P_GOP" -sc_threshold 0 \
+    -x264-params "nal-hrd=cbr:force-cfr=1" -pix_fmt yuv420p \
+    -c:a aac -b:a "$P_AUDIO_BR" -ar 44100 \
+    -f flv "${RELAY_RTMP}/${CHANNEL_NAME}/preview" \
+  < "$FIFO" &
+FFMPEG_PID=$!
+ok "ffmpeg pid $FFMPEG_PID -> ${RELAY_RTMP}/${CHANNEL_NAME} (+ /preview)"
+
+# Producer death closes the FIFO, so waiting on FFmpeg covers both halves of
+# the supervised unit. Any exit is a fault; the supervisor decides what next.
+wait "$FFMPEG_PID"
