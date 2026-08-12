@@ -134,7 +134,7 @@ bumpers:
     - common/bumpers/station-id.mp3
 
 schedule:
-  timezone: America/Los_Angeles
+  timezone: UTC
   rules: []                  # see preset.md
 ```
 

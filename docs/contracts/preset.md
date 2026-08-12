@@ -81,7 +81,7 @@ not know when it applies.
 
 ```yaml
 schedule:
-  timezone: America/Los_Angeles
+  timezone: UTC
   rules:
     - name: morning
       when: "06:00-11:00"

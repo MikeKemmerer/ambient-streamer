@@ -298,7 +298,7 @@ BACKEND_PORT="$(env_value AMBIENT_BACKEND_PORT)"
 HLS_PUBLISH="$(env_value AMBIENT_HLS_PUBLISH)"
 
 # Which container publishes this port, if any. Named so the message can say
-# "held by dizquetv" instead of "address already in use".
+# which container holds it rather than a bare "address already in use".
 docker_holder() {
 	docker ps --format '{{.Names}}\t{{.Ports}}' 2>/dev/null \
 		| awk -F'\t' -v port="$1" '$2 ~ (":" port "->") { print $1 }' \

@@ -8,6 +8,11 @@ Implements docs/contracts/rest-api.md. Two rules shape the module:
   other than loopback.
 * **A request that changes what is on air returns 202 and emits SSE.** It never
   blocks on the media pipeline.
+
+The operator UI is served from `AMBIENT_FRONTEND_DIR` at `/`, mounted last so it
+cannot shadow an API route, and unauthenticated because a browser cannot attach a
+bearer token to the navigation that fetches the page. The token guards `/api/*`,
+which is where the privilege lives; the assets themselves hold no secrets.
 """
 
 from __future__ import annotations
@@ -32,6 +37,7 @@ from urllib.parse import urlsplit
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException
 
 from .config import (
@@ -54,6 +60,8 @@ LOG = logging.getLogger("ambient.main")
 
 DEFAULT_BIND_ADDRESS = "127.0.0.1"
 DEFAULT_PORT = 8090
+# Where docker/Dockerfile.backend bakes frontend/ and points AMBIENT_FRONTEND_DIR.
+IMAGE_FRONTEND_DIR = Path("/opt/ambient/frontend")
 LOOPBACK = frozenset({"127.0.0.1", "::1", "localhost"})
 RELAY_API_PORT = 9997
 RELAY_TIMEOUT = 2.0
@@ -259,6 +267,30 @@ def repo_root(explicit: Path | str | None = None) -> Path:
     return Path(__file__).resolve().parents[2]
 
 
+def resolve_frontend_dir(root: Path) -> Path:
+    """`AMBIENT_FRONTEND_DIR`, else the baked image path, else the checkout."""
+    explicit = _env("AMBIENT_FRONTEND_DIR")
+    if explicit:
+        return Path(explicit).expanduser().resolve()
+    if IMAGE_FRONTEND_DIR.is_dir():
+        return IMAGE_FRONTEND_DIR
+    return (root / "frontend").resolve()
+
+
+def mount_frontend(app: FastAPI, directory: Path) -> bool:
+    """Mount the UI at `/`. Call last: this route matches every unclaimed path."""
+    if not directory.is_dir():
+        LOG.warning(
+            "operator UI not served: %s is not a directory. The API is unaffected; "
+            "set AMBIENT_FRONTEND_DIR to the frontend/ directory to serve it.",
+            directory,
+        )
+        return False
+    app.mount("/", StaticFiles(directory=directory, html=True), name="frontend")
+    LOG.info("serving the operator UI from %s", directory)
+    return True
+
+
 def create_app(root: Path | str | None = None) -> FastAPI:
     from .api import bumpers, channels, looks, media, system
 
@@ -354,6 +386,8 @@ def create_app(root: Path | str | None = None) -> FastAPI:
     app.include_router(media.router)
     app.include_router(looks.router)
     app.include_router(bumpers.router)
+    # Last, so every route above wins the match before the catch-all mount.
+    mount_frontend(app, resolve_frontend_dir(resolved_root))
     return app
 
 

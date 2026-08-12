@@ -74,6 +74,13 @@ def request(method: str, path: str, body=None, token: str | None = TOKEN):
 
 CASES = [
     ("GET", "/api/health", None, 200, None),
+    # The operator UI: unauthenticated on purpose — a browser cannot attach a
+    # bearer token to the navigation that fetches the page.
+    ("GET", "/", None, 200, None),
+    ("GET", "/style.css", None, 200, None),
+    ("GET", "/app.js", None, 200, None),
+    ("GET", "/nope.js", None, 404, None),
+    ("GET", "/%2e%2e%2f.env", None, 404, None),
     ("GET", "/api/channels", None, 401, None),
     ("GET", "/api/channels", None, 200, TOKEN),
     ("GET", "/api/channels/lofi", None, 200, TOKEN),
@@ -123,6 +130,14 @@ def sse_probe() -> tuple[int, str]:
         return response.status, first
 
 
+def frontend_probe() -> tuple[int, str, bool]:
+    req = urllib.request.Request(BASE + "/")
+    with urllib.request.urlopen(req, timeout=10) as response:
+        body = response.read().decode("utf-8", "replace")
+        ctype = response.headers.get("Content-Type", "")
+        return response.status, ctype, "<!DOCTYPE html>" in body
+
+
 def main() -> int:
     workdir = Path(tempfile.mkdtemp(prefix="ambient-smoke-"))
     build_repo(workdir)
@@ -131,6 +146,8 @@ def main() -> int:
         "AMBIENT_API_TOKEN": TOKEN,
         "AMBIENT_BIND_ADDRESS": "127.0.0.1",
         "AMBIENT_ROOT": str(workdir),
+        # The repo's own frontend/, not the baked image path, which is absent here.
+        "AMBIENT_FRONTEND_DIR": str(ROOT / "frontend"),
         "PATH": os.environ["PATH"] + ":" + str(workdir / "bin"),
     }
     # A stub `docker` so lifecycle calls have something to talk to.
@@ -173,7 +190,12 @@ def main() -> int:
         failures += 0 if sse_ok else 1
         print(f"{'ok  ' if sse_ok else 'FAIL'} {status:>3} (want 200) GET    /api/events -> {first!r}")
 
-        print(f"\n{len(CASES) + 1} requests, {failures} failure(s)")
+        status, ctype, is_html = frontend_probe()
+        ui_ok = status == 200 and ctype.startswith("text/html") and is_html
+        failures += 0 if ui_ok else 1
+        print(f"{'ok  ' if ui_ok else 'FAIL'} {status:>3} (want 200) GET    / -> {ctype!r} html={is_html}")
+
+        print(f"\n{len(CASES) + 2} requests, {failures} failure(s)")
         return 1 if failures else 0
     finally:
         server.terminate()
