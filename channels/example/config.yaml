@@ -1,0 +1,62 @@
+# ambient-streamer — per-channel live configuration
+#
+# Copy into a channel directory and edit:
+#   cp channels/example/config.yaml channels/lofi/config.yaml
+#
+# Everything here can be changed on a running channel without interrupting the
+# stream, with two exceptions marked below. Secrets and anything needing a
+# container recreated live in channels/<name>/.env instead.
+#
+# See docs/contracts/config.md.
+
+version: 1
+name: example
+genre: "ambient"
+
+audio:
+  # Ordered. Paths are relative to the repo root and may draw from common/ and
+  # from this channel's own directory. Anything outside both is rejected: it is
+  # not mounted into the container and would silently fail to open.
+  tracks:
+    - common/audio/example-track.mp3
+  shuffle: false
+  crossfade_seconds: 5.0
+
+images:
+  slides:
+    - common/images/example-slide.jpg
+  order: sequential           # sequential | shuffle
+  hold_seconds: 20.0
+  fade_seconds: 2.0
+
+visualisation:
+  active: showfreqs-bars
+
+  # Every plugin listed here is instantiated at launch so it can be switched to
+  # with no restart. Idle branches cost ~0.2-0.25 cores each at 720p, so this
+  # is a CPU budget rather than a list of preferences.
+  #
+  # CHANGING hot_set REQUIRES A COMPOSITOR RESTART — the filtergraph is fixed
+  # at launch. Changing `active` does not.
+  hot_set:
+    - showfreqs-bars
+
+colour:
+  mode: automatic             # automatic | manual
+  manual:
+    accent: "#4FC3F7"
+    tint: "#101820"
+  transition_seconds: 2.0
+
+preset: null                  # a preset name, or null to use the values above
+
+bumpers:
+  enabled: false
+  mode: tracks                # tracks | time | both
+  every_tracks: 4
+  every_minutes: 20
+  sources: []
+
+schedule:
+  timezone: America/Los_Angeles
+  rules: []

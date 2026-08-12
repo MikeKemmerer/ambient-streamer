@@ -1,0 +1,135 @@
+# Contract — On-disk layout and runtime state
+
+Owner: lead. Consumers: all lanes.
+
+## Host layout
+
+```
+ambient-streamer/
+├── .env                          secrets + docker-time settings   (gitignored)
+├── ambient.yaml                  global live config               (gitignored)
+├── common/
+│   ├── audio/  images/  bumpers/{,beds/}
+│   └── profiles/<image>.json     colour profiles for shared images
+└── channels/<name>/
+    ├── .env                      stream key + channel settings    (gitignored)
+    ├── config.yaml               channel live config              (gitignored)
+    ├── bumpers.yaml              bumper source text               (TRACKED)
+    ├── audio/  images/  bumpers/
+    ├── profiles/<image>.json     profiles for this channel's images
+    ├── playlist.m3u              generated
+    ├── images.list               generated
+    └── docker-compose.yml        generated — never hand-edited
+```
+
+`bumpers.yaml` is the only tracked file in a channel directory: it is small,
+human-written, and the generated audio can always be recreated from it.
+
+## Container mounts
+
+| Host | Container | Mode |
+|---|---|---|
+| `common/` | `/media/common` | ro |
+| `channels/<name>/` | `/media/channel` | ro |
+| `${AMBIENT_LOG_DIR}/<name>/` | `/var/log/ambient` | rw |
+| tmpfs | `/run/ambient` | rw |
+
+Media is mounted read-only. Nothing in the streaming path should ever write to
+it, and enforcing that at the mount catches the mistake early.
+
+**Media must be on a local filesystem.** A CIFS/NFS mount, or a Windows drive
+under `/mnt/c` on Docker Desktop, adds a network or 9p round trip to every read
+and will stall a 24/7 stream.
+
+## Colour profile
+
+`<name>.json`, one per image, beside the image tree it belongs to.
+
+```json
+{
+  "version": 1,
+  "source": "common/images/forest.jpg",
+  "extracted_at": "2026-08-11T22:04:00Z",
+  "extractor": "pillow-kmeans-v1",
+  "dominant": "#2E4A3B",
+  "accent": "#8FD6A8",
+  "palette": ["#2E4A3B", "#8FD6A8", "#0F1A14", "#C9E4D2", "#5A7A66"],
+  "brightness": 0.34,
+  "warmth": -0.42,
+  "mood": "calm"
+}
+```
+
+| Field | Range | Meaning |
+|---|---|---|
+| `brightness` | 0.0–1.0 | mean perceived luminance |
+| `warmth` | −1.0–1.0 | negative cool, positive warm |
+| `mood` | enum | `calm` `warm` `cool` `energetic` |
+| `extractor` | string | which implementation produced this |
+
+`extractor` is versioned so profiles can be regenerated when the algorithm
+changes without guessing which are stale. A profile whose `extractor` is
+unknown to the running backend is treated as absent and re-extracted.
+
+Profiles are derived data and gitignored. Deleting them is always safe.
+
+## HLS preview
+
+MediaMTX does **not** transcode, so the low-resolution preview is a second
+output from the compositor, published to a separate relay path.
+
+| | Path |
+|---|---|
+| Program | `rtmp://mediamtx:1935/<channel>` |
+| Preview | `rtmp://mediamtx:1935/<channel>/preview` |
+| Preview HLS | `http://mediamtx:8888/<channel>/preview/index.m3u8` |
+| Operator URL | `http://<host>:8090/<channel>/preview/index.m3u8` |
+
+The backend proxies the operator URL. MediaMTX publishes no host ports —
+keeping the relay and the ZMQ sockets off the LAN is the point.
+
+## Logs
+
+```
+/var/log/ambient/<channel>/{compositor,liquidsoap,producer,watchdog}.log
+```
+
+Every process writes to **both** its log file and stdout. Files give the UI
+something to tail; stdout keeps `docker logs` and the container runtime's own
+tooling working. Neither alone is sufficient.
+
+Rotation is required — a 24/7 compositor at default FFmpeg verbosity will fill
+a disk. Rotate by size, keep a bounded number of files.
+
+## Runtime state
+
+`/run/ambient/<channel>/` — tmpfs, not persisted. State here is a cache of what
+the process is doing now, never a source of truth.
+
+| File | Contents |
+|---|---|
+| `now.json` | current track, next track, current slide, active plugin, started_at |
+| `progress` | FFmpeg `-progress` output — **the watchdog's primary input** |
+| `zmq.sock` | control socket address for this channel |
+| `health.json` | last watchdog verdict and timestamp |
+
+### Why `progress` is the primary signal
+
+Both dangerous failure modes are invisible to a process check:
+
+- A stalled producer leaves FFmpeg **alive** at 0.44x while YouTube starves.
+- A dead producer makes FFmpeg exit **rc=0**, which looks like success.
+
+So: health is `out_time` advancing in step with wallclock and `speed` sustained
+at ≥0.97. **Any** compositor exit is a fault regardless of exit code. `drop` and
+`dup` are not usable — both stay at 0 through the burst-pacing failure.
+
+## Restarts
+
+Only two changes require a compositor restart: `visualisation.hot_set` and
+anything in `.env`. Both must be **make-before-break** — start the replacement,
+let it claim the relay path, then stop the old one.
+
+**Measured:** kill-then-restart costs 5.14 s on the YouTube leg;
+make-before-break costs 1.03 s. Neither is zero, and no configuration makes
+them zero, which is why the design avoids restarts rather than optimising them.
