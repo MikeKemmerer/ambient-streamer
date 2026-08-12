@@ -7,6 +7,7 @@ CFG="$(realpath "${1:-$SPIKE_DIR/../../docker/mediamtx.yml}")"
 OUT="$RESULTS_DIR/t1-config-load.txt"
 : > "$OUT"
 exec > >(tee -a "$OUT") 2>&1
+trap spike_cleanup EXIT INT TERM
 
 log "config under test: $CFG"
 log "image: $MTX_IMAGE"

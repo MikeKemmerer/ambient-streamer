@@ -8,19 +8,22 @@
 #   B  supervised loop + SIGKILL publisher, 2s restart   (what we would ship)
 #   C  bare consumer   + make-before-break takeover      (does overridePublisher spare readers?)
 #   D  fast-probe loop + make-before-break takeover      (best achievable gap)
+#
+# Variants are selected per invocation so one run stays inside the spike time budget:
+#   ./t4-restart-gap.sh A C
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
+VARIANTS=("${@:-A}")
 OUT="$RESULTS_DIR/t4-restart-gap.txt"
-: > "$OUT"
 exec > >(tee -a "$OUT") 2>&1
-trap spike_cleanup EXIT
+trap spike_cleanup EXIT INT TERM
 
 relay_up
 ensure_beds
 CH="spike01"
 YTPATH="live"
-WINDOW=22
+WINDOW=16
 
 start_consumer() { # start_consumer <mode> <logfile> -> pid
   case "$1" in
@@ -79,7 +82,7 @@ run_variant() { # run_variant <name> <consumer-mode> <break-mode>
     echo "old_composer_killed $(now_ms)" >> "$marks"
   fi
 
-  sleep 6
+  sleep 4
   local alive="DEAD"
   kill -0 "$cons" 2>/dev/null && alive="ALIVE"
   echo "  consumer process after the break: $alive"
@@ -96,13 +99,17 @@ run_variant() { # run_variant <name> <consumer-mode> <break-mode>
   eval "RESULT_$name='$alive'"
 }
 
-run_variant A bare      kill
-run_variant B loop      kill
-run_variant C bare      takeover
-run_variant D loop-fast takeover
+for v in "${VARIANTS[@]}"; do
+  case "$v" in
+    A) run_variant A bare      kill ;;
+    B) run_variant B loop      kill ;;
+    C) run_variant C bare      takeover ;;
+    D) run_variant D loop-fast takeover ;;
+    *) die "unknown variant '$v'" ;;
+  esac
+done
 
 echo
-echo "bare-consumer survival:  publisher-kill=$RESULT_A   overridePublisher-takeover=$RESULT_C"
 echo "--- relay log (publisher/reader lifecycle) ---"
 docker compose -p "$PROJECT" -f "$SPIKE_DIR/docker-compose.yml" logs --no-color relay 2>&1 \
   | grep -E 'is publishing|is reading|closing existing|closed:' | tail -30

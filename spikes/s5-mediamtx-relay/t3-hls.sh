@@ -6,7 +6,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 OUT="$RESULTS_DIR/t3-hls.txt"
 : > "$OUT"
 exec > >(tee -a "$OUT") 2>&1
-trap spike_cleanup EXIT
+trap spike_cleanup EXIT INT TERM
 
 relay_up
 ensure_beds

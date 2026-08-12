@@ -76,10 +76,18 @@ kill_tracked() {
 }
 
 # Only ever touches processes this spike started and the ambient-spike compose project.
+# Containers are torn down here too: an interrupted spike must not leave relays running on
+# a shared host.
 spike_cleanup() {
   kill_tracked
   pkill -f 'ffmpeg.*ambient-spike-tag' 2>/dev/null || true
+  pkill -f 'poll-path.py' 2>/dev/null || true
+  docker rm -f ambient-spike-cfgcheck ambient-spike-neg >/dev/null 2>&1 || true
+  relay_down
 }
+
+# Installed at source time so no script can forget it, including on Ctrl-C or SIGTERM.
+trap spike_cleanup EXIT INT TERM
 
 relay_up() { # relay_up [config-file-relative-to-spike-dir]
   local cfg="${1:-../../docker/mediamtx.yml}"
