@@ -7,7 +7,6 @@ blocks on the media pipeline.
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 import re
 from pathlib import Path
@@ -38,7 +37,7 @@ from ..models import (
 )
 from ..supervisor import ChannelBusy
 from ..watchdog import Verdict, parse_progress
-from .deps import Authed, recompile, run_action, save_channel_config
+from .deps import Authed, parse_now_json, recompile, run_action, save_channel_config
 
 router = APIRouter(prefix="/api/channels", tags=["channels"])
 
@@ -83,20 +82,6 @@ class ResolutionBody(StrictModel):
 # --------------------------------------------------------------------------
 
 
-def _now_json(text: str) -> dict[str, Any]:
-    text = text.strip()
-    if not text:
-        return {}
-    start = text.find("{")
-    if start < 0:
-        return {}
-    try:
-        value = json.loads(text[start:])
-    except json.JSONDecodeError:
-        return {}
-    return value if isinstance(value, dict) else {}
-
-
 def _pick(source: dict[str, Any], *keys: str) -> Any:
     for key in keys:
         if source.get(key) not in (None, ""):
@@ -132,7 +117,11 @@ async def channel_status(
         health = Health.DISCONNECTED
         run_state = containers.state
 
-    now = _now_json(await state.supervisor.read_run_file(name, "now.json")) if detail else {}
+    now = (
+        parse_now_json(await state.supervisor.read_run_file(name, "now.json"))
+        if detail
+        else {}
+    )
 
     body: dict[str, Any] = {
         "name": name,
@@ -141,8 +130,9 @@ async def channel_status(
         "current_track": _pick(now, "current_track", "track"),
         "next_track": _pick(now, "next_track"),
         "current_slide": _pick(now, "current_slide", "slide"),
-        "visualization": _pick(now, "visualization", "active_plugin")
-        or channel.config.visualization.active,
+        # From the config, not now.json: a streamselect switch deliberately does
+        # not restart the composer, so now.json's copy is frozen at boot.
+        "visualization": channel.config.visualization.active,
         "encoder": _pick(now, "encoder") or channel.encoder.value,
         "encoder_requested": channel.encoder.value,
         "fps": sample.fps if sample else 0.0,

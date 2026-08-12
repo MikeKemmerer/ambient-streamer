@@ -105,6 +105,26 @@ services:
       # the channel's whole visualization selection is silently ignored.
       ACTIVE_PLUGIN: "{{ active_plugin }}"
       HOT_SET: "{{ hot_set }}"
+      # Without the mode the producer cannot tell a manual color from one it
+      # derived, and overwrites the operator's choice at the next slide.
+      # The hex values must stay quoted: bare `#4FC3F7` is a YAML comment.
+      COLOR_MODE: "{{ color_mode }}"
+      COLOR_ACCENT: "{{ color_accent }}"
+      COLOR_TINT: "{{ color_tint }}"
+      COLOR_TRANSITION_SECONDS: "{{ color_transition_seconds }}"
+      # A filtergraph is fixed at launch, so a manual color starts baked in
+      # rather than being reapplied after every composer restart.
+      COLOR_INIT_HUE: "{{ color_init_hue }}"
+      COLOR_INIT_SATURATION: "{{ color_init_saturation }}"
+      COLOR_INIT_BRIGHTNESS: "{{ color_init_brightness }}"
+{%- if color_mode == 'manual' %}
+      # Plugins bake their accent at launch, so a manual channel would render a
+      # correctly tinted image behind default-blue bars without this.
+      ACCENT: "{{ color_accent }}"
+{%- endif %}
+      # WIDTH/HEIGHT, not RESOLUTION: the entrypoint sizes the graph from these.
+      WIDTH: "{{ width }}"
+      HEIGHT: "{{ height }}"
       RESOLUTION: ${RESOLUTION:-720p}
       FPS: ${FPS:-30}
       # ipc:// on tmpfs, not tcp://. A published ZMQ port is a remote kill surface.

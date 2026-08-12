@@ -11,12 +11,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from fastapi import APIRouter, Query, Response
 from pydantic import Field
 
+from .. import colorprofile
 from .. import plugins as plugin_registry
 from .. import presets as preset_registry
 from ..config import ResolvedChannel
@@ -25,7 +26,7 @@ from ..main import ApiError, AppState
 from ..models import ChannelConfig, ColorMode, ManualColor, StrictModel
 from ..watchdog import parse_progress
 from ..zmqctl import ZmqCommandError, ZmqValidationError, stream_select_message
-from .deps import Authed, recompile, run_action, save_channel_config
+from .deps import Authed, parse_now_json, recompile, run_action, save_channel_config
 
 LOG = logging.getLogger("ambient.api.looks")
 
@@ -219,6 +220,7 @@ async def post_preset(name: str, body: PresetBody, state: AppState = Authed) -> 
 @router.put("/channels/{name}/color")
 async def set_color(name: str, body: ColorBody, state: AppState = Authed) -> dict[str, Any]:
     channel = state.channel(name, resolve_media=False)
+    was_manual = channel.config.color.mode is ColorMode.MANUAL
     data = channel.config.model_dump(mode="json")
     color = data["color"]
     if body.mode is not None:
@@ -229,8 +231,10 @@ async def set_color(name: str, body: ColorBody, state: AppState = Authed) -> dic
         color["transition_seconds"] = body.transition_seconds
     config = ChannelConfig.model_validate(data)
     save_channel_config(channel.directory, config)
+    _publish_color_mode(state, name, config.color.mode)
 
     messages: list[str] = []
+    detail = ""
     if config.color.mode is ColorMode.MANUAL:
         messages = preset_registry.color_messages(
             config.color.manual.accent,
@@ -238,12 +242,86 @@ async def set_color(name: str, body: ColorBody, state: AppState = Authed) -> dic
             transition_seconds=config.color.transition_seconds,
             stream_time=await _stream_time(state, name),
         )
-        await _send(state, name, messages)
+    elif was_manual:
+        # The producer only re-colors on a slide change, which on a one-image
+        # channel may never come.
+        profile = await _current_slide_profile(state, channel)
+        if profile is None:
+            detail = (
+                "switched to automatic, but the current slide has no color profile; "
+                "the manual color stays until the next slide change"
+            )
+        else:
+            messages = preset_registry.color_messages(
+                profile.accent,
+                profile.dominant,
+                transition_seconds=config.color.transition_seconds,
+                stream_time=await _stream_time(state, name),
+            )
+            detail = f"switched to automatic and re-applied {profile.accent} from the current slide"
+    await _send(state, name, messages)
     return {
         "channel": name,
         "color": config.color.model_dump(mode="json"),
         "commands": messages,
+        "detail": detail,
     }
+
+
+def _publish_color_mode(state: AppState, name: str, mode: ColorMode) -> None:
+    """Tell the running producer the mode without restarting the compositor.
+
+    The producer reads `COLOR_MODE` at launch, so without this a switch to
+    manual would not stop it re-coloring until the composer restarted — the one
+    thing this design exists to avoid. The run directory is shared with the
+    container, so an atomic replace here is visible there immediately.
+    """
+    directory = state.workspace.run_dir / name
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+        target = directory / "color-mode"
+        temp = directory / "color-mode.tmp"
+        temp.write_text(f"{'manual' if mode is ColorMode.MANUAL else 'auto'}\n", encoding="utf-8")
+        temp.replace(target)
+    except OSError as exc:
+        LOG.warning("color mode for %s not published: %s", name, exc)
+
+
+async def _current_slide_profile(
+    state: AppState, channel: ResolvedChannel
+) -> colorprofile.ColorProfile | None:
+    now = parse_now_json(await state.supervisor.read_run_file(channel.name, "now.json"))
+    slide = now.get("current_slide")
+    if not isinstance(slide, str) or not slide:
+        return None
+    located = _slide_image(state, channel, slide)
+    if located is None:
+        return None
+    tree, image = located
+    return colorprofile.read_profile(colorprofile.profile_path(image, tree))
+
+
+def _slide_image(
+    state: AppState, channel: ResolvedChannel, slide: str
+) -> tuple[Path, Path] | None:
+    """now.json names a repo-relative slide; keep it inside the two media trees."""
+    parts = PurePosixPath(slide).parts
+    if slide.startswith("/") or ".." in parts:
+        return None
+    if parts[:1] == ("common",):
+        tree, relative = state.workspace.common_dir, parts[1:]
+    elif parts[:2] == ("channels", channel.name):
+        tree, relative = channel.directory, parts[2:]
+    else:
+        return None
+    if not relative:
+        return None
+    image = Path(tree, *relative)
+    try:
+        image.resolve().relative_to(Path(tree).resolve())
+    except (OSError, ValueError):
+        return None
+    return Path(tree), image
 
 
 async def apply_preset_to_channel(

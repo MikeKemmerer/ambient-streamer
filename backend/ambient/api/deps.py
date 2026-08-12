@@ -7,10 +7,11 @@ unset one as "open".
 
 from __future__ import annotations
 
+import json
 import logging
 import random
 from pathlib import Path
-from typing import Awaitable
+from typing import Any, Awaitable
 
 import yaml
 from fastapi import Depends, Request
@@ -23,6 +24,21 @@ from ..models import ChannelConfig, ChannelState
 from ..supervisor import write_compose
 
 LOG = logging.getLogger("ambient.api")
+
+
+def parse_now_json(text: str) -> dict[str, Any]:
+    """The composer's status file, read through `docker exec` and so prefixed."""
+    text = text.strip()
+    if not text:
+        return {}
+    start = text.find("{")
+    if start < 0:
+        return {}
+    try:
+        value = json.loads(text[start:])
+    except json.JSONDecodeError:
+        return {}
+    return value if isinstance(value, dict) else {}
 
 
 def get_state(request: Request) -> AppState:

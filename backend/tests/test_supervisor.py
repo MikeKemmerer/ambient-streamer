@@ -9,8 +9,18 @@ import pytest
 import yaml
 
 from ambient.config import ResolvedChannel, Workspace, load_channel, load_workspace
-from ambient.supervisor import ComposeError, render_compose, write_compose
-from tests.test_config import CHANNEL_ENV, make_repo
+from ambient.presets import color_targets
+from ambient.supervisor import ComposeError, compose_context, render_compose, write_compose
+from tests.test_config import CHANNEL_ENV, CHANNEL_YAML, make_repo
+
+MANUAL_COLOR = """\
+color:
+  mode: manual
+  manual:
+    accent: "#4FC3F7"
+    tint: "#0B2A3A"
+  transition_seconds: 4.0
+"""
 
 
 def resolve(root: Path) -> tuple[Workspace, ResolvedChannel]:
@@ -75,6 +85,31 @@ def test_qsv_encoder_renders_the_render_node(tmp_path: Path) -> None:
 def test_stream_key_is_never_baked_into_the_file(tmp_path: Path) -> None:
     workspace, channel = resolve(make_repo(tmp_path))
     assert "aaaa-bbbb-cccc-dddd-eeee" not in render_compose(workspace, channel)
+
+
+def test_manual_color_reaches_the_composer_with_its_initial_values(tmp_path: Path) -> None:
+    """Without these the producer overwrites a manual color at the next slide."""
+    config = CHANNEL_YAML.replace("color:\n  mode: automatic\n", MANUAL_COLOR)
+    workspace, channel = resolve(make_repo(tmp_path, config=config))
+    context = compose_context(workspace, channel)
+    targets = color_targets("#4FC3F7", "#0B2A3A")
+
+    assert context["color_mode"] == "manual"
+    assert context["color_accent"] == "#4FC3F7"
+    assert context["color_tint"] == "#0B2A3A"
+    assert context["color_transition_seconds"] == "4"
+    assert float(context["color_init_hue"]) == targets.hue_degrees
+    assert float(context["color_init_saturation"]) == targets.saturation
+    assert float(context["color_init_brightness"]) == targets.brightness
+
+
+def test_automatic_color_starts_the_graph_neutral(tmp_path: Path) -> None:
+    workspace, channel = resolve(make_repo(tmp_path))
+    context = compose_context(workspace, channel)
+    assert context["color_mode"] == "auto"
+    assert context["color_init_hue"] == "0"
+    assert context["color_init_saturation"] == "1"
+    assert context["color_init_brightness"] == "0"
 
 
 def test_missing_template_is_a_loud_error(tmp_path: Path) -> None:

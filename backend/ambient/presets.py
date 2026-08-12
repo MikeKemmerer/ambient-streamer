@@ -170,6 +170,10 @@ class ColorTargets:
     brightness: float
 
 
+# What an untouched filtergraph renders at, and where a ramp starts from.
+NEUTRAL_TARGETS = ColorTargets(hue_degrees=0.0, saturation=1.0, brightness=0.0)
+
+
 def color_targets(accent: str, tint: str) -> ColorTargets:
     red, green, blue = parse_hex(accent)
     hue, _lightness, saturation = colorsys.rgb_to_hls(red, green, blue)
@@ -202,7 +206,7 @@ def color_messages(
     FFmpeg with SIGABRT.
     """
     target = color_targets(accent, tint)
-    start = current or ColorTargets(hue_degrees=0.0, saturation=1.0, brightness=0.0)
+    start = current or NEUTRAL_TARGETS
     pairs = (
         (HUE_TARGET, "h", start.hue_degrees, target.hue_degrees),
         (EQ_TARGET, "saturation", start.saturation, target.saturation),

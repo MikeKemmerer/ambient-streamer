@@ -102,6 +102,8 @@ def compose_template_path(workspace: Workspace) -> Path:
 
 def compose_context(workspace: Workspace, channel: ResolvedChannel) -> dict[str, str]:
     """The variables the template declares. `image_tag` is left to its default."""
+    color = channel.config.color
+    initial = channel.color_initial
     return {
         "channel": channel.name,
         "repo_root": str(workspace.root),
@@ -118,6 +120,22 @@ def compose_context(workspace: Workspace, channel: ResolvedChannel) -> dict[str,
         "active_plugin": channel.active_plugin,
         "hot_set": ",".join(channel.hot_set),
         "run_dir": str(workspace.run_dir),
+        # The entrypoint sizes everything from WIDTH/HEIGHT; it never reads a
+        # "720p" style name, so passing only the name pins every channel to the
+        # 1280x720 default and the resolution setting does nothing.
+        "width": str(channel.width),
+        "height": str(channel.height),
+        # Without the mode the producer cannot tell a manual color from a
+        # derived one and overwrites an operator's color at the next slide.
+        "color_mode": channel.color_mode,
+        "color_accent": color.manual.accent,
+        "color_tint": color.manual.tint,
+        "color_transition_seconds": f"{color.transition_seconds:g}",
+        # The filtergraph is fixed at launch, so a manual color has to start
+        # baked into eq/hue or a composer restart resets it to neutral.
+        "color_init_hue": f"{initial.hue_degrees:g}",
+        "color_init_saturation": f"{initial.saturation:g}",
+        "color_init_brightness": f"{initial.brightness:g}",
     }
 
 
@@ -452,10 +470,10 @@ class Supervisor:
         return usage
 
     async def read_run_file(self, name: str, filename: str, *, tail_bytes: int = 8192) -> str:
-        """Read a file out of the composer's tmpfs.
+        """Read a file out of the composer's run directory.
 
-        `/run/ambient` is a tmpfs inside the container, so the backend cannot
-        reach it from the host even with the channel directory bind-mounted.
+        Read through the container rather than the host path so this still works
+        if the run directory is ever moved back inside the container.
         """
         if "/" in filename or filename.startswith("."):
             raise ValueError(f"invalid runtime filename {filename!r}")

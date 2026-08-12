@@ -10,7 +10,12 @@ import pytest
 import yaml
 
 from ambient.main import StartupRefused, check_exposure, compare_token
+from ambient.colorprofile import ColorProfile, profile_path, write_profile
+from ambient.presets import color_targets
+from ambient.supervisor import compose_context
 from tests.conftest import AUTH, RUNNING_STATE, TOKEN, eventually
+
+NOW_JSON = "lofi-composer:/run/ambient/lofi/now.json"
 
 # --------------------------------------------------------------------------
 # Authentication
@@ -340,6 +345,37 @@ def test_switching_inside_the_hot_set_is_accepted(api) -> None:
     assert body["mode"] == "streamselect"
 
 
+def test_a_hot_switch_beats_a_stale_now_json(api, repo: Path) -> None:
+    """now.json's plugin is captured at boot and a streamselect switch does not
+    restart the composer, so it names the plugin the channel started with."""
+    client, state = api
+    path = repo / "channels" / "lofi" / "config.yaml"
+    config = yaml.safe_load(path.read_text("utf-8"))
+    config["visualization"]["hot_set"] = ["showfreqs-bars", "showwaves-classic"]
+    path.write_text(yaml.safe_dump(config), "utf-8")
+    state.supervisor.runner.states["lofi-composer"] = RUNNING_STATE
+    state.supervisor.runner.files[NOW_JSON] = json.dumps(
+        {
+            "current_track": "rain-loop.mp3",
+            "current_slide": "forest.jpg",
+            "active_plugin": "showfreqs-bars",
+            "visualization": "showfreqs-bars",
+        }
+    )
+
+    switched = client.put(
+        "/api/channels/lofi/visualization", headers=AUTH, json={"active": "showwaves-classic"}
+    )
+    assert switched.status_code == 200
+    assert switched.json()["mode"] == "streamselect"
+
+    body = client.get("/api/channels/lofi", headers=AUTH).json()
+    assert body["visualization"] == "showwaves-classic"
+    # The composer still owns these.
+    assert body["current_track"] == "rain-loop.mp3"
+    assert body["current_slide"] == "forest.jpg"
+
+
 def test_applying_a_preset_returns_202(api, repo: Path) -> None:
     client, _state = api
     response = client.post("/api/channels/lofi/preset", headers=AUTH, json={"preset": "calm-ocean"})
@@ -366,7 +402,7 @@ def test_a_preset_name_cannot_traverse(api) -> None:
 
 
 def test_setting_color_persists_and_emits_validated_commands(api, repo: Path) -> None:
-    client, _state = api
+    client, state = api
     response = client.put(
         "/api/channels/lofi/color",
         headers=AUTH,
@@ -377,6 +413,85 @@ def test_setting_color_persists_and_emits_validated_commands(api, repo: Path) ->
         assert len(message.split()) == 3
     config = yaml.safe_load((repo / "channels" / "lofi" / "config.yaml").read_text("utf-8"))
     assert config["color"]["manual"]["accent"] == "#4FC3F7"
+
+    # A restart must come back up on the same color, not neutral.
+    context = compose_context(state.workspace, state.channel("lofi", resolve_media=False))
+    targets = color_targets("#4FC3F7", "#0B2A3A")
+    assert context["color_mode"] == "manual"
+    assert float(context["color_init_hue"]) == targets.hue_degrees
+    assert float(context["color_init_saturation"]) == targets.saturation
+    assert float(context["color_init_brightness"]) == targets.brightness
+
+
+def test_switching_back_to_automatic_reapplies_the_current_slide(api, repo: Path) -> None:
+    """A one-image channel may never see another slide change."""
+    client, state = api
+    slide = repo / "channels" / "lofi" / "images" / "slide.jpeg"
+    write_profile(
+        ColorProfile(
+            source="channels/lofi/images/slide.jpeg",
+            extracted_at="2026-08-11T00:00:00Z",
+            extractor="pillow-kmeans-v1",
+            dominant="#101820",
+            accent="#8FD6A8",
+            palette=["#8FD6A8"],
+            brightness=0.4,
+            warmth=-0.2,
+            mood="cool",
+        ),
+        profile_path(slide, repo / "channels" / "lofi"),
+    )
+    state.supervisor.runner.files[NOW_JSON] = json.dumps(
+        {"current_slide": "channels/lofi/images/slide.jpeg"}
+    )
+    client.put(
+        "/api/channels/lofi/color",
+        headers=AUTH,
+        json={"mode": "manual", "manual": {"accent": "#4FC3F7", "tint": "#0B2A3A"}},
+    )
+
+    response = client.put("/api/channels/lofi/color", headers=AUTH, json={"mode": "automatic"})
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["commands"]) == 3
+    assert "#8FD6A8" in body["detail"]
+    config = yaml.safe_load((repo / "channels" / "lofi" / "config.yaml").read_text("utf-8"))
+    assert config["color"]["mode"] == "automatic"
+
+
+def test_switching_to_automatic_without_a_profile_invents_no_color(api) -> None:
+    client, state = api
+    state.supervisor.runner.files[NOW_JSON] = json.dumps(
+        {"current_slide": "channels/lofi/images/slide.jpeg"}
+    )
+    client.put(
+        "/api/channels/lofi/color",
+        headers=AUTH,
+        json={"mode": "manual", "manual": {"accent": "#4FC3F7", "tint": "#0B2A3A"}},
+    )
+
+    body = client.put(
+        "/api/channels/lofi/color", headers=AUTH, json={"mode": "automatic"}
+    ).json()
+    assert body["commands"] == []
+    assert "no color profile" in body["detail"]
+
+
+def test_a_slide_outside_the_media_trees_is_not_followed(api, repo: Path) -> None:
+    client, state = api
+    state.supervisor.runner.files[NOW_JSON] = json.dumps(
+        {"current_slide": "channels/lofi/../../../etc/images/passwd.jpeg"}
+    )
+    client.put(
+        "/api/channels/lofi/color",
+        headers=AUTH,
+        json={"mode": "manual", "manual": {"accent": "#4FC3F7", "tint": "#0B2A3A"}},
+    )
+
+    body = client.put(
+        "/api/channels/lofi/color", headers=AUTH, json={"mode": "automatic"}
+    ).json()
+    assert body["commands"] == []
 
 
 def test_a_non_hex_color_is_a_400(api) -> None:

@@ -42,6 +42,36 @@ ACTIVE_PLUGIN="${ACTIVE_PLUGIN:-}"
 ACCENT="${ACCENT:-#4FC3F7}"
 VIZ_OPACITY="${VIZ_OPACITY:-0.65}"
 
+# auto: the producer derives color from each slide's profile. manual: the
+# operator owns it and the backend sends the zmq commands, so the producer must
+# stay out of the way or it overwrites them at the next slide change.
+# Unset or unrecognized is auto, which is what an older compose file expects.
+COLOR_MODE="${COLOR_MODE:-auto}"
+case "$COLOR_MODE" in
+  auto|manual) : ;;
+  *) warn "COLOR_MODE='${COLOR_MODE}' unrecognized; using auto"; COLOR_MODE=auto ;;
+esac
+
+# A filtergraph is fixed at launch, so a manual color has to start baked into
+# eq/hue: otherwise a composer restart silently drops it back to neutral. These
+# values are interpolated straight into the graph, so anything non-numeric is
+# either a launch failure or a filter injection — neutral is the safe answer.
+# Ranges are zmq-control.md's.
+color_init() {
+  local name="$1" value="$2" low="$3" high="$4" neutral="$5"
+  if [[ ! "$value" =~ ^-?([0-9]+([.][0-9]*)?|[.][0-9]+)$ ]]; then
+    warn "${name}='${value}' is not a number; using ${neutral}"
+    printf '%s' "$neutral"
+    return
+  fi
+  awk -v v="$value" -v lo="$low" -v hi="$high" \
+    'BEGIN { if (v < lo) v = lo; if (v > hi) v = hi; printf "%g", v }'
+}
+
+INIT_HUE="$(color_init COLOR_INIT_HUE "${COLOR_INIT_HUE:-0}" -360 360 0)"
+INIT_SATURATION="$(color_init COLOR_INIT_SATURATION "${COLOR_INIT_SATURATION:-1}" 0 3 1)"
+INIT_BRIGHTNESS="$(color_init COLOR_INIT_BRIGHTNESS "${COLOR_INIT_BRIGHTNESS:-0}" -1 1 0)"
+
 # now.json's started_at. Taken once here so it is the compositor's start and
 # not the producer's, which is a few seconds later.
 STARTED_AT="${COMPOSER_STARTED_AT:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
@@ -212,8 +242,8 @@ mkdir -p "$RUN_DIR"
   printf '%s' "[1:v]fps=${FPS}:start_time=0,realtime,"
   printf '%s' "zmq@ctl=bind_address=tcp\\\\://${ZMQ_BIND_HOST}\\\\:${ZMQ_BIND_PORT},"
   # eval=frame is not commandable, so it can only be set here.
-  printf '%s' "eq@eq=eval=frame:contrast=1:brightness=0:saturation=1,"
-  printf '%s' "hue@hue=h=0,format=yuv420p,setsar=1[base];"
+  printf '%s' "eq@eq=eval=frame:contrast=1:brightness=${INIT_BRIGHTNESS}:saturation=${INIT_SATURATION},"
+  printf '%s' "hue@hue=h=${INIT_HUE},format=yuv420p,setsar=1[base];"
   printf '%s' "$VIZ_FRAGMENTS"
   # streamselect rejects inputs=1 (range is 2..INT_MAX), so a single hot plugin
   # has no selector — there is nothing to switch to. See the report to the lead.
@@ -228,6 +258,7 @@ mkdir -p "$RUN_DIR"
   printf '%s' "[0:a]aresample=44100:async=1000:first_pts=0,loudnorm=I=-14:TP=-1:LRA=11,asplit=2[amain][apreview]"
 } > "$GRAPH_FILE"
 log "filtergraph -> $GRAPH_FILE ($(wc -c < "$GRAPH_FILE") bytes)"
+ok "color: ${COLOR_MODE} (hue=${INIT_HUE} saturation=${INIT_SATURATION} brightness=${INIT_BRIGHTNESS})"
 
 # -------------------------------------------------------------------- producer
 # The producer also writes now.json: it owns the current slide, and it is the
@@ -244,6 +275,7 @@ LIQ_TELNET_PORT="$LIQ_TELNET_PORT" \
 "$PYTHON_BIN" "$SLIDESHOW_BIN" \
   --width "$WIDTH" --height "$HEIGHT" --fps "$PRODUCER_FPS" \
   --zmq-endpoint "tcp://${ZMQ_BIND_HOST}:${ZMQ_BIND_PORT}" \
+  --color-mode "$COLOR_MODE" \
   > "$FIFO" &
 PRODUCER_PID=$!
 ok "producer pid $PRODUCER_PID at ${PRODUCER_FPS} fps, ${WIDTH}x${HEIGHT}"

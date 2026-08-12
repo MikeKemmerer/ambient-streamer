@@ -32,7 +32,7 @@ human-written, and the generated audio can always be recreated from it.
 | `common/` | `/media/common` | ro |
 | `channels/<name>/` | `/media/channel` | ro |
 | `${AMBIENT_LOG_DIR}/<name>/` | `/var/log/ambient` | rw |
-| tmpfs | `/run/ambient` | rw |
+| `${AMBIENT_RUN_DIR}/` | `/run/ambient` | rw |
 
 Media is mounted read-only. Nothing in the streaming path should ever write to
 it, and enforcing that at the mount catches the mistake early.
@@ -112,15 +112,34 @@ a disk. Rotate by size, keep a bounded number of files.
 
 ## Runtime state
 
-`/run/ambient/<channel>/` — tmpfs, not persisted. State here is a cache of what
-the process is doing now, never a source of truth.
+`/run/ambient/<channel>/` — a **host directory bind-mounted into every container
+of the channel**, not a per-container tmpfs. It was a tmpfs once, and that made
+the watchdog permanently blind to `progress`: it could never read the file, so it
+restarted a perfectly healthy composer roughly every 75 seconds. Sharing it is
+load-bearing, not incidental.
 
-| File | Contents |
-|---|---|
-| `now.json` | current track, next track, current slide, active plugin, started_at |
-| `progress` | FFmpeg `-progress` output — **the watchdog's primary input** |
-| `zmq.sock` | control socket address for this channel |
-| `health.json` | last watchdog verdict and timestamp |
+State here is not persisted across a host reboot and is a cache of what the
+process is doing now, never a source of truth.
+
+| File | Written by | Contents |
+|---|---|---|
+| `now.json` | composer | current track, next track, current slide, started_at |
+| `progress` | composer | FFmpeg `-progress` output — **the watchdog's primary input** |
+| `zmq.sock` | composer | control socket address for this channel |
+| `health.json` | backend | last watchdog verdict and timestamp |
+| `color-mode` | backend | `manual` or `auto`, read live by the slideshow producer |
+
+`color-mode` exists because the producer receives the mode as a launch-time
+environment variable, and a filtergraph is fixed at launch. Without a live
+signal, switching to manual would not stop the producer re-coloring from the
+image until the composer restarted — the one operation the design avoids. The
+backend replaces the file atomically; the producer polls a `stat()` token and
+re-opens it, so the switch lands in well under a second with no restart.
+
+`now.json` deliberately does **not** carry the active plugin. A `streamselect`
+switch does not restart the composer, so any copy written at boot is frozen and
+will disagree with reality the moment the operator changes visualization. The
+channel config is the source of truth for that.
 
 ### Why `progress` is the primary signal
 

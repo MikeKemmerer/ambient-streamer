@@ -22,11 +22,13 @@ from .models import (
     AmbientConfig,
     ChannelConfig,
     ChannelEnv,
+    ColorMode,
     Encoder,
     GlobalEnv,
     ImageOrder,
     Resolution,
 )
+from .presets import NEUTRAL_TARGETS, ColorTargets, color_targets
 
 
 class ConfigError(ValueError):
@@ -239,6 +241,18 @@ class ResolvedChannel:
     @property
     def shuffle_images(self) -> bool:
         return self.config.images.order is ImageOrder.SHUFFLE
+
+    @property
+    def color_mode(self) -> str:
+        """What the compositor calls it; the config spells automatic in full."""
+        return "manual" if self.config.color.mode is ColorMode.MANUAL else "auto"
+
+    @property
+    def color_initial(self) -> ColorTargets:
+        """A filtergraph is fixed at launch, so a manual color starts baked in."""
+        if self.config.color.mode is not ColorMode.MANUAL:
+            return NEUTRAL_TARGETS
+        return color_targets(self.config.color.manual.accent, self.config.color.manual.tint)
 
     @property
     def media_roots_common(self) -> Path:

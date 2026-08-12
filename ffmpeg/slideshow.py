@@ -86,7 +86,7 @@ def read_list(path: str) -> list[str]:
     return slides
 
 
-def list_key(path: str) -> Optional[tuple[int, int, int, int]]:
+def stat_key(path: str) -> Optional[tuple[int, int, int, int]]:
     """Cheap change token: st_ino catches the rename, st_ctime_ns catches chmod."""
     try:
         st = os.stat(path)
@@ -177,6 +177,93 @@ def clamp(value: float, low: float, high: float) -> float:
     return low if value < low else high if value > high else value
 
 
+COLOR_MODES = ("auto", "manual")
+
+
+def resolve_color_mode(value: str) -> str:
+    """In `manual` the operator owns color and the backend sends it directly;
+    this producer must not overwrite it at the next slide.
+
+    Anything unset or unrecognized is `auto`, the behavior every older compose
+    file expects.
+    """
+    mode = value.strip().lower()
+    if mode in COLOR_MODES:
+        return mode
+    log("color_mode_unknown", value=repr(value), fallback="auto")
+    return "auto"
+
+
+COLOR_MODE_POLL_SECONDS = 0.5
+
+
+class ColorModeWatcher:
+    """Watches ``<run_dir>/color-mode`` so an automatic/manual switch in the UI
+    reaches a producer that is already running.
+
+    The alternative is restarting the compositor, which costs a real gap and a
+    new YouTube ingest session. The backend publishes the mode with a
+    same-directory temp plus rename, so the file is never seen half-written but
+    a retained handle would read the dead inode forever — hence a stat token and
+    a fresh open only when it moves.
+
+    Runs on its own thread: the write loop may do no filesystem work, and the
+    loader thread's cadence is already perturbed by multi-hundred-ms decodes.
+    """
+
+    def __init__(self, path: str, initial: str) -> None:
+        self.path = path
+        self.mode = initial
+        self.key: Optional[tuple[int, int, int, int]] = None
+        self.warned = ""
+
+    def start(self) -> None:
+        if not self.path:
+            log("color_mode_watch_off", mode=self.mode)
+            return
+        self.poll()
+        threading.Thread(target=self._run, daemon=True, name="colormode").start()
+        log("color_mode_watching", path=self.path, mode=self.mode,
+            interval=COLOR_MODE_POLL_SECONDS)
+
+    def _run(self) -> None:
+        while True:
+            time.sleep(COLOR_MODE_POLL_SECONDS)
+            try:
+                self.poll()
+            except Exception as exc:  # a watcher fault must never stop frames
+                self.warn(f"poll:{type(exc).__name__}", "color_mode_error",
+                          error=type(exc).__name__)
+
+    def poll(self) -> None:
+        key = stat_key(self.path)
+        if key is None or key == self.key:
+            return  # absent or unmoved: whatever mode is in force stands
+        try:
+            with open(self.path, "r", encoding="utf-8") as handle:
+                raw = handle.read(64)
+        except OSError as exc:
+            # Key deliberately not adopted, so the next poll retries.
+            self.warn(f"error:{type(exc).__name__}", "color_mode_unreadable",
+                      error=type(exc).__name__)
+            return
+        self.key = key
+        value = raw.strip().lower()
+        if value not in COLOR_MODES:
+            self.warn(f"value:{value}", "color_mode_ignored",
+                      value=repr(raw[:32]), keeping=self.mode)
+            return
+        self.warned = ""
+        self.mode = value  # a str rebind; the write loop reads it unlocked
+
+    def warn(self, token: str, event: str, **fields: object) -> None:
+        """A file stuck in one bad state logs once, not once per poll."""
+        if token == self.warned:
+            return
+        self.warned = token
+        log(event, path=self.path, **fields)
+
+
 class ColorSender:
     """Validated, non-blocking zmq client.
 
@@ -186,9 +273,10 @@ class ColorSender:
     never stall frame production.
     """
 
-    def __init__(self, endpoint: str, transition: float) -> None:
+    def __init__(self, endpoint: str, transition: float, enabled: bool) -> None:
         self.endpoint = endpoint
         self.transition = max(0.0, transition)
+        self.enabled = enabled
         self.queue: "queue.Queue[list[str]]" = queue.Queue(maxsize=1)
         self.thread = threading.Thread(target=self._run, daemon=True)
         self.thread.start()
@@ -209,6 +297,10 @@ class ColorSender:
         while True:
             batch = self.queue.get()
             for message in batch:
+                # Re-checked here: a batch queued microseconds before a switch
+                # to manual must not land on top of the operator's own color.
+                if not self.enabled:
+                    break
                 if not self.valid(message):
                     log("zmq_rejected", message=repr(message))
                     continue
@@ -239,6 +331,8 @@ class ColorSender:
         return f"{target} {param} {expr}"
 
     def apply(self, profile: dict, stream_time: float) -> None:
+        if not self.enabled:
+            return
         hue = hex_to_hue(str(profile.get("accent", "")))
         brightness = clamp(float(profile.get("brightness", 0.5)), 0.0, 1.0)
         warmth = clamp(float(profile.get("warmth", 0.0)), -1.0, 1.0)
@@ -273,6 +367,8 @@ class Settings:
     stats_interval: float
     zmq_endpoint: str
     transition: float
+    color_mode: str
+    color_mode_file: str
 
 
 class SlideLoader:
@@ -314,7 +410,7 @@ class SlideLoader:
 
     # -- list --------------------------------------------------------------
     def poll(self) -> None:
-        key = list_key(self.cfg.images_list)
+        key = stat_key(self.cfg.images_list)
         if key is not None and key == self.key:
             return
         try:
@@ -398,10 +494,39 @@ class Producer:
         self.next_stat = cfg.stats_interval
         self.started = 0.0
         self.first_write: Optional[float] = None
-        self.color = (ColorSender(cfg.zmq_endpoint, cfg.transition)
-                       if cfg.zmq_endpoint else None)
+        # The sender exists in either mode: the operator can switch to automatic
+        # at any moment and a restart to build one is the thing to avoid. The
+        # mode gates it instead.
+        self.mode_watcher = ColorModeWatcher(cfg.color_mode_file, cfg.color_mode)
+        self.mode_watcher.start()
+        self.mode = self.mode_watcher.mode
+        self.slide_profile: Optional[dict] = None
+        self.color: Optional[ColorSender] = None
+        if not cfg.zmq_endpoint:
+            log("color_disabled", reason="no_endpoint")
+        else:
+            self.color = ColorSender(cfg.zmq_endpoint, cfg.transition,
+                                     enabled=self.mode == "auto")
         self.now = nowstate.start_writer()
         self.loader = SlideLoader(cfg)
+
+    def sync_color_mode(self) -> None:
+        """One in-memory compare per frame; the watcher thread owns the file.
+
+        Per frame rather than per slide because a slide can be 20 s away, and
+        the operator expects the switch to land now.
+        """
+        mode = self.mode_watcher.mode
+        if mode == self.mode:
+            return
+        self.mode = mode
+        if self.color is not None:
+            self.color.enabled = mode == "auto"
+            # Resuming re-colors the slide already on screen, so the picture
+            # matches the mode without waiting for the next slide.
+            if mode == "auto" and self.slide_profile is not None:
+                self.color.apply(self.slide_profile, self.stream_time())
+        log("color_mode_changed", mode=mode, frame=self.frame)
 
     # -- pacing ------------------------------------------------------------
     def emit(self, payload: bytes) -> None:
@@ -413,6 +538,7 @@ class Producer:
         4-6 s; that permanently offsets the slideshow timeline and is benign,
         so the deadline is re-based rather than clawed back.
         """
+        self.sync_color_mode()
         slack = self.deadline - time.monotonic()
         if slack > 0:
             time.sleep(slack)
@@ -456,10 +582,14 @@ class Producer:
             return 2
         if self.now is not None:
             self.now.set_slide(cur.path)
+        self.slide_profile = cur.profile
         log("start", list=self.cfg.images_list, slides=len(self.loader.order),
             geometry=f"{self.cfg.width}x{self.cfg.height}", fps=self.cfg.fps,
             hold_frames=self.hold_frames, fade_frames=self.fade_frames,
-            quality=self.cfg.quality, order=self.cfg.order)
+            quality=self.cfg.quality, order=self.cfg.order,
+            color_mode=self.mode,
+            color_mode_file=self.cfg.color_mode_file or "-",
+            color_sender="on" if self.color is not None else "off")
 
         self.started = time.monotonic()
         self.deadline = self.started + self.period
@@ -481,6 +611,7 @@ class Producer:
             # that is when the viewer sees the new slide arrive.
             if self.now is not None:
                 self.now.set_slide(nxt.path)
+            self.slide_profile = nxt.profile
             if self.color is not None and nxt.profile is not None:
                 self.color.apply(nxt.profile, self.stream_time())
 
@@ -490,6 +621,21 @@ class Producer:
                                  self.cfg.quality))
 
             cur = nxt
+
+
+def default_color_mode_file() -> str:
+    """The run directory the backend publishes into, per on-disk.md.
+
+    Empty when neither is set — outside a container there is nothing to watch,
+    and the flag alone then behaves exactly as it did before.
+    """
+    run_dir = os.environ.get("RUN_DIR", "").strip()
+    if not run_dir:
+        channel = os.environ.get("CHANNEL_NAME", "").strip()
+        if not channel:
+            return ""
+        run_dir = f"/run/ambient/{channel}"
+    return os.path.join(run_dir, "color-mode")
 
 
 def parse_args() -> Settings:
@@ -507,6 +653,11 @@ def parse_args() -> Settings:
     ap.add_argument("--stats-interval", type=float,
                     default=env_float("STATS_INTERVAL", 30.0))
     ap.add_argument("--zmq-endpoint", default=env_str("ZMQ_ENDPOINT", ""))
+    # No choices=: argparse would exit(2) on an unknown mode, and a producer
+    # that refuses to start EOFs the pipe and ends the broadcast.
+    ap.add_argument("--color-mode", default=env_str("COLOR_MODE", "auto"))
+    ap.add_argument("--color-mode-file",
+                    default=env_str("COLOR_MODE_FILE", default_color_mode_file()))
     ap.add_argument("--transition", type=float,
                     default=env_float("COLOR_TRANSITION_SECONDS", 2.0))
     args = ap.parse_args()
@@ -519,6 +670,8 @@ def parse_args() -> Settings:
         fps=args.fps, hold=args.hold, fade=args.fade, quality=args.quality,
         order=args.order, stats_interval=args.stats_interval,
         zmq_endpoint=args.zmq_endpoint, transition=args.transition,
+        color_mode=resolve_color_mode(args.color_mode),
+        color_mode_file=args.color_mode_file,
     )
 
 
