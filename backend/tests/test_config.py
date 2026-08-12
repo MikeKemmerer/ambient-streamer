@@ -27,6 +27,8 @@ CHANNEL_MOUNT=/lofi
 CHANNEL_FALLBACK_MOUNT=/lofi-fallback
 """
 
+COMPOSE_TEMPLATE = Path(__file__).resolve().parents[2] / "docker" / "compose.channel.yml.j2"
+
 CHANNEL_YAML = """\
 version: 1
 name: lofi
@@ -62,6 +64,12 @@ def make_repo(tmp_path: Path, *, name: str = "lofi", config: str = CHANNEL_YAML,
     (channel / "config.yaml").write_text(config, encoding="utf-8")
     (channel / ".env").write_text(env, encoding="utf-8")
     (tmp_path / ".env").write_text("AMBIENT_DEFAULT_ENCODER=libx264\n", encoding="utf-8")
+    # The real infra template, so compose rendering is tested against the frozen file.
+    docker = tmp_path / "docker"
+    docker.mkdir(exist_ok=True)
+    (docker / COMPOSE_TEMPLATE.name).write_text(
+        COMPOSE_TEMPLATE.read_text(encoding="utf-8"), encoding="utf-8"
+    )
     return tmp_path
 
 

@@ -107,7 +107,10 @@ services:
       TZ: ${TZ:-UTC}
     volumes:
       - {{ repo_root }}/ffmpeg:/opt/ambient:ro
-      - {{ repo_root }}/plugins:/opt/ambient/plugins:ro
+      # /plugins, not /opt/ambient/plugins: the entrypoint's PLUGIN_DIR default,
+      # and nesting it under the read-only /opt/ambient mount cannot create the
+      # mountpoint.
+      - {{ repo_root }}/plugins:/plugins:ro
       - {{ common_dir }}:/media/common:ro
       - {{ channel_dir }}:/media/channel:ro
       - {{ log_dir }}:/var/log/ambient

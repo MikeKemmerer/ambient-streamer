@@ -51,4 +51,5 @@ ENV PUID=1000 \
 VOLUME ["/var/log/ambient"]
 
 ENTRYPOINT ["/usr/bin/tini", "-g", "--", "/usr/local/bin/entrypoint.sh"]
-CMD ["/opt/ambient/compose-stream.sh"]
+# The media-pipeline lane owns this script and mounts it at /opt/ambient.
+CMD ["/opt/ambient/entrypoint.sh"]

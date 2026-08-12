@@ -218,6 +218,10 @@ class ResolvedChannel:
         return self.directory / "images.list"
 
     @property
+    def compose_path(self) -> Path:
+        return self.directory / "docker-compose.yml"
+
+    @property
     def shuffle_images(self) -> bool:
         return self.config.images.order is ImageOrder.SHUFFLE
 

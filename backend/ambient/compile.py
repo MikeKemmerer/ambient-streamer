@@ -1,9 +1,10 @@
-"""CLI: compile a channel's configuration into its generated media lists.
+"""CLI: compile a channel's configuration into everything it needs to start.
 
     python -m ambient.compile <channel> [--all] [--dry-run] [--json]
 
-Writes `playlist.m3u` and `images.list` atomically. This is what the installer
-and the other lanes call in Phase 1; the REST layer arrives in Phase 3.
+Writes `playlist.m3u`, `images.list` and `docker-compose.yml` atomically. This
+is what the installer and the other lanes call in Phase 1; the REST layer
+arrives in Phase 3.
 """
 
 from __future__ import annotations
@@ -25,6 +26,7 @@ from .config import (
     load_workspace,
 )
 from .media import MediaError, write_images_list, write_playlist
+from .supervisor import ComposeError, render_compose, write_compose
 
 DEFAULT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -38,17 +40,26 @@ def _repo_root(value: str | None) -> Path:
     return DEFAULT_ROOT
 
 
-def compile_channel(channel: ResolvedChannel, dry_run: bool = False, seed: int | None = None) -> dict:
+def compile_channel(
+    workspace: Workspace,
+    channel: ResolvedChannel,
+    dry_run: bool = False,
+    seed: int | None = None,
+) -> dict:
     rng = Random(seed) if seed is not None else None
     playlist = channel.audio.container_paths
     slides = channel.images.container_paths
-    if not dry_run:
+    if dry_run:
+        # Rendered anyway: a dry run that hides a broken template is worthless.
+        render_compose(workspace, channel)
+    else:
         playlist = write_playlist(
             channel.playlist_path, channel.audio, channel.config.audio.shuffle, rng
         )
         slides = write_images_list(
             channel.images_list_path, channel.images, channel.shuffle_images, rng
         )
+        write_compose(workspace, channel)
     return {
         "channel": channel.name,
         "resolution": channel.resolution.value,
@@ -56,6 +67,7 @@ def compile_channel(channel: ResolvedChannel, dry_run: bool = False, seed: int |
         "encoder": channel.encoder.value,
         "playlist": str(channel.playlist_path),
         "images_list": str(channel.images_list_path),
+        "compose": str(channel.compose_path),
         "tracks": len(playlist),
         "slides": len(slides),
         "watched_dirs": [
@@ -106,8 +118,8 @@ def main(argv: list[str] | None = None) -> int:
     results: list[dict] = []
     try:
         check_mount_uniqueness(channels)
-        results = [compile_channel(c, args.dry_run, args.seed) for c in channels]
-    except (ConfigError, MediaError) as exc:
+        results = [compile_channel(workspace, c, args.dry_run, args.seed) for c in channels]
+    except (ComposeError, ConfigError, MediaError) as exc:
         errors.append(str(exc))
 
     if args.json:
@@ -128,6 +140,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         print(f"  {verb} {result['playlist']}")
         print(f"  {verb} {result['images_list']}")
+        print(f"  {verb} {result['compose']}")
         for warning in result["warnings"]:
             print(f"  warning: {warning}", file=sys.stderr)
     for error in errors:
