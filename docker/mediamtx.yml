@@ -1,0 +1,92 @@
+# MediaMTX relay for ambient-streamer.
+#
+# Schema targets MediaMTX v1.9.3 (image bluenviron/mediamtx:1.9.3). MediaMTX refuses to
+# start on an unknown config key, so re-read the release notes before bumping the image.
+#
+# Topology:
+#   <channel>-composer --RTMP--> mediamtx --RTMP--> YouTube
+#                                        `--HLS--> backend preview proxy
+#
+# Path layout — each composer publishes two RTMP streams per channel:
+#   rtmp://mediamtx:1935/<channel>            program feed, relayed on to YouTube
+#   rtmp://mediamtx:1935/<channel>/preview    low-resolution operator feed
+# HLS reuses those same path names, so the preview is served here as
+#   http://mediamtx:8888/<channel>/preview/index.m3u8
+# and the backend re-exposes it to operators as
+#   http://<host>:8080/<channel>/preview/index.m3u8
+
+###############################################
+# Global
+
+logLevel: info
+# stdout keeps everything visible through `docker logs`; no log file inside the container.
+logDestinations: [stdout]
+
+# Control API — the backend supervisor and watchdog read path/publisher state from it.
+api: yes
+apiAddress: :9997
+
+metrics: no
+pprof: no
+
+###############################################
+# Authentication
+#
+# The compose stack publishes no host ports for this service, so the relay is reachable only
+# from the internal Docker network. These IP rules are the second layer, not the first.
+
+authMethod: internal
+authInternalUsers:
+  - user: any
+    pass:
+    ips: ['127.0.0.1/32', '::1/128', '10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16']
+    permissions:
+      - action: publish
+      - action: read
+      - action: api
+
+###############################################
+# Servers
+
+rtmp: yes
+rtmpAddress: :1935
+
+hls: yes
+hlsAddress: :8888
+# MPEG-TS segments with a plain playlist — the variant VLC opens most reliably. Low latency
+# is not worth a preview that will not start.
+hlsVariant: mpegts
+# Composer GOP is 2s, so segments cut cleanly on keyframes; 6 of them is ~12s of buffer.
+hlsSegmentDuration: 2s
+hlsSegmentCount: 6
+# Segments stay in memory — a 24/7 preview must not grind on disk.
+hlsDirectory: ''
+# Remux as soon as a channel goes live so a preview opens immediately instead of waiting for
+# the first segments to accumulate.
+hlsAlwaysRemux: yes
+hlsAllowOrigin: '*'
+
+# Unused ingest/egress protocols stay off to keep the surface minimal.
+rtsp: no
+webrtc: no
+srt: no
+
+###############################################
+# Paths
+
+pathDefaults:
+  source: publisher
+  sourceOnDemand: no
+  # A restarted composer must reclaim its path without waiting for the stale RTMP session.
+  overridePublisher: yes
+  # Never record: eight 24/7 channels would fill any disk.
+  record: no
+
+# Channel names are created at runtime, so these are regular expressions rather than literal
+# path names. Anything matching neither pattern is refused — there is deliberately no
+# catch-all path.
+paths:
+  # <channel> — program feed
+  "~^[a-z0-9][a-z0-9-]{0,30}$":
+  # <channel>/preview — low-resolution operator feed
+  "~^[a-z0-9][a-z0-9-]{0,30}/preview$":
