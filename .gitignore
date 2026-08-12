@@ -1,0 +1,49 @@
+# Secrets — never commit
+.env
+*.env
+!.env.example
+!*.env.example
+channels/*/.env
+docker/secrets/
+*.key
+
+# Local config (example files are tracked, real ones are not)
+ambient.yaml
+!ambient.yaml.example
+channels/*/config.yaml
+!channels/example/config.yaml
+
+# Media — large binaries, never committed
+channels/*/audio/
+channels/*/images/
+!channels/example/audio/.gitkeep
+!channels/example/images/.gitkeep
+*.mp3
+*.flac
+*.ogg
+*.wav
+*.m4a
+*.mp4
+*.mkv
+*.ts
+
+# Generated artifacts
+channels/*/profiles/
+channels/*/docker-compose.yml
+hls/
+*.m3u8
+*.log
+logs/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+
+# Editor / OS
+.DS_Store
+Thumbs.db
