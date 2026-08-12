@@ -42,6 +42,12 @@ ACTIVE_PLUGIN="${ACTIVE_PLUGIN:-}"
 ACCENT="${ACCENT:-#4FC3F7}"
 VIZ_OPACITY="${VIZ_OPACITY:-0.65}"
 
+# now.json's started_at. Taken once here so it is the compositor's start and
+# not the producer's, which is a few seconds later.
+STARTED_AT="${COMPOSER_STARTED_AT:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
+LIQ_TELNET_HOST="${LIQ_TELNET_HOST:-${CHANNEL_NAME}-liquidsoap}"
+LIQ_TELNET_PORT="${LIQ_TELNET_PORT:-1234}"
+
 # NEVER tcp://*:5555. That default plus one malformed message is a remote kill
 # of a live encoder — see docs/contracts/zmq-control.md.
 ZMQ_BIND_HOST="${ZMQ_BIND_HOST:-127.0.0.1}"
@@ -49,6 +55,7 @@ ZMQ_BIND_PORT="${ZMQ_BIND_PORT:-5555}"
 
 RUN_DIR="${RUN_DIR:-/run/ambient/${CHANNEL_NAME}}"
 PROGRESS_FILE="${PROGRESS_FILE:-${RUN_DIR}/progress}"
+NOW_FILE="${NOW_FILE:-${RUN_DIR}/now.json}"
 GRAPH_FILE="${RUN_DIR}/filtergraph.txt"
 FIFO="${RUN_DIR}/slides.pipe"
 
@@ -223,13 +230,24 @@ mkdir -p "$RUN_DIR"
 log "filtergraph -> $GRAPH_FILE ($(wc -c < "$GRAPH_FILE") bytes)"
 
 # -------------------------------------------------------------------- producer
+# The producer also writes now.json: it owns the current slide, and it is the
+# only long-lived Python process here, so it merges Liquidsoap's track state
+# and the active plugin into one file for the control plane. See nowstate.py.
 [[ -p "$FIFO" ]] || mkfifo "$FIFO"
+CHANNEL_NAME="$CHANNEL_NAME" \
+RUN_DIR="$RUN_DIR" \
+NOW_FILE="$NOW_FILE" \
+ACTIVE_PLUGIN="${PLUGINS[$ACTIVE_INDEX]}" \
+COMPOSER_STARTED_AT="$STARTED_AT" \
+LIQ_TELNET_HOST="$LIQ_TELNET_HOST" \
+LIQ_TELNET_PORT="$LIQ_TELNET_PORT" \
 "$PYTHON_BIN" "$SLIDESHOW_BIN" \
   --width "$WIDTH" --height "$HEIGHT" --fps "$PRODUCER_FPS" \
   --zmq-endpoint "tcp://${ZMQ_BIND_HOST}:${ZMQ_BIND_PORT}" \
   > "$FIFO" &
 PRODUCER_PID=$!
 ok "producer pid $PRODUCER_PID at ${PRODUCER_FPS} fps, ${WIDTH}x${HEIGHT}"
+log "now.json -> $NOW_FILE (liquidsoap ${LIQ_TELNET_HOST}:${LIQ_TELNET_PORT})"
 
 # ------------------------------------------------------------------- compositor
 # -reconnect_on_network_error 1 is MANDATORY: compose starts both containers at

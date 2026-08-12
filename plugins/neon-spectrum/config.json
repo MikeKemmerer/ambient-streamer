@@ -1,0 +1,13 @@
+{
+  "name": "neon-spectrum",
+  "display_name": "Neon Spectrum",
+  "description": "Scrolling spectrogram at high colour saturation, log frequency axis.",
+  "version": "1.0.0",
+  "author": "ambient-streamer",
+  "commandable": [],
+  "cost": {
+    "cores_720p30": 0.18,
+    "scale_1080p": 1.9
+  },
+  "requires_filters": ["showspectrum"]
+}

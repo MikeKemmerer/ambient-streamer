@@ -49,7 +49,7 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 command -v docker >/dev/null || die "docker not found"
-[[ -f .env ]] || die ".env not found — cp .env.example .env and fill in the passwords"
+[[ -f .env ]] || die ".env not found — run scripts/install.sh first"
 
 log "pre-flight: containers already running on this host (must survive)"
 BEFORE="$(docker ps --format '{{.Names}}' | sort)"

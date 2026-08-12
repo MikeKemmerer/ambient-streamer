@@ -1,0 +1,23 @@
+{
+  "name": "avectorscope-lissajous",
+  "display_name": "Lissajous Vectorscope",
+  "description": "Stereo vectorscope; the only branch with commandable colour.",
+  "version": "1.0.0",
+  "author": "ambient-streamer",
+  "commandable": [
+    { "target": "avectorscope@viz", "param": "rc", "type": "int" },
+    { "target": "avectorscope@viz", "param": "gc", "type": "int" },
+    { "target": "avectorscope@viz", "param": "bc", "type": "int" },
+    { "target": "avectorscope@viz", "param": "mode", "type": "enum" },
+    { "target": "avectorscope@viz", "param": "draw", "type": "enum" },
+    { "target": "avectorscope@viz", "param": "scale", "type": "enum" },
+    { "target": "avectorscope@viz", "param": "mirror", "type": "enum" },
+    { "target": "avectorscope@viz", "param": "zoom", "type": "float" },
+    { "target": "avectorscope@viz", "param": "swap", "type": "bool" }
+  ],
+  "cost": {
+    "cores_720p30": 0.34,
+    "scale_1080p": 1.9
+  },
+  "requires_filters": ["avectorscope"]
+}

@@ -1,0 +1,13 @@
+{
+  "name": "showwaves-classic",
+  "display_name": "Classic Waveform",
+  "description": "Scrolling waveform across the frame, square-root scaled so quiet passages still read.",
+  "version": "1.0.0",
+  "author": "ambient-streamer",
+  "commandable": [],
+  "cost": {
+    "cores_720p30": 0.26,
+    "scale_1080p": 1.9
+  },
+  "requires_filters": ["showwaves"]
+}

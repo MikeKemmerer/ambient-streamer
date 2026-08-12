@@ -1,0 +1,199 @@
+name: CI
+
+# Four things, in the order they fail fastest:
+#   lint    ruff for Python, bash -n + shellcheck for shell
+#   test    pytest backend
+#   stack   run the installer, validate compose, build every image, then run
+#           the installer AGAIN and prove it changed nothing
+#
+# The stack job is the one that matters. A 24/7 service that only ever gets
+# installed by hand on one host has an installer nobody has tested twice.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install ruff
+        run: pip install --disable-pip-version-check "ruff==0.6.9"
+
+      - name: ruff check
+        # --target-version is explicit because backend/pyproject.toml has no
+        # [tool.ruff] section, and without one ruff ignores requires-python and
+        # falls back to py38 — where `anext` is an undefined name.
+        run: ruff check --target-version py310 backend
+
+      - name: bash -n
+        run: |
+          set -euo pipefail
+          shopt -s globstar nullglob
+          failed=0
+          for f in **/*.sh; do
+            case "$f" in spikes/*) continue ;; esac
+            if bash -n "$f"; then
+              echo "ok   $f"
+            else
+              echo "FAIL $f"
+              failed=1
+            fi
+          done
+          exit "$failed"
+
+      - name: shellcheck
+        # -S error only. Style opinions across five lanes' scripts would make
+        # this a permanent red X; genuine bugs will not.
+        run: |
+          set -euo pipefail
+          shopt -s globstar nullglob
+          files=()
+          for f in **/*.sh; do
+            case "$f" in spikes/*) continue ;; esac
+            files+=("$f")
+          done
+          shellcheck -S error "${files[@]}"
+
+      - name: Shell scripts must be LF
+        # A CRLF script fails at exec time with "no such file or directory",
+        # which points at the interpreter and not at the line ending.
+        run: |
+          set -euo pipefail
+          if git ls-files --eol -- '*.sh' | grep -v 'i/lf'; then
+            echo "::error::the scripts above are not LF in the index"
+            exit 1
+          fi
+          echo "all shell scripts are LF"
+
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install backend
+        run: pip install --disable-pip-version-check -e "backend[dev]"
+
+      - name: pytest
+        run: pytest backend -q
+
+  stack:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install ffmpeg
+        # The installer probes encoders with a real encode and generates the
+        # Icecast fallback; both need ffmpeg on the host.
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ffmpeg
+
+      - name: install.sh — first run
+        run: scripts/install.sh
+
+      - name: Secrets are non-empty and unique
+        # Compared as truncated hashes; nothing secret reaches the log.
+        run: |
+          set -euo pipefail
+          : > /tmp/secrets.txt
+          for key in ICECAST_SOURCE_PASSWORD ICECAST_ADMIN_PASSWORD \
+                     ICECAST_RELAY_PASSWORD AMBIENT_API_TOKEN; do
+            value="$(sed -n -E "s/^${key}=(.*)$/\1/p" .env)"
+            if [ -z "$value" ]; then
+              echo "::error::${key} is empty after install.sh"
+              exit 1
+            fi
+            printf '%s %s\n' "$key" "$(printf '%s' "$value" | sha256sum | cut -c1-12)" >> /tmp/secrets.txt
+          done
+          cat /tmp/secrets.txt
+          if [ "$(cut -d' ' -f2 /tmp/secrets.txt | sort -u | wc -l)" -ne 4 ]; then
+            echo "::error::secrets are not distinct"
+            exit 1
+          fi
+
+      - name: docker compose config — global stack
+        run: |
+          docker compose -p ambient config --quiet
+          echo "global stack validates"
+
+      - name: Published ports — backend only, loopback only
+        # The Docker socket is root-equivalent on the host. If this ever
+        # renders a 0.0.0.0 binding, or a second published service, the review
+        # that let it through should have been this check.
+        run: |
+          set -euo pipefail
+          docker compose -p ambient config --format json > /tmp/stack.json
+          publishers="$(jq -r '.services | to_entries[] | select(.value.ports != null) | .key' /tmp/stack.json | sort | paste -sd, -)"
+          echo "services publishing a host port: ${publishers:-none}"
+          if [ "$publishers" != "backend" ]; then
+            echo "::error::only the backend may publish a host port, got: ${publishers:-none}"
+            exit 1
+          fi
+          jq -r '.services.backend.ports[] | "\(.host_ip // "0.0.0.0") \(.published) -> \(.target)"' /tmp/stack.json
+          offenders="$(jq -r '.services.backend.ports[] | (.host_ip // "0.0.0.0")' /tmp/stack.json | grep -vE '^(127\.0\.0\.1|::1)$' || true)"
+          if [ -n "$offenders" ]; then
+            echo "::error::backend published on ${offenders}, not loopback"
+            exit 1
+          fi
+          echo "only backend publishes, and only on loopback"
+
+      - name: Build every image
+        run: |
+          set -euo pipefail
+          for image in backend composer liquidsoap mediamtx; do
+            echo "::group::$image"
+            docker build -f "docker/Dockerfile.$image" -t "ambient-$image:ci" .
+            echo "::endgroup::"
+          done
+          docker images --filter 'reference=ambient-*:ci' \
+            --format 'table {{.Repository}}\t{{.Tag}}\t{{.Size}}'
+
+      - name: Backend image has the Docker CLI and the compose plugin
+        # The supervisor shells out to `docker compose`; without these the
+        # image builds fine and cannot start a single channel.
+        run: |
+          docker run --rm --entrypoint docker ambient-backend:ci --version
+          docker run --rm --entrypoint docker ambient-backend:ci compose version --short
+          docker run --rm --entrypoint python ambient-backend:ci -c \
+            'import ambient.main, ambient.supervisor; print("backend package imports")'
+          docker run --rm --entrypoint test ambient-backend:ci -f /opt/ambient/frontend/index.html \
+            && echo "operator UI is baked into the image"
+
+      - name: install.sh — second run must change nothing
+        # The installer's whole safety story is that it never regenerates a
+        # secret. A byte-identical .env is the only proof of that worth having.
+        run: |
+          set -euo pipefail
+          before="$(sha256sum .env | cut -d' ' -f1)"
+          AMBIENT_COMPOSER_IMAGE=ambient-composer:ci scripts/install.sh
+          after="$(sha256sum .env | cut -d' ' -f1)"
+          if [ "$before" != "$after" ]; then
+            echo "::error::install.sh is not idempotent — .env changed on the second run"
+            exit 1
+          fi
+          echo "install.sh is idempotent: .env unchanged ($before)"
+
+      - name: Clean up
+        if: always()
+        run: docker image rm -f ambient-backend:ci ambient-composer:ci ambient-liquidsoap:ci ambient-mediamtx:ci || true

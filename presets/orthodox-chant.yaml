@@ -1,0 +1,32 @@
+version: 1
+name: orthodox-chant
+display_name: "Orthodox Chant"
+description: "Gold on deep red, very slow slides."
+
+visualisation:
+  active: showfreqs-bars
+
+colour:
+  mode: manual
+  manual:
+    accent: "#E8C27A"
+    tint: "#3B0D12"
+  transition_seconds: 6.0
+
+slideshow:
+  hold_seconds: 90.0
+  fade_seconds: 8.0
+  order: sequential
+
+# Short: chant should not be blended into the next piece.
+audio:
+  crossfade_seconds: 3.0
+
+# Only the knobs the colour ramp does not own: eq.brightness, eq.saturation and
+# hue.h are left to the ramp.
+effects:
+  eq:
+    contrast: 0.95
+    gamma: 1.1
+  hue:
+    s: 1.05

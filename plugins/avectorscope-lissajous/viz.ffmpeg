@@ -1,0 +1,1 @@
+[0:a]avectorscope@viz=s=${WIDTH}x${HEIGHT}:mode=lissajous:rate=${FPS}:draw=aaline:scale=sqrt:zoom=1.4:rc=40:gc=200:bc=160:rf=8:gf=6:bf=4,fps=${FPS},format=yuv420p,setsar=1[${OUT}]

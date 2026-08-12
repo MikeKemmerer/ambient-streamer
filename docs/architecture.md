@@ -1,25 +1,30 @@
 # Architecture
 
-**Status: Phase 1 is built and running on real hardware.** The full streaming path —
+**Status: built and running on real hardware.** The full streaming path —
 Liquidsoap → Icecast → composer → MediaMTX → YouTube, plus the HLS preview — has been
-verified live. Measured steady state on a running 720p channel: `speed=0.996x`,
-3085–3137 kbits/s, `drop_frames=0`, `dup_frames=0`.
+verified live, and the control plane, watchdog, scheduler, colour extraction, plugin packs and
+preset packs are all in the tree. Measured steady state on a running 720p channel:
+`speed=0.996x`, 3085–3137 kbits/s, `drop_frames=0`, `dup_frames=0`.
 
-**What is not built yet**, and is described below as the design it will be built to:
+**What is not wired up yet**, and is described below as the design it will be built to:
 
-| Not built | Where it is described |
-|-----------|-----------------------|
-| FastAPI control plane (REST + SSE) | [§5](#5-control-plane) |
-| Operator web UI | [§5.3](#53-frontend) |
-| Watchdog | [§5](#5-control-plane), [§4](#4-end-to-end-data-flow) |
-| Scheduler | [§5](#5-control-plane) |
-| Colour-profile extraction | [§2.4](#24-colors-runtime-commands-over-zmq) |
-| Presets and bumpers | [§5](#5-control-plane) |
+| Not wired up | Where it is described |
+|--------------|-----------------------|
+| The operator UI is served by nothing — the files exist and are baked into the backend image, but the app mounts no static files | [§5.3](#53-frontend) |
+| The backend does not proxy the HLS preview path the UI expects | [§4](#4-end-to-end-data-flow) step 10 |
+| Resolution, fps, `hot_set` and slideshow timing do not reach the compositor — the per-channel Compose template does not pass them | [§5.1](#51-channel-lifecycle) |
+| Creating a channel does not register its Icecast mount | [§2.2](#22-audio-a-separate-process-behind-an-icecast-relay) |
+| Bumper synthesis | [§5](#5-control-plane) |
 
-`backend/ambient/` currently holds the config layer, the media resolver, the FFmpeg command
-builder, the ZMQ validator and the Compose renderer. They are driven by
-`python -m ambient.compile <channel>` — a CLI, not a running service. Channels are started by
-hand with `scripts/channel.sh` ([§5.1](#51-channel-lifecycle)).
+The practical effect of each is spelled out in
+[quickstart.md §11](quickstart.md#11-known-gaps-that-will-surprise-you).
+
+`backend/ambient/` holds the whole control plane: the config layer, the media resolver, the
+FFmpeg command builder, the ZMQ validator, the Compose renderer and the `compile` CLI, plus the
+FastAPI app, the SSE hub, the supervisor, the watchdog, the scheduler, the preset registry and
+colour-profile extraction. It runs as the `ambient-backend` container
+([§5](#5-control-plane)). Channels can still be compiled and started by hand with
+`python -m ambient.compile` and `scripts/channel.sh` ([§5.1](#51-channel-lifecycle)).
 
 **Every measured number below was observed on real hardware.** Phase 0 numbers come from the
 spike harnesses in `spikes/s1-liquidsoap-transport/` through `spikes/s5-mediamtx-relay/`;
@@ -44,17 +49,18 @@ Each **channel** is one continuous YouTube broadcast. A channel pairs:
 |-------|------|
 | Liquidsoap audio engine | Owns the playlist, track order, crossfades, and loudness. Publishes a continuous MP3 stream to the shared Icecast relay, which is what the compositor reads. |
 | FFmpeg compositor | Renders a color-adaptive image slideshow plus real-time audio visualization, encodes, and publishes over RTMP. |
-| Color profile | Per-image palette data that drives the visualization and background colors so they track the current image. Extraction is not built yet. |
+| Color profile | Per-image palette data that drives the visualization and background colors so they track the current image. Extracted by the backend, applied by the slideshow producer over ZMQ. |
 | HLS preview | A second, low-resolution feed the composer publishes alongside the program, which an operator can watch without touching the YouTube broadcast. It is a **second encode**, and it is why a channel costs what [§7.2](#72-capacity) says it costs. |
 
-A **FastAPI control plane** will orchestrate all channels: render each channel's Compose file,
-start and stop channels, watch their health, restart what dies, apply scheduled changes, and
-stream live state to the operator UI. It is not built ([§5](#5-control-plane)); today a channel
-is compiled with `python -m ambient.compile` and started with `scripts/channel.sh`.
+A **FastAPI control plane** orchestrates all channels: it renders each channel's Compose file,
+starts and stops channels, watches their health, restarts what dies, applies scheduled changes,
+and streams live state to the operator UI ([§5](#5-control-plane)). A channel can also be
+compiled with `python -m ambient.compile` and started with `scripts/channel.sh`, which is what
+the control plane does on the operator's behalf.
 
 The system has no interactive console, no desktop session, and no manual step in normal
-operation. An operator's eventual only interface is the web UI and, at install time, a shell
-script.
+operation. An operator's eventual only interface is the web UI and, at install time,
+`scripts/install.sh`.
 
 ## 2. The central constraint
 
@@ -195,9 +201,10 @@ tree they describe. As the slideshow advances, the backend applies the incoming 
 by sending commands for the affected parameters. The visualization and background track the
 artwork without a graph change.
 
-The mechanism is proven and the graph is already built for it — the composer instantiates
-`zmq@ctl`, `eq@eq` and `hue@hue` at launch. What is missing is the extractor and the applier:
-nothing generates profile JSON yet, and nothing sends the commands.
+The mechanism is proven, the graph is built for it — the composer instantiates `zmq@ctl`,
+`eq@eq` and `hue@hue` at launch — and both halves now exist: `backend/ambient/colorprofile.py`
+extracts profiles, and the slideshow producer applies the incoming slide's palette on each
+slide change. See [color-profiles.md](color-profiles.md).
 
 Spike S3 measured the mechanism. Command latency is **exactly one frame** and deterministic — a
 command lands on the next frame boundary, never later, never smeared. The ceiling is therefore
@@ -279,8 +286,9 @@ itself; it has to come from outside the process.
 **Composer swaps should be make-before-break.** Start the replacement composer, let it publish,
 then stop the old one. Kill-then-restart costs 5.14 s on the YouTube leg even when the publisher
 is supervised; make-before-break with a fast-probe publisher costs 1.03 s. This is a property of
-the supervisor, which is not built yet — `scripts/channel.sh restart` is stop-then-start, and a
-plain `docker restart` of a Phase 1 composer was measured at **13.7 s** on the YouTube leg.
+the supervisor — `supervisor.restart()` does it, `POST /api/channels/{name}/restart` and the
+watchdog both call it. `scripts/channel.sh restart` does not: it is stop-then-start, and a
+plain `docker restart` of a composer was measured at **13.7 s** on the YouTube leg.
 
 #### How the publisher is built
 
@@ -381,7 +389,7 @@ Two containers per channel, plus three global containers.
 
 | Scope | Container | Responsibility |
 |-------|-----------|----------------|
-| Global | `backend` | FastAPI control plane: REST, SSE, static operator UI, supervisor, watchdog, scheduler |
+| Global | `backend` | FastAPI control plane: REST, SSE, supervisor, watchdog, scheduler. It is also where the operator UI will be served from (§5.3) |
 | Global | `icecast` | Audio relay. One instance serves every channel; each channel gets its own mount plus its own fallback mount (§2.2) |
 | Global | `mediamtx` | RTMP relay of the program feed to YouTube; HLS server for the per-channel preview path (§2.6) |
 | Per channel | `<ch>-liquidsoap` | Playlist, crossfade, loudness; publishes to Icecast as a source client |
@@ -420,7 +428,7 @@ out of the per-channel containers.
 flowchart LR
     subgraph host["Single Linux host"]
         subgraph globals["Global"]
-            backend["backend<br/>FastAPI control plane<br/>(not built yet)"]
+            backend["backend<br/>FastAPI control plane"]
             ice["icecast<br/>audio relay + fallback mounts"]
             relay["mediamtx<br/>RTMP relay + HLS<br/>+ runOnReady publisher"]
         end
@@ -451,9 +459,11 @@ Solid arrows carry media. Dashed arrows carry control. The two relays are there 
 reasons: Icecast makes an audio-engine restart invisible (§2.2), MediaMTX bounds the cost of a
 composer restart (§2.6). Only the first is gap-free.
 
-Every solid arrow is built and running. The dashed control arrows are not: in Phase 1 the
-Compose file is rendered by `python -m ambient.compile <channel>` and the channel is started by
-`scripts/channel.sh start <channel>` (§5.1).
+Every solid arrow is built and running, and so are the dashed control arrows. The one link the
+diagram overstates is the last: the backend does **not** re-expose the HLS preview to the
+browser, and does not serve the UI (§5.3). A channel can also be compiled with
+`python -m ambient.compile <channel>` and started with `scripts/channel.sh start <channel>`
+(§5.1).
 
 ## 4. End-to-end data flow
 
@@ -473,9 +483,11 @@ Compose file is rendered by `python -m ambient.compile <channel>` and the channe
    the images, renders crossfades, and writes encoded frames to stdout.
 4. **Image ingest.** FFmpeg reads those frames with `-f image2pipe`, then paces them with
    `fps=<rate>` followed by `realtime`.
-5. **Color application.** Color profile JSON for the current image is read by the backend,
-   which sends ZMQ runtime commands to the named filter instances that carry palette-driven
-   parameters. The graph is not re-parsed.
+5. **Color application.** The slideshow producer reads the incoming image's colour profile as it
+   advances a slide and sends ZMQ runtime commands to the named filter instances that carry
+   palette-driven parameters. Each command installs a self-animating `eq`/`hue` expression
+   rather than a per-frame stream. The graph is not re-parsed. The backend sends the same class
+   of command for a manual colour or a preset.
 6. **Visualization.** The audio stream also feeds the visualization branches. All configured
    plugin branches run; `streamselect` routes the active one into the composite.
 7. **Composite and encode.** Slideshow, visualization, and any overlay are composited, then
@@ -491,10 +503,12 @@ Compose file is rendered by `python -m ambient.compile <channel>` and the channe
    permanently the first time the composer restarts. The publisher probes with 3 s / 4 MB, which
    must stay longer than the composer's 2-second GOP (§2.6). Measured path-ready to publishing:
    **207 ms**.
-10. **Preview.** The backend re-exposes that HLS rendition to the operator UI. Watching a
-    channel costs composer-side encoding of a second, smaller feed — paid continuously whether
-    or not anyone is watching, and the single largest reason a channel costs what
-    [§7.2](#72-capacity) says it costs — and never interferes with the broadcast leg.
+10. **Preview.** MediaMTX serves that HLS rendition on the internal network at
+    `http://mediamtx:8888/<channel>/preview/index.m3u8`. The backend is meant to re-expose it to
+    the operator UI and does not yet, so reaching it needs a published port. The cost is
+    composer-side encoding of a second, smaller feed — paid continuously whether or not anyone
+    is watching, and the single largest reason a channel costs what [§7.2](#72-capacity) says it
+    costs — and it never interferes with the broadcast leg.
 
 Two properties of this chain matter more than the individual steps:
 
@@ -542,36 +556,40 @@ placement — are in [`contracts/media-selection.md`](contracts/media-selection.
 
 ## 5. Control plane
 
-The backend is a single FastAPI application. It is the only component that talks to Docker.
-**It is not built yet.** What exists in `backend/ambient/` today is the offline half — the
-modules a CLI needs to turn a channel's configuration into files on disk — with no HTTP server,
-no supervision loop, and no Docker socket.
+The backend is a single FastAPI application, running as the global `ambient-backend` container.
+It is the only component that talks to Docker, which makes it root-equivalent on the host — see
+[docker-deployment.md](docker-deployment.md#the-docker-socket).
 
-| Module | Responsibility | Built |
-|--------|----------------|-------|
-| `config.py` / `models.py` | Load and validate configuration; Pydantic models are the schema | yes |
-| `media.py` | Resolve selections into `playlist.m3u` and `images.list` (§4.1) | yes |
-| `ffmpeg_cmd.py` | Assemble the composer command from lane-supplied fragments; probe encoders with a real test encode | yes |
-| `plugins.py` | Discover and validate plugin packs | yes |
-| `supervisor.py` | Render per-channel Compose files | rendering only |
-| `zmqctl.py` | Validate runtime commands before sending. A malformed one kills FFmpeg (§2.7) | yes |
-| `compile.py` | The Phase 1 entry point: `python -m ambient.compile <channel>` | yes |
-| `main.py` | Application assembly, router mounting, static UI | no |
-| `watchdog.py` | Detect unhealthy channels, restart with exponential backoff. Health is "output is advancing", not "process is alive" (§4) | no |
-| `scheduler.py` | Time-based changes (playlist, plugin, preset) | no |
-| `colorprofile.py` | Extract palettes from images into profile JSON | no |
-| `presets.py` | Discover and validate preset packs | no |
-| `events.py` | SSE event hub — in-memory queue plus a lock, no broker | no |
-| `metrics.py` | Health and throughput data for the UI | no |
+| Module | Responsibility |
+|--------|----------------|
+| `config.py` / `models.py` | Load and validate configuration; Pydantic models are the schema |
+| `media.py` | Resolve selections into `playlist.m3u` and `images.list` (§4.1) |
+| `ffmpeg_cmd.py` | Assemble the composer command from lane-supplied fragments; probe encoders with a real test encode |
+| `plugins.py` | Discover and validate plugin packs, including the exact-geometry rule |
+| `supervisor.py` | Render per-channel Compose files and drive `docker compose`; make-before-break restart; deliver ZMQ commands |
+| `zmqctl.py` | Validate runtime commands before sending. A malformed one kills FFmpeg (§2.7) |
+| `compile.py` | CLI entry point: `python -m ambient.compile <channel>` |
+| `main.py` | Application assembly, router mounting, bearer auth, relay probing |
+| `api/` | Routers: `channels`, `media`, `looks`, `bumpers`, `system` |
+| `watchdog.py` | Detect unhealthy channels, restart with exponential backoff. Health is "output is advancing", not "process is alive" (§4) |
+| `scheduler.py` | Time-based preset changes, resolved most-specific-first in the channel's timezone |
+| `colorprofile.py` | Extract palettes from images into profile JSON |
+| `presets.py` | Discover and validate preset packs; turn a colour pair into `eq`/`hue` ramps |
+| `events.py` | SSE event hub — one bounded queue per subscriber plus a lock, no broker |
+| `metrics.py` | Prometheus text exposition |
 
-The unbuilt rows are the planned decomposition, owned by the `backend-api` lane.
+`main.py` does **not** yet mount the static UI, and no router proxies the HLS preview path
+(§5.3).
+
+The endpoints are documented in [api-reference.md](api-reference.md) and fixed by
+[`contracts/rest-api.md`](contracts/rest-api.md).
 
 ### 5.1 Channel lifecycle
 
 The backend does not run FFmpeg or Liquidsoap directly. It generates Compose files and lets
 Docker own process supervision.
 
-**Today**, both halves are manual:
+The same two steps by hand, which is what the backend does on the operator's behalf:
 
 ```bash
 python -m ambient.compile lofi          # writes playlist.m3u, images.list, docker-compose.yml
@@ -595,7 +613,7 @@ docker compose --project-name ambient-lofi \
   --file channels/lofi/docker-compose.yml up -d
 ```
 
-**Eventually**, the backend does the same thing on the operator's behalf:
+**Through the backend**, the same thing happens on the operator's behalf:
 
 1. Operator creates or edits a channel through the UI.
 2. The supervisor renders `docker/compose.channel.yml.j2` into
@@ -607,26 +625,41 @@ docker compose --project-name ambient-lofi \
 
 A replacement composer should be started **before** the outgoing one is stopped whenever the
 restart is planned rather than a crash — make-before-break is what holds the YouTube-leg gap at
-1.03 s instead of 5.14 s (§2.6). No current tool does this; `scripts/channel.sh restart` is
-stop-then-start.
+1.03 s instead of 5.14 s (§2.6). `supervisor.restart()` does this, and it is what
+`POST /api/channels/{name}/restart` and the watchdog both call. `scripts/channel.sh restart`
+does not — it is stop-then-start.
 
 Rendering a file rather than constructing containers through the API is deliberate. The
 generated Compose file is readable, diffable, and an operator can run it by hand when the
-backend is down — which, in Phase 1, is the only way it is run.
+backend is down.
+
+**The template does not yet carry the whole resolved configuration.** `compose_context()`
+supplies the channel name, the three host paths, the log directory, the encoder and the
+crossfade. It does not supply `WIDTH`, `HEIGHT`, `FPS`, `HOT_SET`, `ACTIVE_PLUGIN`, or the
+slideshow timings, so the compositor and the producer fall back to their own defaults —
+1280×720 at 30 fps, `showfreqs-bars`, 20 s hold, 2 s fade. Configuring any of those in
+`config.yaml` or `.env` validates and has no effect on the stream. See
+[quickstart.md §11](quickstart.md#11-known-gaps-that-will-surprise-you).
 
 ### 5.2 Live updates to the browser
 
-Not built. Live state will reach the UI over **Server-Sent Events**, backed by an in-memory
-queue and a lock. There is no message broker and no WebSocket upgrade. Channel state changes,
-health transitions, and log lines are all events on that stream; the browser applies them to the
-DOM without a reload.
+Live state reaches the UI over **Server-Sent Events**, backed by an in-memory queue per
+subscriber and a lock. There is no message broker and no WebSocket upgrade. Channel state
+changes, health transitions and progress samples are events on that stream; the browser applies
+them to the DOM without a reload. Events are advisory — a reconnecting client re-reads state
+from `GET /api/channels` rather than replaying, and a subscriber that cannot keep up is dropped
+rather than buffered without bound. The event set is listed in
+[api-reference.md](api-reference.md#server-sent-events).
 
 ### 5.3 Frontend
 
-Not built; `frontend/` does not exist yet. The operator UI will be plain HTML, CSS, and
-JavaScript served directly by FastAPI. There is no npm, no bundler, and no framework.
-Third-party libraries — for example an HLS playback library for the preview — are vendored as
-single files under `frontend/vendor/` and committed.
+The operator UI is plain HTML, CSS and JavaScript under `frontend/`. There is no npm, no
+bundler and no framework; `hls.js` is vendored as a single file under `frontend/vendor/`. The
+backend image bakes the directory in at `/opt/ambient/frontend`.
+
+**Nothing serves it.** The application mounts no static files and does not proxy the
+`/<channel>/preview/index.m3u8` path the UI's preview pane expects, so `http://<host>:8090/`
+returns a 404. Both are the remaining pieces of this section.
 
 Server-supplied strings (channel names, track titles, file names) are rendered with
 `textContent`, never `innerHTML`. Those strings come from disk and from operator input, and
@@ -636,7 +669,7 @@ this is the one place in the project where an XSS bug is realistically reachable
 
 | Property | Consequence |
 |----------|-------------|
-| The backend mounts the Docker socket | The backend is root-equivalent on the host. It binds to localhost by default and requires authentication. |
+| The backend mounts the Docker socket | The backend is root-equivalent on the host. It binds to localhost by default and requires authentication. Its entrypoint additionally drops to `PUID`/`PGID` and reaches the daemon through the socket's own group, which means the socket must not be group `root`. |
 | Channel names reach Docker and the filesystem | Every Docker-touching endpoint treats its input as hostile and sanitizes before interpolation. |
 | A malformed ZMQ message kills FFmpeg | Measured: a message that does not parse into two whitespace-separated tokens aborts the encoder with exit 134, and the filter's default bind is all interfaces with no auth. The composer binds the socket to `127.0.0.1` inside its own container and never publishes the port; `zmqctl.py` validates every command before sending it and is a security boundary, not a convenience wrapper (§2.7). |
 | Stream keys are secrets | Held in `channels/<name>/.env`, `chmod 600`, gitignored. Only the relay reads one, and only when a path goes ready: no composer container is given the key, so it is absent from `docker inspect` on every per-channel container. Inside the relay it is staged in a `0600` tmpfs file and reaches FFmpeg through the preloaded `docker/argv-shim.c`, so it never appears in `argv`, in `ps`, or in a log line. |
@@ -758,18 +791,18 @@ specific to this system.
 The contracts in [`docs/contracts/`](contracts/README.md) are frozen and are the source of
 truth for every interface between lanes. They are lead-owned.
 
-These companion documents are planned in this lane and are **not written yet** — this file and
-the contracts are all the documentation there is.
+These companion documents cover the operational detail this one deliberately leaves out.
 
 | Document | Covers |
 |----------|--------|
-| `quickstart.md` | Ubuntu Server install through first live channel |
-| `plugin-development.md` | Writing a `viz.ffmpeg`, the pad contract, testing a plugin |
-| `visualization-filters.md` | `showwaves` / `showfreqs` / `avectorscope` reference |
-| `color-profiles.md` | Profile JSON schema, extraction, adding an extractor |
-| `api-reference.md` | Every REST endpoint and SSE event |
-| `docker-deployment.md` | Compose topology, GPU passthrough, resource limits, secrets |
-| `scaling.md` | Adding channels, capacity planning, encoder ceilings |
+| [quickstart.md](quickstart.md) | Install through first live channel, and every current gap |
+| [operations.md](operations.md) | Running it 24/7 — health signals, the watchdog, logs, the runbook |
+| [scaling.md](scaling.md) | Capacity planning, adding channels, encoder ceilings |
+| [docker-deployment.md](docker-deployment.md) | Compose topology, ports, GPU passthrough, resource limits, secrets |
+| [api-reference.md](api-reference.md) | Every REST endpoint and SSE event, with examples |
+| [plugin-development.md](plugin-development.md) | Writing a `viz.ffmpeg`, the pad contract, measuring cost |
+| [visualization-filters.md](visualization-filters.md) | `showwaves` / `showfreqs` / `avectorscope` / `showspectrum` and the pipeline filters |
+| [color-profiles.md](color-profiles.md) | Profile JSON schema, extraction, adding an extractor |
 
 The `youtube-ingest` skill under `.github/skills/` holds the proven encoder settings and is
 the authority for anything on the ingest path.

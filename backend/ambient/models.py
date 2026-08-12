@@ -72,6 +72,21 @@ class Weekday(str, Enum):
     SUN = "Sun"
 
 
+class ChannelState(str, Enum):
+    STOPPED = "stopped"
+    STARTING = "starting"
+    RUNNING = "running"
+    DEGRADED = "degraded"
+    FAILED = "failed"
+
+
+class Health(str, Enum):
+    HEALTHY = "healthy"
+    STARVING = "starving"
+    STALLED = "stalled"
+    DISCONNECTED = "disconnected"
+
+
 class StrictModel(BaseModel):
     """YAML surfaces reject unknown keys: a typo must not be silently ignored."""
 

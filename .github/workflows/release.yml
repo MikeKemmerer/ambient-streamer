@@ -1,0 +1,112 @@
+name: Publish Release
+
+# Follows the videokiosk2 pattern: a SemVer tag, a VERSION file that must agree
+# with it, and a source archive with the release metadata appended.
+#
+# Deliberately source-only. Publishing images would mean publishing a build of
+# ffmpeg and Liquidsoap that a 24/7 operator could pull without noticing it had
+# changed; the images are pinned and built on the host that runs them.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "SemVer tag to publish, for example v1.1.0-rc.1"
+        required: true
+        type: string
+      prerelease:
+        description: "Mark this release as a prerelease"
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Guard — no secrets in the tree
+        # A tagged release is the worst possible place to discover a committed
+        # .env or a channel's stream key.
+        run: |
+          set -euo pipefail
+          leaked="$(git ls-files | grep -E '(^|/)\.env$|(^|/)ambient\.yaml$|\.key$' || true)"
+          if [ -n "$leaked" ]; then
+            echo "::error::these files must never be tracked:"
+            printf '%s\n' "$leaked"
+            exit 1
+          fi
+          if git grep -nIE 'YOUTUBE_STREAM_KEY=[^[:space:]]' -- . ':!*.example' ':!docs/*'; then
+            echo "::error::a stream key looks committed"
+            exit 1
+          fi
+          echo "no secrets tracked"
+
+      - name: Determine release metadata
+        id: release
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_PRERELEASE: ${{ inputs.prerelease }}
+        run: |
+          set -euo pipefail
+          tag="$GITHUB_REF_NAME"
+          prerelease=false
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            tag="$INPUT_VERSION"
+            prerelease="$INPUT_PRERELEASE"
+          elif [[ "$tag" == *-* ]]; then
+            prerelease=true
+          fi
+
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid SemVer tag: $tag" >&2
+            exit 1
+          fi
+
+          version_file=$(tr -d '\r\n' < VERSION)
+          release_base="${tag#v}"
+          release_base="${release_base%%-*}"
+          if [[ "$version_file" != "$release_base" ]]; then
+            echo "VERSION ($version_file) does not match release tag $tag" >&2
+            exit 1
+          fi
+
+          repository_name="${GITHUB_REPOSITORY#*/}"
+          archive_tar="$RUNNER_TEMP/${repository_name}-${tag}.tar"
+          archive_path="${archive_tar}.gz"
+          release_metadata="$RUNNER_TEMP/RELEASE.json"
+          jq -n \
+            --arg version "$version_file" \
+            --arg tag "$tag" \
+            --arg commit "$GITHUB_SHA" \
+            '{version: $version, tag: $tag, commit: $commit}' \
+            > "$release_metadata"
+          git archive --format=tar --prefix="${repository_name}-${tag}/" --output="$archive_tar" HEAD
+          tar --append --file="$archive_tar" \
+            --transform="s|^|${repository_name}-${tag}/|" \
+            -C "$RUNNER_TEMP" RELEASE.json
+          gzip -n "$archive_tar"
+
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
+          echo "make_latest=$([[ "$prerelease" == true ]] && echo false || echo true)" >> "$GITHUB_OUTPUT"
+          echo "archive_path=$archive_path" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.release.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          generate_release_notes: true
+          prerelease: ${{ steps.release.outputs.prerelease }}
+          make_latest: ${{ steps.release.outputs.make_latest }}
+          files: ${{ steps.release.outputs.archive_path }}

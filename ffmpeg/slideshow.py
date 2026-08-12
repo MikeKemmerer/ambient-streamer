@@ -26,6 +26,8 @@ from typing import Optional
 
 from PIL import Image
 
+import nowstate
+
 LOG = sys.stderr
 
 
@@ -260,6 +262,7 @@ class Producer:
         self.first_write: Optional[float] = None
         self.colour = (ColourSender(cfg.zmq_endpoint, cfg.transition)
                        if cfg.zmq_endpoint else None)
+        self.now = nowstate.start_writer()
         self.playlist: list[str] = []
         self.order: list[str] = []
         self.index = 0
@@ -352,6 +355,8 @@ class Producer:
             log("fatal", reason="no_loadable_slides", list=self.cfg.images_list)
             return 2
         cur_path, cur_img, cur_bytes = first
+        if self.now is not None:
+            self.now.set_slide(cur_path)
         log("start", list=self.cfg.images_list, slides=len(self.order),
             geometry=f"{self.cfg.width}x{self.cfg.height}", fps=self.cfg.fps,
             hold_frames=self.hold_frames, fade_frames=self.fade_frames,
@@ -370,6 +375,10 @@ class Producer:
                 continue
             nxt_path, nxt_img, nxt_bytes = nxt
             self.slides += 1
+            # Published as the crossfade starts, with the colour ramp, because
+            # that is when the viewer sees the new slide arrive.
+            if self.now is not None:
+                self.now.set_slide(nxt_path)
             if self.colour is not None:
                 self.colour.apply(nxt_path, self.stream_time())
 

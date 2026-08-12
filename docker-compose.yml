@@ -4,6 +4,7 @@
 # projects from docker/compose.channel.yml.j2. At the maximum of 8 channels that
 # is 19 containers, not 40.
 #
+#   scripts/install.sh            <- first, once. Writes .env and its secrets.
 #   docker compose -p ambient up -d
 #
 # Nothing here is published to the LAN except the backend. MediaMTX (RTMP + HLS)
@@ -51,6 +52,13 @@ services:
       # 1777 (sticky, like /tmp): Docker creates a tmpfs owned by root, and this
       # container runs as PUID/PGID, so a stricter mode blocks the render.
       - /run/icecast:mode=1777,size=1m
+    logging:
+      # Bounded, because this runs for months. An unrotated json-file log is
+      # how a 24/7 service fills a disk.
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
     networks: [ambient]
     # No ports. The compositor reaches this at http://icecast:8081/<mount>.
 
@@ -84,41 +92,85 @@ services:
       # Where the publisher stages a 0600 key file for the argv shim. tmpfs so
       # a stream key never touches a disk here.
       - /run/ambient:mode=0700,size=1m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
     networks: [ambient]
     # No ports. RTMP 1935, HLS 8888 and the API 9997 stay internal.
 
   # ---------------------------------------------------------------------------
-  # Backend control plane — FastAPI, owned by the backend-api lane.
+  # Backend control plane — FastAPI: REST, SSE, static operator UI, supervisor,
+  # watchdog, scheduler.
   #
-  # Profile-gated: `docker compose -p ambient up -d` brings up the streaming
-  # path without it, so infra is testable before the backend image exists.
-  # Start it with:  docker compose -p ambient --profile backend up -d
+  # The repository is bind-mounted at ITS OWN HOST PATH, not at /app. This
+  # process renders channels/<name>/docker-compose.yml with bind sources in it,
+  # and the daemon resolves a bind source on the host — so the path the backend
+  # writes and the path the daemon reads have to be the same string. Mounting
+  # elsewhere produces channels that start with empty media directories.
+  # scripts/install.sh writes AMBIENT_REPO_ROOT into .env.
   # ---------------------------------------------------------------------------
   backend:
-    profiles: [backend]
     image: ${AMBIENT_BACKEND_IMAGE:-ambient-backend:dev}
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.backend
     container_name: ambient-backend
     restart: unless-stopped
     environment:
-      AMBIENT_BIND_ADDRESS: ${AMBIENT_BIND_ADDRESS:-127.0.0.1}
-      AMBIENT_API_TOKEN: ${AMBIENT_API_TOKEN:?set in .env — openssl rand -hex 32}
-      AMBIENT_DATA_DIR: /app/channels
-      AMBIENT_COMMON_DIR: /app/common
-      AMBIENT_LOG_DIR: /var/log/ambient
+      # CONTAINER-side bind. What keeps this off the LAN is the HOST side of
+      # the ports mapping below, which defaults to loopback. Binding 0.0.0.0
+      # in here is also why the token below is required and not advisory:
+      # main.py refuses to start without one when not on loopback.
+      AMBIENT_BIND_ADDRESS: 0.0.0.0
+      AMBIENT_API_TOKEN: ${AMBIENT_API_TOKEN:?unset — run scripts/install.sh, which generates one}
+      AMBIENT_BACKEND_PORT: ${AMBIENT_BACKEND_PORT:-8090}
+      AMBIENT_ROOT: ${AMBIENT_REPO_ROOT:?unset — run scripts/install.sh; it must be this repo's absolute host path}
+      AMBIENT_LOG_DIR: ${AMBIENT_LOG_DIR:-/var/log/ambient}
+      AMBIENT_FRONTEND_DIR: ${AMBIENT_FRONTEND_DIR:-/opt/ambient/frontend}
       PUID: ${PUID:-1000}
       PGID: ${PGID:-1000}
       TZ: ${TZ:-UTC}
     volumes:
       # Root-equivalent on the host. This is why the published port below is
-      # bound to ${AMBIENT_BIND_ADDRESS}, which defaults to loopback, and why
-      # AMBIENT_API_TOKEN is required rather than optional.
+      # bound to ${AMBIENT_BIND_ADDRESS}, which defaults to loopback, why
+      # AMBIENT_API_TOKEN is required rather than optional, and why the
+      # entrypoint drops to PUID/PGID before exec'ing the app.
       - /var/run/docker.sock:/var/run/docker.sock
-      - ./ambient.yaml:/app/ambient.yaml:ro
-      - ${AMBIENT_DATA_DIR:-./channels}:/app/channels
-      - ${AMBIENT_COMMON_DIR:-./common}:/app/common:ro
-      - ${AMBIENT_LOG_DIR:-/var/log/ambient}:/var/log/ambient
+      # Read-write: the supervisor writes channels/<name>/docker-compose.yml,
+      # and the media resolver writes playlist.m3u and images.list.
+      - ${AMBIENT_REPO_ROOT:?}:${AMBIENT_REPO_ROOT:?}
+      - ${AMBIENT_LOG_DIR:-/var/log/ambient}:${AMBIENT_LOG_DIR:-/var/log/ambient}
     ports:
-      - "${AMBIENT_BIND_ADDRESS:-127.0.0.1}:${AMBIENT_BACKEND_PORT:-8090}:8090"
+      - "${AMBIENT_BIND_ADDRESS:-127.0.0.1}:${AMBIENT_BACKEND_PORT:-8090}:${AMBIENT_BACKEND_PORT:-8090}"
+    healthcheck:
+      # No curl in the image, and adding one for a healthcheck is a poor trade.
+      test:
+        - CMD
+        - python
+        - -c
+        - |
+          import os, sys, urllib.request
+          port = os.environ.get("AMBIENT_BACKEND_PORT", "8090")
+          with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/health", timeout=4) as r:
+              sys.exit(0 if r.status == 200 else 1)
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    deploy:
+      resources:
+        limits:
+          # The control plane must never be what starves an encoder. It forks
+          # `docker compose`, which is the memory-hungry part.
+          cpus: "${BACKEND_CPU_LIMIT:-1.0}"
+          memory: ${BACKEND_MEMORY_LIMIT:-1g}
     networks: [ambient]
     depends_on: [icecast, mediamtx]
 

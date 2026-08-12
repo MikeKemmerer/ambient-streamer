@@ -1,0 +1,31 @@
+version: 1
+name: warm-sunset
+display_name: "Warm Sunset"
+description: "Amber wash, long crossfades."
+
+visualisation:
+  active: showfreqs-bars
+
+colour:
+  mode: manual
+  manual:
+    accent: "#FFB74D"
+    tint: "#3A1B0B"
+  transition_seconds: 6.0
+
+slideshow:
+  hold_seconds: 35.0
+  fade_seconds: 5.0
+  order: sequential
+
+audio:
+  crossfade_seconds: 10.0
+
+# Only the knobs the colour ramp does not own: eq.brightness, eq.saturation and
+# hue.h are left to the ramp.
+effects:
+  eq:
+    contrast: 1.05
+    gamma: 0.95
+  hue:
+    s: 1.15
