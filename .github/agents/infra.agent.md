@@ -47,7 +47,7 @@ the contract — keep it readable, because operators will read the generated out
 - **The backend container mounts the Docker socket, which is root-equivalent on the host.**
   Bind the backend to localhost by default and require authentication. Say so in the
   installer output; do not let an operator expose it unknowingly.
-- **Stream keys via Docker secrets or per-channel `.env`** — never baked into an image,
+- **Stream keys live in the per-channel `.env`** — never baked into an image,
   never in a tracked file, never printed by a script.
 - **Media does not live on `/mnt/c/...`.** On Docker Desktop/WSL2 that path is 9p-backed and
   far too slow for 24/7 reads. Use a WSL2 ext4 path or a named volume.

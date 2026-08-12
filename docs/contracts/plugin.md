@@ -138,10 +138,20 @@ return `22 Invalid argument` and the graph keeps running.
 
 Roughly **0.2–0.25 cores per idle branch at 720p**, scaling ~1.9× at 1080p.
 
-`hot_set` is a CPU budget, not a preference list. A channel with three hot
-plugins costs ~0.96 cores before the slideshow is added; with the slideshow,
-~1.1 cores. The backend refuses a `hot_set` whose projected cost would
-oversubscribe the host — see [config.md](config.md).
+`hot_set` is a CPU budget, not a preference list. The backend refuses a
+`hot_set` whose projected cost would oversubscribe the host — see
+[config.md](config.md).
+
+### What a whole channel actually costs
+
+The figures above are filtergraph benchmarks. A **running** channel measured
+**~1.5 cores at 720p with one hot plugin** — higher than the benchmark implies,
+because the channel also decodes MP3 from Icecast, decodes JPEG off the
+producer pipe, and **encodes the HLS preview as a second output**. The preview
+is not a free tap off the program encode.
+
+Budget from the measured 1.5, not from the benchmark table, and add ~0.2–0.25
+per additional hot plugin.
 
 ## Benchmarking caveat
 

@@ -103,7 +103,8 @@ services:
       RESOLUTION: ${RESOLUTION:-720p}
       FPS: ${FPS:-30}
       # ipc:// on tmpfs, not tcp://. A published ZMQ port is a remote kill surface.
-      ZMQ_ADDRESS: ipc:///run/ambient/zmq.sock
+      ZMQ_BIND_HOST: 127.0.0.1
+      ZMQ_BIND_PORT: "5555"
       PUID: ${PUID:-1000}
       PGID: ${PGID:-1000}
       TZ: ${TZ:-UTC}

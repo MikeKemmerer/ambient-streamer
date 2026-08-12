@@ -103,7 +103,9 @@ unilaterally change it.
 - **Bash**: `set -euo pipefail`, `log`/`ok`/`warn`/`die` colored output helpers, idempotent.
 - **Config**: `*.example` files are tracked; the real file is gitignored. Never commit
   credentials, stream keys, or real hostnames.
-- **Secrets**: per-channel `.env`; RTMP stream keys via Docker secrets. Stream keys are
+- **Secrets**: per-channel `.env`, never a tracked file and never baked into an image. The
+  RTMP stream key is read by the MediaMTX relay at path-ready time from a read-only
+  `channels/` bind mount, so adding a channel needs no relay restart. Stream keys are
   created by hand in YouTube Studio, never through the YouTube API.
 - **Comments**: only to explain what the code cannot show on its own. One short line.
 

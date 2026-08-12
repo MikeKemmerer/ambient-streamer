@@ -79,9 +79,13 @@ on a running stream without restarting it.
 
 ## Capacity
 
-Measured on a 7-core host: roughly **1.1 cores per 720p stream** with three
-visualisation plugins loaded. Reserve about a core for the OS and the shared
-services, then divide. See `docs/scaling.md`.
+Measured on a running 7-core host: roughly **1.5 cores per 720p stream** with
+one visualisation plugin loaded. Reserve about a core for the OS and the shared
+services, then divide — roughly four streams on that host.
+
+That is higher than filtergraph benchmarks alone predict, because the HLS
+preview is a second encode rather than a free tap off the first. See the
+capacity section of [docs/architecture.md](../docs/architecture.md).
 
 ## Never commit
 

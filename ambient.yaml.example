@@ -30,8 +30,10 @@ defaults:
 limits:
   max_channels: 8
 
-  # Cores held back for the OS and the shared containers. A 720p channel with
-  # three hot plugins measured ~1.1 cores, so a 7-core host runs about five.
+  # Cores held back for the OS and the shared containers. A running 720p channel
+  # measured ~1.5 cores with ONE hot plugin, so a 7-core host runs about four.
+  # That is higher than filter benchmarks suggest because the HLS preview is a
+  # second encode, not a free tap off the first.
   reserved_cores: 1.0
 
 encoders:

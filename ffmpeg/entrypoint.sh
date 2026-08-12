@@ -107,6 +107,51 @@ read -r P_RATE P_BUFSIZE P_AUDIO_BR <<<"$(ladder "$PREVIEW_HEIGHT")"
 GOP=$(( FPS * 2 ))
 P_GOP=$(( PREVIEW_FPS * 2 ))
 
+# ------------------------------------------------------------- encoder profile
+# youtube-ingest skill. The rate-control intent is the same for all three — CBR
+# at the ladder rate, fixed GOP of fps*2, no scene-cut keyframes, yuv420p — only
+# the knob names differ. -preset veryfast and -x264-params are libx264-only.
+VIDEO_FLAGS=()
+video_flags() {
+  local encoder="$1" fps="$2" rate="$3" bufsize="$4" gop="$5"
+  local -a codec rc_tail
+  case "$encoder" in
+    libx264)
+      codec=(-c:v libx264 -preset "$PRESET")
+      rc_tail=(-sc_threshold 0 -x264-params "nal-hrd=cbr:force-cfr=1")
+      ;;
+    h264_nvenc)
+      codec=(-c:v h264_nvenc -preset p4 -tune ll -rc cbr -cbr 1)
+      rc_tail=(-no-scenecut 1)
+      ;;
+    h264_qsv)
+      # No -rc_mode: that option is h264_vaapi's, not h264_qsv's. CBR comes from
+      # -b:v and -maxrate being equal below.
+      codec=(-c:v h264_qsv -preset medium)
+      rc_tail=()
+      ;;
+    *)
+      die "ENCODER '$encoder' is not one of: libx264, h264_nvenc, h264_qsv"
+      ;;
+  esac
+  VIDEO_FLAGS=(
+    "${codec[@]}" -r "$fps" -fps_mode cfr
+    -b:v "$rate" -minrate "$rate" -maxrate "$rate" -bufsize "$bufsize"
+    -g "$gop" -keyint_min "$gop" "${rc_tail[@]}" -pix_fmt yuv420p
+  )
+}
+
+video_flags "$ENCODER" "$FPS" "$RATE" "$BUFSIZE" "$GOP"
+MAIN_VIDEO=("${VIDEO_FLAGS[@]}")
+
+# The preview is a 360p operator view, not a product. Consumer NVENC caps
+# concurrent sessions, so spending one here costs a whole channel; mixing
+# encoders in one FFmpeg process is legal, so it stays on libx264 regardless
+# of $ENCODER. Matches build_composer_command() in backend/ambient/ffmpeg_cmd.py.
+video_flags libx264 "$PREVIEW_FPS" "$P_RATE" "$P_BUFSIZE" "$P_GOP"
+PREVIEW_VIDEO=("${VIDEO_FLAGS[@]}")
+ok "encoder: ${ENCODER} @ ${RATE} (preview libx264 @ ${P_RATE})"
+
 # --------------------------------------------------------------------- plugins
 # ffmpeg takes colours as 0xRRGGBB; '#' is a filtergraph escaping problem.
 ACCENT_FF="0x${ACCENT#\#}"
@@ -201,17 +246,11 @@ ok "producer pid $PRODUCER_PID at ${PRODUCER_FPS} fps, ${WIDTH}x${HEIGHT}"
   -f image2pipe -framerate "$PRODUCER_FPS" -i pipe:0 \
   -filter_complex_script "$GRAPH_FILE" \
   -map '[vmain]' -map '[amain]' \
-    -c:v "$ENCODER" -preset "$PRESET" -r "$FPS" -fps_mode cfr \
-    -b:v "$RATE" -minrate "$RATE" -maxrate "$RATE" -bufsize "$BUFSIZE" \
-    -g "$GOP" -keyint_min "$GOP" -sc_threshold 0 \
-    -x264-params "nal-hrd=cbr:force-cfr=1" -pix_fmt yuv420p \
+    "${MAIN_VIDEO[@]}" \
     -c:a aac -b:a "$AUDIO_BR" -ar 44100 \
     -f flv "${RELAY_RTMP}/${CHANNEL_NAME}" \
   -map '[vpreview]' -map '[apreview]' \
-    -c:v "$ENCODER" -preset "$PRESET" -r "$PREVIEW_FPS" -fps_mode cfr \
-    -b:v "$P_RATE" -minrate "$P_RATE" -maxrate "$P_RATE" -bufsize "$P_BUFSIZE" \
-    -g "$P_GOP" -keyint_min "$P_GOP" -sc_threshold 0 \
-    -x264-params "nal-hrd=cbr:force-cfr=1" -pix_fmt yuv420p \
+    "${PREVIEW_VIDEO[@]}" \
     -c:a aac -b:a "$P_AUDIO_BR" -ar 44100 \
     -f flv "${RELAY_RTMP}/${CHANNEL_NAME}/preview" \
   < "$FIFO" &

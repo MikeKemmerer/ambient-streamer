@@ -72,7 +72,7 @@ def test_hardware_profiles_keep_cbr_intent() -> None:
     nvenc = " ".join(video_flags(Encoder.NVENC, 30, rates("720p")))
     assert "-c:v h264_nvenc" in nvenc and "-rc cbr" in nvenc and "-cbr 1" in nvenc
     qsv = " ".join(video_flags(Encoder.QSV, 30, rates("720p")))
-    assert "-c:v h264_qsv" in qsv and "-rc_mode CBR" in qsv
+    assert "-c:v h264_qsv" in qsv and "-rc_mode" not in qsv
 
 
 def test_mandatory_input_flags_are_present() -> None:

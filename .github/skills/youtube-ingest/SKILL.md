@@ -87,7 +87,11 @@ stays identical (CBR, fixed GOP, no scene-cut keyframes).
 - **NVENC** — `-c:v h264_nvenc -preset p4 -tune ll -rc cbr -cbr 1`. Requires
   `--gpus all` plus nvidia-container-toolkit. Works on WSL2. Consumer GeForce cards cap
   concurrent encode sessions, so plan for overflow channels falling back to `libx264`.
-- **QSV** — `-c:v h264_qsv -preset medium -rc_mode CBR`. Requires `/dev/dri` passthrough.
+- **QSV** — `-c:v h264_qsv -preset medium`. CBR comes from `-b:v` and `-maxrate` being
+  equal, as in the shared block above. Do **not** add `-rc_mode CBR`: that option belongs to
+  `h264_vaapi`, not `h264_qsv` — verified against FFmpeg 6.1.1, where `h264_qsv` exposes no
+  `rc_mode` at all. An unconsumed codec AVOption is only a warning, so the mistake survives
+  testing and misleads the next reader. Requires `/dev/dri` passthrough.
   **Not available on Docker Desktop / WSL2**; bare-metal Linux only.
 
 Always verify the encoder actually exists at runtime (`ffmpeg -hide_banner -encoders`) and

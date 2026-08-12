@@ -44,8 +44,8 @@ defaults:
 limits:
   max_channels: 8
   # Refuse to start a channel when the projected core cost of all running
-  # channels exceeds this. Measured cost is ~1.1 cores per 720p channel with
-  # three hot plugins; see plugin.md for per-plugin figures.
+  # channels exceeds this. Measured on a running channel: ~1.5 cores per 720p
+  # channel with ONE hot plugin. See plugin.md for the per-plugin figures.
   reserved_cores: 1.0
 
 encoders:

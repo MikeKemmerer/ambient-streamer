@@ -37,7 +37,7 @@ mkdir -p "$OUT_DIR"
 if [[ -n "$SOURCE" ]]; then
   [[ -f "$SOURCE" ]] || die "source not found: $SOURCE"
   log "encoding ${DURATION}s fallback for '$CHANNEL' from $SOURCE"
-  ffmpeg -hide_banner -loglevel error -y \
+  ffmpeg -nostdin -hide_banner -loglevel error -y \
     -stream_loop -1 -i "$SOURCE" -t "$DURATION" \
     -af "aresample=${SAMPLERATE},afade=t=in:st=0:d=1,afade=t=out:st=$((DURATION - 1)):d=1" \
     -c:a libmp3lame -b:a "$BITRATE" -ar "$SAMPLERATE" -ac "$CHANNELS" \
@@ -45,7 +45,9 @@ if [[ -n "$SOURCE" ]]; then
 else
   # Digital silence, not a tone: this plays on-air whenever Liquidsoap is down.
   log "encoding ${DURATION}s silent fallback for '$CHANNEL'"
-  ffmpeg -hide_banner -loglevel error -y \
+  # -nostdin: without it ffmpeg swallows the caller's stdin, which silently eats
+  # lines from any heredoc this script is invoked from.
+  ffmpeg -nostdin -hide_banner -loglevel error -y \
     -f lavfi -i "anullsrc=channel_layout=stereo:sample_rate=${SAMPLERATE}" -t "$DURATION" \
     -c:a libmp3lame -b:a "$BITRATE" -ar "$SAMPLERATE" -ac "$CHANNELS" \
     "$DEST"

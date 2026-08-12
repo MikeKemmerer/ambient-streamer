@@ -90,9 +90,18 @@ keeping the relay and the ZMQ sockets off the LAN is the point.
 
 ## Logs
 
+On the **host**, one directory per channel:
+
 ```
-/var/log/ambient/<channel>/{compositor,liquidsoap,producer,watchdog}.log
+${AMBIENT_LOG_DIR}/<channel>/{compositor,liquidsoap,producer,watchdog}.log
 ```
+
+That directory is mounted at `/var/log/ambient` **inside** the channel's
+containers, so a container writes `/var/log/ambient/compositor.log` with no
+channel name in the path — the name is the mount point. Giving every channel
+the same in-container path is what lets one image serve all of them; without
+the per-channel host directory, every channel's containers would write to the
+same file.
 
 Every process writes to **both** its log file and stdout. Files give the UI
 something to tail; stdout keeps `docker logs` and the container runtime's own

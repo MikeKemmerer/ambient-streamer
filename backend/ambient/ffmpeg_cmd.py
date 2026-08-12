@@ -111,7 +111,9 @@ def _encoder_specific(encoder: Encoder | str) -> list[str]:
             "-no-scenecut", "1",
         ]
     if value == Encoder.QSV.value:
-        return ["-c:v", "h264_qsv", "-preset", "medium", "-rc_mode", "CBR"]
+        # No -rc_mode: that option belongs to h264_vaapi. CBR comes from equal
+        # -b:v and -maxrate, set by the caller.
+        return ["-c:v", "h264_qsv", "-preset", "medium"]
     raise ValueError(f"unknown encoder {value!r}")
 
 
