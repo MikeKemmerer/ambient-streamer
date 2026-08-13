@@ -375,10 +375,14 @@ log "now.json -> $NOW_FILE (liquidsoap ${LIQ_TELNET_HOST}:${LIQ_TELNET_PORT})"
 # once, so the first connect always finds nothing listening and plain
 # -reconnect only covers a drop mid-stream.
 # -probesize/-analyzeduration: without them FFmpeg takes 8.4 s to first sample.
+# -fflags nobuffer: 0.45s of a 0.9s cold start, and every second before the first
+# packet is dead air, because the replacement evicts the outgoing composer the
+# moment it connects. It was worth nothing until Icecast began bursting - before
+# that the wait was for audio to arrive at all, not for FFmpeg to buffer it.
 # stdin is the producer FIFO, never a terminal, so </dev/null is not used here.
 "$FFMPEG_BIN" -nostdin -hide_banner -loglevel "$FFMPEG_LOGLEVEL" \
   -progress "$PROGRESS_FILE" \
-  -probesize 32k -analyzeduration 500000 \
+  -probesize 32k -analyzeduration 500000 -fflags nobuffer \
   -reconnect 1 -reconnect_streamed 1 -reconnect_on_network_error 1 \
   -reconnect_delay_max 5 \
   -i "$AUDIO_URL" \

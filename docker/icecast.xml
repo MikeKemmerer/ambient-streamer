@@ -35,10 +35,19 @@
         <!-- A source that goes quiet for 10s is treated as gone, which is what
              hands listeners to the fallback mount. -->
         <source-timeout>10</source-timeout>
-        <!-- No burst: the compositor wants live audio, not a primed buffer that
-             puts it permanently behind wallclock. -->
-        <burst-on-connect>0</burst-on-connect>
-        <burst-size>0</burst-size>
+        <!-- Burst, despite the compositor wanting live audio, because "live"
+             costs more than the latency it saves. FFmpeg needs several seconds
+             of MP3 content before it emits its first packet: measured 0s to
+             first packet from a file and 9s from this mount with no burst, the
+             difference being purely how fast the same bytes arrive. That 9s is
+             dead air on every settings restart, because the replacement
+             compositor evicts the outgoing one the moment it connects.
+             256 KB is about 8s at the ~254 kbps this mount measured, so a
+             reconnecting compositor gets what FFmpeg is waiting for at once and
+             is that far behind wallclock instead - a fixed offset nobody
+             watching ambient music can perceive. -->
+        <burst-on-connect>1</burst-on-connect>
+        <burst-size>262144</burst-size>
     </limits>
 
     <!-- Passwords come from the environment. Never a literal in a tracked file. -->
