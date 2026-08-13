@@ -98,7 +98,14 @@ services:
         max-size: "10m"
         max-file: "5"
     networks: [ambient]
-    # No ports. RTMP 1935, HLS 8888 and the API 9997 stay internal.
+    # RTMP 1935 and the API 9997 are never published: 1935 would let anyone on
+    # the network publish to a path, and 9997 can reconfigure the relay.
+    # Only HLS is exposed, and only to the address you name. The default is
+    # loopback, so it is reachable from the host (or an SSH tunnel) but not the
+    # LAN; set AMBIENT_HLS_BIND=0.0.0.0 to open it to players like VLC. It is
+    # unauthenticated — anyone who can reach it can watch any channel.
+    ports:
+      - "${AMBIENT_HLS_BIND:-127.0.0.1}:${AMBIENT_HLS_PUBLISH:-8888}:8888"
 
   # ---------------------------------------------------------------------------
   # Backend control plane — FastAPI: REST, SSE, static operator UI, supervisor,
