@@ -1236,7 +1236,7 @@ function renderLookTab() {
         ? { tone: 'bad', text: 'not installed' }
         : isHot
           ? { tone: 'ok', text: 'instant' }
-          : { tone: 'warn', text: live ? '~1s gap' : 'on next start' };
+          : { tone: 'warn', text: live ? 'restarts' : 'on next start' };
 
     const where = !enabled
       ? (isHot ? 'in hot set \u2014 costs nothing while the visualization is off' : 'installed, not instantiated')

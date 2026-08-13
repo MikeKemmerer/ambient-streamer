@@ -10,13 +10,13 @@ preset packs are all in the tree. Measured steady state on a running 720p channe
 
 | Not wired up | Where it is described |
 |--------------|-----------------------|
-| The operator UI is served by nothing — the files exist and are baked into the backend image, but the app mounts no static files | [§5.3](#53-frontend) |
-| The backend does not proxy the HLS preview path the UI expects | [§4](#4-end-to-end-data-flow) step 10 |
-| Resolution, fps, `hot_set` and slideshow timing do not reach the compositor — the per-channel Compose template does not pass them | [§5.1](#51-channel-lifecycle) |
 | Creating a channel does not register its Icecast mount | [§2.2](#22-audio-a-separate-process-behind-an-icecast-relay) |
-| Bumper synthesis | [§5](#5-control-plane) |
+| Bumpers — model, API and contract all exist; nothing in `ffmpeg/` or `liquidsoap/` reads any of it | [§5](#5-control-plane) |
 
-The practical effect of each is spelled out in
+The operator UI, the HLS preview proxy, and resolution/fps/`hot_set`/slideshow timing reaching
+the compositor were all listed here as missing and are now implemented.
+
+The practical effect of each remaining gap is spelled out in
 [quickstart.md §11](quickstart.md#11-known-gaps-that-will-surprise-you).
 
 `backend/ambient/` holds the whole control plane: the config layer, the media resolver, the

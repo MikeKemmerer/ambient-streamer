@@ -322,7 +322,7 @@ rule. Nothing records video: MediaMTX has `record: no` and HLS segments are held
 | Restart Liquidsoap | `docker restart <ch>-liquidsoap` | **0 s** on the stream — Icecast's fallback absorbs it |
 | Add a channel to Icecast | `mounts.list` + `SIGHUP` | none |
 | Fill in a stream key | edit `channels/<ch>/.env` | none — the relay reads it at path-ready time |
-| Change `hot_set`, resolution, fps, encoder | `POST .../restart` | **~1.03 s** on the YouTube leg, and a new ingest session |
+| Change `hot_set`, resolution, fps, encoder | `POST .../restart` | **seconds** on the YouTube leg, and a new ingest session; see on-disk.md |
 | Blunt restart | `scripts/channel.sh restart <ch>` | **~13.7 s**, and a new ingest session |
 
 Only the last two rows touch the YouTube broadcast. Prefer everything above them.

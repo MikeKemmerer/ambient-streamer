@@ -172,10 +172,44 @@ at ≥0.97. **Any** compositor exit is a fault regardless of exit code. `drop` a
 
 ## Restarts
 
-Only two changes require a compositor restart: `visualization.hot_set` and
-anything in `.env`. Both must be **make-before-break** — start the replacement,
-let it claim the relay path, then stop the old one.
+These changes require a compositor restart, because a filtergraph is fixed at
+launch: `visualization.enabled`, `visualization.hot_set`,
+`visualization.parameters`, `resolution`, and anything in `.env`. All of them go
+make-before-break — start the replacement, let it claim the relay path, then
+stop the old one.
 
-**Measured:** kill-then-restart costs 5.14 s on the YouTube leg;
-make-before-break costs 1.03 s. Neither is zero, and no configuration makes
-them zero, which is why the design avoids restarts rather than optimising them.
+`visualization.visible` is the exception. It rides the composite overlay's
+timeline `enable` over zmq, lands in one frame, and was confirmed on a running
+channel with the composer's container start time unchanged either side.
+
+### What a restart actually costs
+
+Measure it from the relay, not from the composer. `runOnReady` runs the YouTube
+publisher only while the path has a publisher, so the window between
+`runOnReady command stopped` and `runOnReady command started` is exactly the
+dead air — and each restart of it is a new YouTube ingest session.
+`scripts/measure-restart-gap.py` reports it.
+
+| | Dead air |
+|---|---|
+| Before the per-slot progress fix | **3.22 s and 6.44 s**, sometimes several gaps per restart |
+| After it | one transition per restart |
+
+Older revisions of these docs claimed **1.03 s**. That figure came from a
+Phase-0 spike measuring the publisher reattach in isolation, not an end-to-end
+composer replacement, and nothing in this tree substantiates it. Treat any
+surviving "~1 s" as wrong.
+
+Two things were fixed after that measurement, both verified:
+
+- **Each slot writes its own progress file.** Both composers mount the same run
+  directory, so a single `progress` had two writers and the takeover check could
+  not tell whose frames it was watching — make-before-break was not holding.
+- **The replacement's cold start went from ~9 s to ~0.9 s.** FFmpeg needs several
+  seconds of MP3 content before it emits a packet; the same content from a file
+  reached first packet in 0 s and from a burst-less mount in 9 s. Icecast now
+  bursts on connect, and the composer adds `-fflags nobuffer` (0.46 s).
+
+The end-to-end figure after both fixes has **not** been re-measured on a channel
+that actually publishes to YouTube. The component measurements are sound; the
+whole-path number is not yet confirmed.

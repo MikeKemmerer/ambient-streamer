@@ -95,8 +95,12 @@ def test_manual_color_reaches_the_composer_with_its_initial_values(tmp_path: Pat
     targets = color_targets("#4FC3F7", "#0B2A3A")
 
     assert context["color_mode"] == "manual"
+    # The accent reaches the graph as ${ACCENT} inside the plugin fragments.
+    # There is no COLOR_ACCENT/COLOR_TINT env any more: nothing in ffmpeg/ or
+    # liquidsoap/ ever read them, and the producer takes its accent from the
+    # image profile rather than the environment.
     assert context["color_accent"] == "#4FC3F7"
-    assert context["color_tint"] == "#0B2A3A"
+    assert "color_tint" not in context
     assert context["color_transition_seconds"] == "4"
     # The composite is never pre-rotated by the accent: the accent is the
     # visualization's, and rotating the finished frame by it too would take the

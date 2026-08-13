@@ -180,16 +180,24 @@ depends on the field:
 | Change | Effect |
 |---|---|
 | `audio.tracks` | `playlist.m3u` rewritten; Liquidsoap picks it up. No restart |
-| `images.slides`, `hold_seconds`, `fade_seconds` | `images.list` rewritten; producer picks it up. No restart |
+| `images.slides` | `images.list` rewritten; the producer stats it and re-reads. No restart |
 | **file added to a watched folder** | list rewritten automatically. No restart, no config edit |
 | `visualization.active` | `streamselect` command. One frame |
+| `visualization.visible` | `overlay@viz enable` command. One frame. Saves nothing — the branches keep rendering |
 | `color.*` | zmq commands. One frame |
-| `bumpers.*` | Liquidsoap reconfigured. No compositor restart |
+| `images.hold_seconds`, `fade_seconds` | launch-time environment, converted to frame counts once at producer start. **Applies on the next start** |
+| `visualization.enabled` | **requires a compositor restart** — with it off the graph has no branches at all |
 | `visualization.hot_set` | **requires a compositor restart** — the graph is fixed at launch |
+| `visualization.parameters` | **requires a restart** when that plugin is being drawn; otherwise just saved |
+| `resolution` | **requires a compositor restart** |
 | anything in `.env` | requires the container to be recreated |
+
+`bumpers.*` is deliberately absent from this table. It used to claim "Liquidsoap
+reconfigured. No compositor restart"; nothing in `liquidsoap/` or `ffmpeg/` reads
+any bumper field, so the change has no effect at all. See bumpers.md.
 
 A folder is watched when its channel selected it by glob or by leaving the list
 empty. Explicit lists are not watched — see media-selection.md.
 
-The last two rows are the only ones that interrupt the stream. Both must be
-make-before-break; see [on-disk.md](on-disk.md).
+Everything from `images.hold_seconds` down interrupts the stream. All of it goes
+make-before-break; see [on-disk.md](on-disk.md) for what that actually costs.

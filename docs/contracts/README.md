@@ -41,7 +41,7 @@ Phase 0 measured what each hatch actually costs:
 | Colors | `zmq` runtime commands | one frame |
 | Visualization plugin | `streamselect` between hot graphs | one frame, clean cut |
 | Liquidsoap restart | Icecast fallback mount | 0 s, 0.00 % silence |
-| Anything needing a real FFmpeg restart | MediaMTX relay | **~1 s, and a new YouTube ingest session** |
+| Anything needing a real FFmpeg restart | MediaMTX relay | **seconds, and a new YouTube ingest session** |
 
 The last row is the one to design away from. It is not gap-free and no
 configuration makes it so.

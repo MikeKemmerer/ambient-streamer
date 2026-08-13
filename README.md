@@ -155,7 +155,7 @@ docker compose --project-name ambient-lofi \
 | Restart Liquidsoap | Icecast fallback mount absorbs it | 0 s, 0.00 % silence |
 | Add a channel to Icecast | `mounts.list` + `docker kill -s HUP ambient-icecast` | no restart |
 | Fill in a stream key | the relay reads it when the path goes ready | no relay restart |
-| Restart the composer, make-before-break | `POST /api/channels/<ch>/restart` | **1.03 s** on the YouTube leg |
+| Restart the composer, make-before-break | `POST /api/channels/<ch>/restart` | **seconds** on the YouTube leg (see docs/contracts/on-disk.md) |
 | Restart the composer, blunt | `scripts/channel.sh restart <ch>` | **13.7 s**, and a new ingest session |
 
 Globs and empty selection lists are watched, so dropping a file into a watched folder updates
@@ -171,7 +171,7 @@ the OS and shared services, that host runs **about four channels**.
 
 That is higher than a filtergraph benchmark predicts, because **the HLS preview is a second
 encode**, not a free tap off the program encode — MediaMTX does not transcode. Any estimate that
-does not count the preview encode is wrong. Supported range is 1–8 channels. Add ~0.2–0.25
+does not count the preview encode is wrong. Supported range is 1–8 channels. Add ~0.28
 cores per additional hot plugin; see [docs/scaling.md](docs/scaling.md).
 
 ## Media licensing

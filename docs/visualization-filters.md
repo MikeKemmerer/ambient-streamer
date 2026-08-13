@@ -303,13 +303,74 @@ compositor.
 | Change | Mechanism | Cost |
 |--------|-----------|------|
 | Color (`eq`, `hue`) | ZMQ command, ideally a time expression | one frame |
-| Active plugin | `streamselect@sel map N` | one frame, clean cut |
-| Slide set, order, timing | producer rescans between slides | 0 s, FFmpeg PID unchanged |
+| Active plugin, within the hot set | `streamselect@sel map N` | one frame, clean cut |
+| Visualization on air / on standby | `overlay@viz enable 0\|1` | one frame |
+| Slide set | producer rescans between slides | 0 s, FFmpeg PID unchanged |
 | Playlist, track order | Liquidsoap, behind Icecast | 0 s |
-| `blend` opacity, `hot_set`, resolution, fps, encoder | **new filtergraph** | compositor restart |
+| Slide timing, `enabled`, `hot_set`, plugin parameters, resolution, fps, encoder | **new filtergraph** | compositor restart |
 
-A compositor restart costs ~13.7 s of YouTube outage as a plain `docker restart`, ~1.03 s as a
-supervised make-before-break swap. Neither is zero. Design for the top four rows.
+A compositor restart costs ~13.7 s of YouTube outage as a plain `docker restart`, seconds as a
+supervised make-before-break swap. Neither is zero. Design for the top five rows.
+
+## Turning it off, and standby
+
+Two different switches, and only one of them saves anything:
+
+| | Branches render? | Cost | Changing it |
+|---|---|---|---|
+| `visualization.enabled: false` | no | the pipeline floor | a restart |
+| `enabled: true, visible: false` | yes | same as on | one frame |
+| `enabled: true, visible: true` | yes | same as on | — |
+
+`enabled` is the lever. On a live 1080p30 channel it measured **0.999x realtime
+with the visualization off against 0.415x with it on** — that channel could not
+hold realtime at all until it was switched off.
+
+`visible` is standby. It rides the composite overlay's timeline `enable`, so it
+lands in one frame on the running graph, and the branches keep rendering — which
+is exactly why it can be instant. Use it to take the visualization off air
+without waiting for a restart, not to reclaim CPU.
+
+```bash
+# instant, no restart; refused with 409 if enabled is false
+curl -X PUT .../api/channels/lofi/visualization/visible -d '{"visible": false}'
+```
+
+## Editing the hot set
+
+Every plugin in `hot_set` renders continuously whether or not it is on screen —
+that is what makes switching between them instant, and it is why membership is a
+CPU budget rather than a preference. Switching to a plugin outside the set
+appends it, so without this the cost could only ever grow.
+
+```bash
+curl -X PUT .../api/channels/lofi/hot-set \
+  -d '{"hot_set": ["showfreqs-bars", "neon-spectrum"]}'
+```
+
+Dropping the branch that is on air needs a replacement named in `active`, or the
+request is refused: `visualization.active` must stay inside `hot_set` or the
+channel will not resolve. A channel whose visualization is off is not restarted
+by this — its graph has no branches to rebuild.
+
+## Tuning a plugin
+
+Each plugin declares its own knobs in `plugins/<name>/config.json` under
+`parameters`, and `GET /api/plugins` reports them with their ranges. They are
+substituted into the fragment as `${TOKEN}` at launch.
+
+```bash
+curl -X PUT .../api/channels/lofi/visualization/parameters \
+  -d '{"plugin": "showfreqs-bars", "values": {"detail": 2048, "shape": "line"}}'
+```
+
+Values outside a declared range are **clamped, not refused**, and the clamped
+value is what gets stored. That is deliberate: FFmpeg accepts an out-of-range
+filter option, ignores it, and renders the branch wrong at exit 0, so a silent
+clamp is safer than a silent misrender. An *undeclared* name is refused.
+
+Settings are kept per plugin, so switching away and back restores that plugin's
+look. Applying them restarts the channel only if that plugin is being drawn.
 
 ---
 

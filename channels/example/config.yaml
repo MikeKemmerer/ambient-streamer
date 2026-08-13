@@ -40,7 +40,7 @@ visualization:
   active: showfreqs-bars
 
   # Every plugin listed here is instantiated at launch so it can be switched to
-  # with no restart. Idle branches cost ~0.2-0.25 cores each at 720p, so this
+  # with no restart. Idle branches cost ~0.28 cores each at 720p, so this
   # is a CPU budget rather than a list of preferences.
   #
   # CHANGING hot_set REQUIRES A COMPOSITOR RESTART — the filtergraph is fixed

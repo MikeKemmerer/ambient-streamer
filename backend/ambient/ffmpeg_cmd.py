@@ -55,8 +55,6 @@ AUDIO_INPUT_FLAGS: tuple[str, ...] = (
     "-reconnect_delay_max", "5",
 )
 
-AUDIO_FILTER_CHAIN = "aresample=44100:async=1000:first_pts=0,loudnorm=I=-14:TP=-1:LRA=11"
-
 
 class EncoderUnavailable(RuntimeError):
     """No configured encoder survived its probe."""

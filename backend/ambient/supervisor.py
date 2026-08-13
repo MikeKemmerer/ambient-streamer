@@ -151,8 +151,9 @@ def compose_context(workspace: Workspace, channel: ResolvedChannel) -> dict[str,
         # Without the mode the producer cannot tell a manual color from a
         # derived one and overwrites an operator's color at the next slide.
         "color_mode": channel.color_mode,
+        # Substituted into plugin fragments as ${ACCENT}, and only in manual
+        # mode. The tint has no consumer in the filtergraph at all.
         "color_accent": color.manual.accent,
-        "color_tint": color.manual.tint,
         "color_transition_seconds": f"{color.transition_seconds:g}",
         # The filtergraph is fixed at launch, so a manual color has to start
         # baked into eq/hue or a composer restart resets it to neutral.

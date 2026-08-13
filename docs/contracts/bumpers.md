@@ -3,6 +3,13 @@
 Radio-style station IDs and their insertion.
 Owner: lead. Consumers: media-pipeline, backend-api, frontend.
 
+> **Not built.** This is a design, not a description. The model, the API surface
+> and this document all exist; `grep -ri bumper ffmpeg/ liquidsoap/ docker/`
+> returns nothing. No Liquidsoap operator inserts a bumper, and
+> `POST .../bumpers/generate` synthesises nothing — it emits an SSE event and
+> returns. Setting `bumpers.enabled` with sources that resolve to no files will
+> fail the channel's config load for a feature that cannot run.
+
 ## Source text
 
 `channels/<name>/bumpers.yaml` — tracked in git. The generated audio is not:

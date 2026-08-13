@@ -116,10 +116,7 @@ services:
       PLUGIN_PARAMS: '{{ plugin_parameters }}'
       # Without the mode the producer cannot tell a manual color from one it
       # derived, and overwrites the operator's choice at the next slide.
-      # The hex values must stay quoted: bare `#4FC3F7` is a YAML comment.
       COLOR_MODE: "{{ color_mode }}"
-      COLOR_ACCENT: "{{ color_accent }}"
-      COLOR_TINT: "{{ color_tint }}"
       COLOR_TRANSITION_SECONDS: "{{ color_transition_seconds }}"
       # A filtergraph is fixed at launch, so a manual color starts baked in
       # rather than being reapplied after every composer restart.

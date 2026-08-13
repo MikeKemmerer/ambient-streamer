@@ -65,7 +65,7 @@ the reference channel it reads 0.24 against a measured 1.49. **Use `measured_cor
 
 | Change | Effect |
 |--------|--------|
-| **Each additional hot plugin** | **+0.2–0.25 cores at 720p**, whether or not it is on screen. `hot_set` is a CPU budget, not a preference list |
+| **Each additional hot plugin** | **+0.28 cores at 720p**, whether or not it is on screen. `hot_set` is a CPU budget, not a preference list |
 | **1080p instead of 720p** | more on *both* encodes, ~1.9× on the visualization branch, and the bitrate ladder rises from 3000k to 5000k |
 | **Higher frame rate** | roughly linear on the filter branches; ≥ 50 fps also multiplies the video bitrate by 1.5 in the ladder |
 | **NVENC on the program encode** | moves the 720p encode off the CPU; the preview stays on `libx264` deliberately |

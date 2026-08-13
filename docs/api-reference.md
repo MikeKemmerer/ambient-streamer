@@ -409,7 +409,8 @@ Handover waits for the replacement's `out_time` to advance, bounded at 60 s. If 
 never publishes, the outgoing composer is removed anyway and the response carries
 `took_over: false` in the supervisor's result — two composers cost two composers.
 
-Measured: kill-then-restart costs 5.14 s on the YouTube leg; make-before-break costs 1.03 s.
+Measured on the relay: 3.2-6.4 s of dead air per restart, and a new YouTube ingest session
+each time. See on-disk.md for how that is measured and what has changed since.
 Neither is zero.
 
 ### `GET /api/channels/{name}/preview`

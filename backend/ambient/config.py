@@ -434,18 +434,3 @@ def check_capacity(workspace: Workspace, channels: Iterable[ResolvedChannel]) ->
     if not projected:
         return ["plugin costs unknown; host capacity is unverified"]
     return []
-
-
-def load_all_channels(
-    workspace: Workspace, *, resolve_media: bool = True
-) -> list[ResolvedChannel]:
-    names = discover_channels(workspace)
-    if len(names) > workspace.ambient.limits.max_channels:
-        raise ConfigError(
-            f"{len(names)} channels configured, limits.max_channels is "
-            f"{workspace.ambient.limits.max_channels}"
-        )
-    channels = [load_channel(workspace, name, resolve_media=resolve_media) for name in names]
-    check_mount_uniqueness(channels)
-    workspace.warnings.extend(check_capacity(workspace, channels))
-    return channels

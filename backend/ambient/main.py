@@ -59,7 +59,6 @@ from .watchdog import Watchdog
 LOG = logging.getLogger("ambient.main")
 
 DEFAULT_BIND_ADDRESS = "127.0.0.1"
-DEFAULT_PORT = 8090
 # Where docker/Dockerfile.backend bakes frontend/ and points AMBIENT_FRONTEND_DIR.
 IMAGE_FRONTEND_DIR = Path("/opt/ambient/frontend")
 LOOPBACK = frozenset({"127.0.0.1", "::1", "localhost"})

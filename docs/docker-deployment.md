@@ -463,7 +463,7 @@ shell.
 | Fill in a stream key | edit `channels/<ch>/.env` | none — the relay reads it at path-ready time |
 | Change media or playlist | recompile the channel | none — watched paths update live |
 | Change color or plugin | API, or a ZMQ command | one frame |
-| Change `hot_set`, resolution, fps, encoder | `POST /api/channels/<ch>/restart` | ~1.03 s, make-before-break |
+| Change `hot_set`, resolution, fps, encoder | `POST /api/channels/<ch>/restart` | seconds, make-before-break; see on-disk.md |
 | Blunt restart | `scripts/channel.sh restart <ch>` (stop-then-start) | ~13.7 s of YouTube outage, and a new ingest session |
 | Upgrade a channel image | rebuild, then `POST .../restart` per channel, one at a time | as above, per channel |
 | Upgrade MediaMTX | read the release notes for renamed config keys **first** | brief outage on every channel |

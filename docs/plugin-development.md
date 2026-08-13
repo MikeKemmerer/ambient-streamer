@@ -65,18 +65,23 @@ backend's registry at `<repo>/plugins`. Adding a directory is enough to install 
 is no registration step.
 
 > `preview.png` is specified by the contract but nothing currently reads it — the registry does
-> not load it and `GET /api/plugins` does not return it. Only `showfreqs-bars` ships one. Add
+> not load it and `GET /api/plugins` does not return it. All five ship one. Add
 > one anyway; it is cheap and the UI will want it.
 
-Five plugins ship today. They are the working references:
+Five plugins ship today. They are the working references. The costs are the
+`cores_720p30` each manifest declares — read them from `plugins/*/config.json`
+rather than trusting this table, which drifted once already:
 
-| Plugin | Filter | `commandable` | `cores_720p30` |
-|--------|--------|---------------|----------------|
-| `showfreqs-bars` | `showfreqs` | none | 0.24 |
-| `showwaves-classic` | `showwaves` | none | 0.24 |
-| `minimal-line` | `showwaves` | none | 0.22 |
-| `neon-spectrum` | `showspectrum` | none | 0.25 |
-| `avectorscope-lissajous` | `avectorscope` | 9 parameters | 0.25 |
+| Plugin | Filter | `commandable` | `cores_720p30` | Parameters |
+|--------|--------|---------------|----------------|------------|
+| `showfreqs-bars` | `showfreqs` | none | 0.24 | detail, smoothing, shape |
+| `showwaves-classic` | `showwaves` | none | 0.26 | weight, response, split stereo |
+| `minimal-line` | `showwaves` | none | 0.13 | weight, response, split stereo |
+| `neon-spectrum` | `showspectrum` | none | 0.18 | saturation, gain, hue rotation |
+| `avectorscope-lissajous` | `avectorscope` | 9 parameters | 0.34 | zoom, trail, stroke |
+
+Whatever a manifest declares, a branch is charged at least the measured
+0.28-core floor at 720p30 — see `cost_cores()` in `backend/ambient/plugins.py`.
 
 `avectorscope-lissajous` is the one to read if you need a plugin with real runtime controls;
 the other four correctly declare `"commandable": []`.
@@ -283,7 +288,7 @@ to switch to.
 plugin that is not instantiated cannot be switched to. `PUT .../visualization` with a name
 outside `hot_set` returns `409 not_in_hot_set` rather than silently promoting it and forcing a
 restart the caller did not ask for. A restart is not free — measured at ~13.7 s of YouTube
-outage for a plain container restart, ~1.03 s for a supervised make-before-break swap.
+outage for a plain container restart, seconds for a supervised make-before-break swap; see contracts/on-disk.md.
 
 ---
 
@@ -298,14 +303,14 @@ outage for a plain container restart, ~1.03 s for a supervised make-before-break
 | 3 branches + `streamselect` | 73.5 % |
 | 3 branches + `streamselect` + libx264 CBR | **95.6 %** |
 
-Roughly **0.2–0.25 cores per idle branch at 720p**, scaling ~1.9× at 1080p.
+Roughly **0.28 cores per idle branch at 720p**, scaling ~1.9× at 1080p.
 
 `hot_set` is a CPU budget, not a preference list.
 
 And the filtergraph benchmark is not the whole channel: a **running** channel measured
 **~1.5 cores at 720p with one hot plugin**, because it also decodes MP3 from Icecast, decodes
 JPEG off the producer pipe, and encodes the HLS preview as a second output. Budget from 1.5 and
-add ~0.2–0.25 per additional hot plugin. See [scaling.md](scaling.md).
+add ~0.28 per additional hot plugin. See [scaling.md](scaling.md).
 
 ---
 

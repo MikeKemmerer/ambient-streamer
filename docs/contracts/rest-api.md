@@ -104,7 +104,7 @@ Switching to a plugin **in** `hot_set` returns `200` and switches in one frame.
 
 Switching to an installed plugin **outside** `hot_set` returns `202`: the plugin
 is staged into the running configuration and the channel performs a
-make-before-break restart, which costs a brief gap (~1 s measured). An
+make-before-break restart, which costs a real gap of seconds (see on-disk.md). An
 installed plugin is always *usable* — it simply cannot switch instantly,
 because an FFmpeg filtergraph is fixed at launch and a switchable branch has to
 already be rendering. Callers that will not accept a restart pass

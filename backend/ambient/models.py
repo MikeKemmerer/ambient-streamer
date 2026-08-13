@@ -377,7 +377,6 @@ class GlobalEnv(EnvModel):
 class ChannelEnv(EnvModel):
     stream_key: SecretStr = Field(SecretStr(""), alias="YOUTUBE_STREAM_KEY")
     rtmp_url: str = Field("rtmp://a.rtmp.youtube.com/live2", alias="YOUTUBE_RTMP_URL")
-    rtmp_backup_url: str | None = Field(None, alias="YOUTUBE_RTMP_BACKUP_URL")
     resolution: Resolution | None = Field(None, alias="CHANNEL_RESOLUTION")
     fps: int | None = Field(None, alias="CHANNEL_FPS", ge=1, le=60)
     encoder: Encoder | None = Field(None, alias="CHANNEL_ENCODER")

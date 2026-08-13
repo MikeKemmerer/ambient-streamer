@@ -382,23 +382,27 @@ docker run --rm --network ambient ambient-composer:dev \
   http://mediamtx:8888/lofi/preview/index.m3u8
 ```
 
-To open it in VLC from another machine you must publish the port yourself. Setting
-`AMBIENT_HLS_PUBLISH` makes the installer check that port for a conflict, but **nothing
-publishes it** — `docker-compose.yml` maps no MediaMTX ports. Use an override file:
+To open it in VLC from another machine, publish the relay's HLS port by setting
+`AMBIENT_HLS_PUBLISH` in `.env`. `docker-compose.yml` maps
+`${AMBIENT_HLS_BIND:-127.0.0.1}:${AMBIENT_HLS_PUBLISH:-8888}:8888`, so no override file is
+needed — one existed in an older version of this guide and now collides with the real mapping.
 
 ```bash
-cat > docker-compose.hls.yml <<'YAML'
-services:
-  mediamtx:
-    ports:
-      - "127.0.0.1:8888:8888"
-YAML
-docker compose -p ambient -f docker-compose.yml -f docker-compose.hls.yml up -d
+# .env
+AMBIENT_HLS_PUBLISH=8888
+AMBIENT_HLS_BIND=127.0.0.1     # 0.0.0.0 to reach it from the LAN
+```
+
+```bash
+docker compose -p ambient up -d mediamtx
 ```
 
 Then open `http://127.0.0.1:8888/lofi/preview/index.m3u8`, reaching it over an SSH tunnel from
-another machine. Keep it on loopback: the relay's authentication is an IP allow-list with an
-empty password, not a real credential.
+another machine. The operator UI shows this address under the preview pane, and the channel
+detail returns it as `hls_url` — `null` when the port is not published.
+
+Keep it on loopback unless you mean otherwise: the relay's authentication is an IP allow-list
+with an empty password, not a real credential, and the preview is unauthenticated.
 
 ## 10. The operator UI
 
@@ -406,16 +410,14 @@ empty password, not a real credential.
 vendored as a single file — and the backend image bakes it in at `/opt/ambient/frontend`, with
 `AMBIENT_FRONTEND_DIR` pointing at it.
 
-**Nothing serves it.** The backend mounts no static files, so `http://127.0.0.1:8090/` returns
-a `404` in the contract's error shape. `scripts/install.sh` finishes by telling you to open
-that URL; it will not work yet.
+The backend serves it: open `http://127.0.0.1:8090/`. It also proxies each channel's preview at
+`/<channel>/preview/index.m3u8`, so the preview pane works without a second web server.
 
-The UI also expects the backend to proxy `/<channel>/preview/index.m3u8`, which is likewise not
-implemented — so serving `frontend/` from any other static server gives you a page whose
-preview pane cannot load and whose API calls are cross-origin.
+That proxy requires the bearer token, which an external player cannot send. For VLC, use the
+relay's own port instead — the address is shown under the preview pane, and the channel detail
+returns it as `hls_url`. It exists only when `AMBIENT_HLS_PUBLISH` is set; see §9.
 
-Until both land, drive the system through [the API](api-reference.md) or the shell. The SSE
-stream is useful on its own:
+The SSE stream is useful on its own:
 
 ```bash
 curl -sS -N -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8090/api/events
@@ -427,22 +429,17 @@ with `grep '^AMBIENT_API_TOKEN=' .env`.
 
 ## 11. Known gaps that will surprise you
 
-These are real, current, and worth knowing before you spend time on configuration that has no
-effect. Most of them are limits of the per-channel Compose template, which passes only a subset
-of the resolved configuration to the compositor.
+These are real and current. Everything listed here was verified against the tree; the rest of
+the configuration does reach the compositor.
 
 | You set | What actually happens |
 |---------|-----------------------|
-| `CHANNEL_RESOLUTION`, `CHANNEL_FPS` in `.env` | Ignored by the compositor. It reads `WIDTH`/`HEIGHT`/`FPS`, which the template does not set, so **every channel runs 1280×720 at 30 fps** |
-| `visualization.hot_set` in `config.yaml` | Not passed. The compositor uses its own default, `showfreqs-bars`, whatever the file says — so the other four plugins validate and cost but do not go on air |
-| `visualization.active` | Not passed. The active branch is always index 0 |
-| `images.hold_seconds`, `images.fade_seconds`, `images.order` | Not passed. The producer uses its defaults: 20 s hold, 2 s fade, sequential |
-| `slideshow.producer_fps`, `jpeg_quality` in `ambient.yaml` | Not passed. Producer defaults apply: 10 fps, quality 88 |
 | `CHANNEL_FALLBACK_MOUNT` | Validated, then unused. Icecast derives the fallback from the channel name in `mounts.list` |
-| `AMBIENT_HLS_PUBLISH` | Checked for conflicts by the installer, published by nothing |
 | `POST /api/channels` | Creates the directory, `config.yaml` and `.env`, but does **not** add the Icecast mount or generate a fallback file. Step 7 is still manual |
-| `POST .../bumpers/generate` | Emits a `job.progress` event and synthesises nothing — the one-shot TTS container it describes does not exist |
-| `http://<host>:8090/` | 404. The UI is not served — [§10](#10-the-operator-ui) |
+| `bumpers.*` and `POST .../bumpers/generate` | The model, the API and `docs/contracts/bumpers.md` all exist; **nothing in the media pipeline reads any of it**. No Liquidsoap operator, no TTS container. Setting `bumpers.enabled` with unresolvable sources will fail the channel's config load for a feature that cannot run |
+| `visualization.visible: false` | Takes the visualization off air in one frame, but the branches keep rendering and keep costing. Only `visualization.enabled: false` gives the cores back, and that needs a restart |
+| `images.hold_seconds`, `images.fade_seconds` | Reach the producer as launch-time environment. Changing them on a running channel does nothing until it restarts |
+| `VIZ_OPACITY` | A real knob in the filtergraph (`lut@vizop`), pinned to 0.65. No config field and no API reach it |
 
 `audio.tracks`, `images.slides`, `audio.shuffle`, `audio.crossfade_seconds` and the encoder
 selection **do** take effect — they travel through the generated `playlist.m3u`, `images.list`

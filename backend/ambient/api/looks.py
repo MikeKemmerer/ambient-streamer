@@ -3,7 +3,7 @@
 A plugin in `hot_set` switches instantly: its branch is already rendering and
 `streamselect` picks it in one frame. An installed plugin that is not hot is
 still usable — it is staged into `hot_set` and the compositor is replaced
-make-before-break, which costs a measured ~1s gap. Only a plugin that is not
+make-before-break, which costs a real gap of seconds. Only a plugin that is not
 installed at all is an error.
 """
 
