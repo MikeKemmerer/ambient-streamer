@@ -275,16 +275,15 @@ mkdir -p "$RUN_DIR"
   fi
   # One instance downstream of the selector, so it survives a plugin switch.
   # hue carries h, s and b, which is every grade the visualization needs.
-  printf '%s' "hue@viz=h=${INIT_VIZ_HUE}:s=${INIT_VIZ_SATURATION}[viz];"
-  # NOT all_mode=screen. Screen's identity is 0, but chroma's neutral is 128, so
-  # screening U and V drove both to ~192 and clipped R and B at 255 — a magenta
-  # cast that no upstream color change could survive. Measured on a #E8A0C0
-  # field: background (255,122,255), and `eq saturation 0` moved it only to
-  # (252,139,255). Luma keeps screen; chroma gets grainmerge, which is
-  # base + (viz - 128) — an additive chroma offset that is a true no-op wherever
-  # the visualization is black.
-  printf '%s' "[base][viz]blend=c0_mode=screen:c1_mode=grainmerge:c2_mode=grainmerge"
-  printf '%s' ":all_opacity=${VIZ_OPACITY},"
+  printf '%s' "hue@viz=h=${INIT_VIZ_HUE}:s=${INIT_VIZ_SATURATION},split=2[vizc][vizm];"
+  # The visualization draws on black, so its own luma is its coverage. Turning
+  # that into a real alpha channel is what lets a bar be the accent color rather
+  # than merely tint whatever is behind it: measured, an additive chroma blend
+  # rendered green bars over orange artwork as brighter orange, because adding a
+  # chroma offset cannot replace the chroma already there.
+  printf '%s' "[vizm]format=gray,lut@vizop=y='val*${VIZ_OPACITY}'[vizalpha];"
+  printf '%s' "[vizc][vizalpha]alphamerge[vizrgba];"
+  printf '%s' "[base][vizrgba]overlay=eof_action=pass:format=auto,"
   # eval=frame is not commandable, so it can only be set here.
   printf '%s' "eq@eq=eval=frame:contrast=1:brightness=${INIT_BRIGHTNESS}:saturation=${INIT_SATURATION}"
   printf '%s' ":gamma_r=${INIT_GAMMA_R}:gamma_g=${INIT_GAMMA_G}:gamma_b=${INIT_GAMMA_B},"
