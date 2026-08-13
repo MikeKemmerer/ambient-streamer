@@ -51,6 +51,7 @@ is unset while bound to anything other than loopback.
   "next_track": "lofi-only.mp3",
   "current_slide": "forest.jpg",
   "visualization": "showfreqs-bars",
+  "visualization_enabled": true,
   "encoder": "libx264",
   "encoder_requested": "h264_nvenc",
   "fps": 30.0,
@@ -132,10 +133,13 @@ The two CPU figures look close only because the on case is starved rather than
 busy: it is doing 41 % of the work. Per second of finished stream it costs about
 2.3 cores against 0.77. `projected_cores` falls to the pipeline floor.
 
-`GET /api/channels/{name}` reports the **selected** plugin in `visualization`
-whether or not it is being drawn. `config.visualization.enabled` is the
-authoritative answer to "is anything being rendered"; the status field alone
-cannot tell you.
+Every status body — the `GET /api/channels` summary as well as the detail —
+carries both `visualization` and `visualization_enabled`. `visualization` names
+the **selected** plugin whether or not it is being drawn, so it must never be
+rendered on its own: a channel drawing nothing would still appear to have a
+visualization. `visualization_enabled` is the field that answers "is anything
+being rendered", and it is on the summary precisely so the channel list can
+answer that without fetching each channel's config.
 
 ## Media upload
 

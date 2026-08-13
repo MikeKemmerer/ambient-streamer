@@ -422,7 +422,12 @@ function eventStream(signal) {
 }
 
 function summary(entry) {
-  return { ...entry.status };
+  // Derived from the config the way the backend derives it, so the fixtures
+  // cannot drift out of step with the switch.
+  return {
+    ...entry.status,
+    visualization_enabled: (entry.config.visualization || {}).enabled !== false,
+  };
 }
 
 function logLines(name, service, lines) {
@@ -638,7 +643,7 @@ async function route(url, init) {
       ? { fault: 'liquidsoap_starving', fault_detail: 'icecast fallback mount served 12s of the last minute' }
       : { fault: null, fault_detail: '' };
     return json({
-      ...entry.status,
+      ...summary(entry),
       ...extra,
       warnings: entry.warnings || [],
       config: entry.config,
@@ -649,6 +654,7 @@ async function route(url, init) {
       rtmp_url: entry.delivery.rtmp_url,
       // Presence only. The key is a credential and is never echoed back.
       has_stream_key: Boolean(entry.delivery.stream_key),
+      hls_url: `http://${location.hostname}:8888/${name}/preview/index.m3u8`,
     });
   }
 

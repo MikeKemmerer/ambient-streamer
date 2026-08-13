@@ -112,6 +112,22 @@ def test_the_advertised_url_is_relative_so_a_browser_can_reach_it(api) -> None:
     assert "mediamtx" not in body["hls"], "an internal host resolves nowhere in a browser"
 
 
+def test_an_external_player_is_offered_the_published_relay_port(api, monkeypatch) -> None:
+    """VLC cannot send the bearer token, so it needs the relay directly."""
+    client, state = api
+    monkeypatch.setattr(state.workspace.env, "hls_publish", 8888)
+    body = client.get("/api/channels/lofi", headers=AUTH).json()
+    assert body["hls_url"] == "http://testserver:8888/lofi/preview/index.m3u8"
+    assert "mediamtx" not in body["hls_url"], "an internal host resolves nowhere for VLC"
+
+
+def test_no_external_url_is_offered_when_the_port_is_not_published(api, monkeypatch) -> None:
+    client, state = api
+    monkeypatch.setattr(state.workspace.env, "hls_publish", None)
+    body = client.get("/api/channels/lofi", headers=AUTH).json()
+    assert body["hls_url"] is None, "a URL nothing can route to is worse than none"
+
+
 def test_an_oversized_body_is_refused_rather_than_buffered(
     api, monkeypatch: pytest.MonkeyPatch
 ) -> None:

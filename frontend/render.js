@@ -233,7 +233,14 @@ export function buildCard(name, handlers) {
     nextVal.title = ch.next_track || '';
     slideVal.textContent = ch.current_slide ? basename(ch.current_slide) : DASH;
     slideVal.title = ch.current_slide || '';
-    vizVal.textContent = ch.visualization || DASH;
+    // The status field names the selected plugin even when nothing is drawing it,
+    // so naming it here would claim a visualization the stream does not have.
+    const vizOff = ch.visualization_enabled === false;
+    vizVal.textContent = vizOff ? 'off' : (ch.visualization || DASH);
+    vizVal.dataset.off = vizOff ? 'true' : 'false';
+    vizVal.title = vizOff && ch.visualization
+      ? `no visualization; ${ch.visualization} stays selected for when it is switched back on`
+      : '';
 
     const substituted = Boolean(ch.encoder_requested && ch.encoder && ch.encoder_requested !== ch.encoder);
     clear(metrics);

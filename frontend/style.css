@@ -232,6 +232,8 @@ main {
 .card-line .glyph { color: var(--fg-mute); width: 12px; flex: none; text-align: center; }
 .card-line .val { font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .card-line .val.next { color: var(--fg-mute); }
+/* Not a plugin name, so it should not read as one. */
+.card-line .val[data-off="true"] { color: var(--fg-mute); font-style: italic; }
 .card-line .sep { color: var(--fg-mute); flex: none; }
 
 .card-metrics { display: flex; flex-wrap: wrap; gap: 4px; }
@@ -341,6 +343,23 @@ main {
   color: var(--fg-dim);
 }
 .preview-controls { margin-top: 8px; }
+
+.stream-link { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+/* Wraps rather than scrolls: the whole URL has to be readable to be retyped,
+   and a scrollbar on a one-line element is taller than the line itself. */
+.stream-url {
+  flex: 1;
+  min-width: 0;
+  word-break: break-all;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.4;
+  padding: 4px 6px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--bg);
+  user-select: all;
+}
 
 /* ---------- list editors ---------- */
 

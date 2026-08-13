@@ -12,7 +12,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from pydantic import Field
 
 from .. import plugins as plugin_registry
@@ -165,6 +165,9 @@ async def channel_status(
         # From the config, not now.json: a streamselect switch deliberately does
         # not restart the composer, so now.json's copy is frozen at boot.
         "visualization": channel.config.visualization.active,
+        # The selected plugin is reported either way, so this is the only field
+        # that answers "is anything actually being drawn".
+        "visualization_enabled": channel.visualization_enabled,
         "encoder": _pick(now, "encoder") or channel.encoder.value,
         "encoder_requested": channel.encoder.value,
         "fps": sample.fps if sample else 0.0,
@@ -215,7 +218,7 @@ async def list_channels(state: AppState = Authed) -> dict[str, Any]:
 
 
 @router.get("/{name}")
-async def get_channel(name: str, state: AppState = Authed) -> dict[str, Any]:
+async def get_channel(name: str, request: Request, state: AppState = Authed) -> dict[str, Any]:
     channel = state.channel(name)
     body = await channel_status(state, channel)
     body["config"] = channel.config.model_dump(mode="json")
@@ -226,7 +229,24 @@ async def get_channel(name: str, state: AppState = Authed) -> dict[str, Any]:
     body["rtmp_url"] = channel.env.rtmp_url
     # Presence only. The key is a credential and is never echoed back.
     body["has_stream_key"] = bool(channel.env.stream_key.get_secret_value())
+    body["hls_url"] = _direct_hls_url(state, name, request)
     return body
+
+
+def _direct_hls_url(state: AppState, name: str, request: Request) -> str | None:
+    """The relay's own HLS URL, for players that cannot send a bearer token.
+
+    None when the relay port is not published: an external player has no route
+    to the compose network, and offering a URL that cannot resolve is worse
+    than offering none.
+    """
+    port = state.workspace.env.hls_publish
+    if not port:
+        return None
+    # The operator's own hostname, not the relay's: it is reachable by definition,
+    # because it is what they used to load this page.
+    host = request.url.hostname or "127.0.0.1"
+    return f"http://{host}:{port}/{name}/preview/index.m3u8"
 
 
 @router.post("", status_code=201)

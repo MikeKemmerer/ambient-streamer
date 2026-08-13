@@ -47,8 +47,8 @@ const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 // envelope keys (channel, at) never end up rendered as status.
 const STATUS_KEYS = [
   'state', 'health', 'uptime_seconds', 'current_track', 'next_track', 'current_slide',
-  'visualization', 'encoder', 'encoder_requested', 'fps', 'speed', 'bitrate_kbps',
-  'cpu_cores', 'liquidsoap_buffer', 'rtmp', 'hls',
+  'visualization', 'visualization_enabled', 'encoder', 'encoder_requested', 'fps', 'speed',
+  'bitrate_kbps', 'cpu_cores', 'liquidsoap_buffer', 'rtmp', 'hls',
 ];
 
 // Fields GET /api/channels/{name} adds on top of the summary. They are not merged
@@ -361,7 +361,11 @@ function hotSet(name) {
   return Array.isArray(viz && viz.hot_set) ? viz.hot_set : [];
 }
 
-/** Absent means on: an older config that predates the switch still draws. */
+/**
+ * Absent means on: an older config that predates the switch still draws. Read from
+ * the config rather than the status field, which lags a save by one refresh and
+ * would drag the toggle back under the operator.
+ */
 function vizEnabled(name) {
   const viz = config(name).visualization || {};
   return viz.enabled !== false;
@@ -489,6 +493,8 @@ function renderOverview(ch, cfg) {
 
   syncResolution();
   syncDelivery();
+  syncPreviewLink();
+
 
   const grid = $('metric-grid');
   clear(grid);
@@ -601,6 +607,48 @@ function deliveryBody() {
     if (fps && fps !== base.fps) body.fps = fps;
   }
   return body;
+}
+
+/**
+ * The relay's own HLS URL, shown under the preview for VLC and friends. The
+ * in-page player goes through the authenticated proxy instead; an external
+ * player cannot send the bearer token, so it needs the published relay port.
+ */
+function syncPreviewLink() {
+  const row = $('preview-link-row');
+  const note = $('preview-link-note');
+  const detail = state.details.get(state.selected) || {};
+  const url = detail.hls_url;
+
+  if (!url) {
+    row.hidden = true;
+    note.hidden = false;
+    note.textContent = 'The relay\u2019s HLS port is not published, so there is no address an '
+      + 'external player could reach. Set AMBIENT_HLS_PUBLISH to expose one.';
+    return;
+  }
+
+  note.hidden = true;
+  row.hidden = false;
+  $('preview-url').textContent = url;
+}
+
+async function copyPreviewUrl() {
+  const url = $('preview-url').textContent;
+  if (!url) return;
+  try {
+    await navigator.clipboard.writeText(url);
+    toast('ok', 'copied', 'paste it into VLC with Media \u203A Open Network Stream');
+  } catch {
+    // Clipboard access is refused on insecure origins, which is exactly where
+    // this UI usually runs, so fall back to selecting the text.
+    const range = document.createRange();
+    range.selectNodeContents($('preview-url'));
+    const selection = window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+    toast('warn', 'copy', 'the browser refused clipboard access \u2014 the URL is selected, press Ctrl+C');
+  }
 }
 
 function syncDelivery() {
@@ -1314,6 +1362,7 @@ async function applyVizEnabled() {
     running ? 'saved \u2014 restart the channel to put it on air' : 'saved \u2014 applies on the next start');
   state.vizEnabledDraft = null;
   await loadChannelDetail(name);
+  scheduleRefresh();
 }
 
 async function switchVisualization(plugin, instant) {
@@ -1941,6 +1990,7 @@ function wire() {
     if (state.selected) preview.start(state.selected);
   });
   $('btn-preview-stop').addEventListener('click', () => preview.stop());
+  $('btn-preview-copy').addEventListener('click', () => copyPreviewUrl());
   $('preview-audio').addEventListener('change', (event) => preview.setAudio(event.target.checked));
   $('preview-video').addEventListener('click', () => $('preview-video').play().catch(() => {}));
 

@@ -72,6 +72,22 @@ def test_it_is_reported_to_the_operator(api) -> None:
     assert detail["config"]["visualization"]["enabled"] is False
 
 
+def test_the_channel_list_says_nothing_is_being_drawn(api) -> None:
+    """The summary tile has no config, so the status has to carry it."""
+    client, _state = api
+
+    def lofi() -> dict:
+        body = client.get("/api/channels", headers=AUTH).json()
+        return next(c for c in body["channels"] if c["name"] == "lofi")
+
+    assert lofi()["visualization_enabled"] is True
+
+    client.patch("/api/channels/lofi", headers=AUTH, json={"visualization": {"enabled": False}})
+    summary = lofi()
+    assert summary["visualization_enabled"] is False
+    assert summary["visualization"], "the selected plugin is still reported, just not drawn"
+
+
 def test_switching_it_back_on_restores_the_projection() -> None:
     from pathlib import Path
 

@@ -84,9 +84,15 @@ output from the compositor, published to a separate relay path.
 | Preview | `rtmp://mediamtx:1935/<channel>/preview` |
 | Preview HLS | `http://mediamtx:8888/<channel>/preview/index.m3u8` |
 | Operator URL | `http://<host>:8090/<channel>/preview/index.m3u8` |
+| External player URL | `http://<host>:<AMBIENT_HLS_PUBLISH>/<channel>/preview/index.m3u8` |
 
-The backend proxies the operator URL. MediaMTX publishes no host ports —
-keeping the relay and the ZMQ sockets off the LAN is the point.
+The backend proxies the operator URL, and that proxy requires the bearer token.
+An external player such as VLC cannot send one, so it needs the relay's own port
+instead — which exists only when `AMBIENT_HLS_PUBLISH` is set. By default
+MediaMTX publishes no host ports: keeping the relay and the ZMQ sockets off the
+LAN is the point, and publishing HLS is an explicit opt-in that puts an
+unauthenticated preview on the network. `GET /api/channels/{name}` reports the
+resulting address as `hls_url`, or `null` when the port is not published.
 
 ## Logs
 
