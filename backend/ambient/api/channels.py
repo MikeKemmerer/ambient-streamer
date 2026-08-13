@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter
+from pydantic import Field
 
 from .. import plugins as plugin_registry
 from ..config import (
@@ -75,6 +76,22 @@ class PatchChannel(StrictModel):
 
 class ResolutionBody(StrictModel):
     resolution: Resolution
+
+
+class DeliveryBody(StrictModel):
+    """`.env` settings that only take effect in a new container.
+
+    Every field is optional; only what is sent is changed. An empty string means
+    "inherit the global default", which is what an empty `.env` value already
+    means, and is distinct from omitting the field.
+    """
+
+    stream_key: str | None = None
+    rtmp_url: str | None = None
+    encoder: Encoder | None = None
+    fps: int | None = Field(None, ge=1, le=60)
+    clear_encoder: bool = False
+    clear_fps: bool = False
 
 
 # --------------------------------------------------------------------------
@@ -204,6 +221,11 @@ async def get_channel(name: str, state: AppState = Authed) -> dict[str, Any]:
     body["config"] = channel.config.model_dump(mode="json")
     body["resolution"] = channel.resolution.value
     body["projected_cores"] = round(channel.projected_cores, 3)
+    # What was asked for, not what is measured: a stopped channel reports 0 fps.
+    body["fps_requested"] = channel.fps
+    body["rtmp_url"] = channel.env.rtmp_url
+    # Presence only. The key is a credential and is never echoed back.
+    body["has_stream_key"] = bool(channel.env.stream_key.get_secret_value())
     return body
 
 
@@ -319,8 +341,7 @@ async def restart_channel(name: str, state: AppState = Authed) -> dict[str, Any]
 
 
 @router.put("/{name}/resolution", status_code=202)
-async def set_resolution(
-    name: str, body: ResolutionBody, state: AppState = Authed
+async def set_resolution(    name: str, body: ResolutionBody, state: AppState = Authed
 ) -> dict[str, Any]:
     """Not a live change. The filtergraph is fixed at launch, so the channel restarts."""
     channel = state.channel(name, resolve_media=False)
@@ -370,6 +391,92 @@ async def set_resolution(
             if running
             else "the channel is stopped; the new resolution applies on the next start"
         ),
+    }
+
+
+# A stream key is pasted from YouTube Studio; keep it to what that can produce.
+_STREAM_KEY = re.compile(r"^[A-Za-z0-9_-]{0,64}$")
+_RTMP_URL = re.compile(r"^rtmps?://[A-Za-z0-9.-]+(?::\d{1,5})?(?:/[A-Za-z0-9._~/-]*)?$")
+
+
+@router.put("/{name}/delivery")
+async def set_delivery(name: str, body: DeliveryBody, state: AppState = Authed) -> dict[str, Any]:
+    """Change the ingest settings that only a new container can pick up.
+
+    Refused while the channel is running rather than restarting it: these are
+    the settings that decide where the stream goes, and swapping them under a
+    live broadcast would move it mid-flight.
+    """
+    channel = state.channel(name, resolve_media=False)
+    if (await state.supervisor.containers(name)).composer.running:
+        raise ApiError(
+            409,
+            "channel_running",
+            f"stop {name} before changing where it publishes",
+        )
+
+    values: dict[str, str] = {}
+    changed: list[str] = []
+
+    if body.stream_key is not None:
+        key = body.stream_key.strip()
+        if not _STREAM_KEY.match(key):
+            raise ApiError(400, "invalid_stream_key", "a stream key is letters, digits, - and _")
+        values["YOUTUBE_STREAM_KEY"] = key
+        changed.append("stream_key")
+
+    if body.rtmp_url is not None:
+        url = body.rtmp_url.strip()
+        # This is handed to the publisher as an argument; anything but a plain
+        # rtmp(s) URL is refused rather than escaped.
+        if not _RTMP_URL.match(url):
+            raise ApiError(400, "invalid_rtmp_url", f"{url!r} is not an rtmp:// or rtmps:// URL")
+        values["YOUTUBE_RTMP_URL"] = url
+        changed.append("rtmp_url")
+
+    if body.clear_encoder:
+        values["CHANNEL_ENCODER"] = ""
+        changed.append("encoder")
+    elif body.encoder is not None:
+        values["CHANNEL_ENCODER"] = body.encoder.value
+        changed.append("encoder")
+
+    if body.clear_fps:
+        values["CHANNEL_FPS"] = ""
+        changed.append("fps")
+    elif body.fps is not None:
+        values["CHANNEL_FPS"] = str(body.fps)
+        changed.append("fps")
+
+    if not values:
+        return {"accepted": False, "channel": name, "changed": [], "detail": "nothing to change"}
+
+    before = parse_env_file(channel.directory / ".env")
+    restore = {key: before.get(key, "") for key in values}
+    _write_env_values(channel.directory, values)
+    try:
+        updated = state.channel(name)
+    except ApiError:
+        # A rejected combination must not survive in .env.
+        _write_env_values(channel.directory, restore)
+        raise
+    recompile(state, name)
+
+    await state.events.publish(
+        CHANNEL_STATUS,
+        {"state": ChannelState.STOPPED.value, "changed": changed},
+        channel=name,
+    )
+    return {
+        "accepted": True,
+        "channel": name,
+        "changed": changed,
+        # Never the key itself, only whether one is present.
+        "has_stream_key": bool(updated.env.stream_key.get_secret_value()),
+        "rtmp_url": updated.env.rtmp_url,
+        "encoder": updated.encoder.value,
+        "fps": updated.fps,
+        "detail": "applies on the next start",
     }
 
 

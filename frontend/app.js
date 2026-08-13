@@ -94,6 +94,8 @@ const state = {
   slides: { saved: [], draft: [], watched: [] },
   // Held apart from the config so the 1 Hz progress render cannot reset the picker.
   resolutionDraft: null,
+  // The channel the delivery form is filled in for; null until its detail lands.
+  deliveryFor: null,
   // Paths the Add all buttons would append: what is visible and not yet selected.
   addable: { audio: [], images: [] },
   // Upload rows and the chosen tree live here, never re-derived from a render, so
@@ -403,6 +405,7 @@ function selectChannel(name) {
   state.playlist = { saved: [], draft: [], watched: [] };
   state.slides = { saved: [], draft: [], watched: [] };
   state.resolutionDraft = null;
+  resetDeliveryForm();
   renderDetail();
   loadChannelDetail(name);
 }
@@ -474,6 +477,7 @@ function renderOverview(ch, cfg) {
   ]);
 
   syncResolution();
+  syncDelivery();
 
   const grid = $('metric-grid');
   clear(grid);
@@ -530,6 +534,141 @@ async function applyResolution() {
     live ? `restarting at ${target}` : `${target} \u2014 takes effect on the next start`);
   state.resolutionDraft = null;
   scheduleRefresh(800);
+}
+
+// --------------------------------------------------------------------------
+// Delivery: stream key, RTMP URL, encoder, fps
+//
+// `.env` settings, so they only reach a new container. The control plane refuses
+// them outright while the channel runs rather than moving a live broadcast, and
+// the form says so instead of offering a submit that would come back 409.
+// --------------------------------------------------------------------------
+
+const ENCODERS = ['libx264', 'h264_nvenc', 'h264_qsv'];
+
+const DELIVERY_INPUTS = [
+  'delivery-key', 'delivery-rtmp', 'delivery-encoder', 'delivery-fps', 'delivery-fps-default',
+];
+
+/** rtmp_url, has_stream_key and fps_requested come from GET /api/channels/{name}. */
+function deliveryOf(name) {
+  const detail = name ? state.details.get(name) || {} : {};
+  const ch = (name && state.channels.get(name)) || {};
+  return {
+    rtmpUrl: String(detail.rtmp_url || ''),
+    encoder: String(detail.encoder_requested || ch.encoder_requested || ''),
+    // Not ch.fps: that is the measured rate, and a stopped channel reports 0.
+    fps: Number(detail.fps_requested) || 0,
+    hasKey: Boolean(detail.has_stream_key),
+    editable: Boolean(name) && (ch.state === 'stopped' || ch.state === 'failed'),
+  };
+}
+
+/** Only what the operator actually changed, so an untouched key is never overwritten. */
+function deliveryBody() {
+  const base = deliveryOf(state.selected);
+  const body = {};
+
+  const key = $('delivery-key').value.trim();
+  if (key) body.stream_key = key;
+
+  const url = $('delivery-rtmp').value.trim();
+  // An empty box means "unchanged": the contract has no way to clear an RTMP URL.
+  if (url && url !== base.rtmpUrl) body.rtmp_url = url;
+
+  const encoder = $('delivery-encoder').value;
+  if (!encoder) {
+    if (base.encoder) body.clear_encoder = true;
+  } else if (encoder !== base.encoder) {
+    body.encoder = encoder;
+  }
+
+  if ($('delivery-fps-default').checked) {
+    body.clear_fps = true;
+  } else {
+    const fps = Number($('delivery-fps').value);
+    if (fps && fps !== base.fps) body.fps = fps;
+  }
+  return body;
+}
+
+function syncDelivery() {
+  const name = state.selected;
+  const base = deliveryOf(name);
+  // Before the detail load lands there is no baseline to compare against, so the
+  // form is not "dirty" — it is simply not filled in yet.
+  const dirty = state.deliveryFor === name && Object.keys(deliveryBody()).length > 0;
+
+  // Repopulating a dirty form would throw away what the operator is typing, and
+  // the 1 Hz progress render calls through here.
+  if (!dirty) {
+    setValue($('delivery-rtmp'), base.rtmpUrl);
+    setValue($('delivery-encoder'), ENCODERS.includes(base.encoder) ? base.encoder : '');
+    setValue($('delivery-fps'), base.fps ? String(base.fps) : '');
+    state.deliveryFor = base.encoder ? name : null;
+  }
+
+  const keyState = $('delivery-key-state');
+  keyState.textContent = base.hasKey ? 'key set' : 'no key';
+  keyState.dataset.tone = base.hasKey ? 'ok' : 'warn';
+
+  $('delivery-effective').textContent =
+    `In effect: ${base.encoder || DASH} at ${base.fps || DASH} fps. "Use default" hands the setting `
+    + 'back to the global one, and the answer says what that resolved to.';
+
+  const lock = $('delivery-lock');
+  lock.hidden = base.editable;
+  lock.textContent = name ? `stop ${name} to change where it publishes` : '';
+  for (const id of DELIVERY_INPUTS) $(id).disabled = !base.editable;
+  $('delivery-fps').disabled = !base.editable || $('delivery-fps-default').checked;
+  $('btn-delivery-apply').disabled = !base.editable || !dirty;
+}
+
+/** Assigning an identical value can still move the caret in a focused field. */
+function setValue(input, value) {
+  if (input.value !== value) input.value = value;
+}
+
+function resetDeliveryForm() {
+  $('delivery-key').value = '';
+  $('delivery-fps-default').checked = false;
+  state.deliveryFor = null;
+}
+
+async function applyDelivery() {
+  const name = state.selected;
+  const body = deliveryBody();
+  if (!name || !Object.keys(body).length) return;
+
+  const result = await guard(`delivery ${name}`, () => api.setDelivery(name, body));
+  if (result === undefined) {
+    // The typed key stays in its password field and out of every message.
+    syncDelivery();
+    return;
+  }
+
+  const changed = Array.isArray(result.changed) ? result.changed : [];
+  if (!changed.length) {
+    toast('warn', `delivery ${name}`, result.detail || 'nothing to change');
+  } else {
+    toast('ok', `delivery ${name} \u2014 ${changed.join(', ')}`,
+      `now ${result.encoder} at ${result.fps} fps \u00B7 ${result.detail || 'applies on the next start'}`);
+  }
+  // The response is the new baseline. Waiting for the refresh instead would leave
+  // the form comparing against what it just replaced, i.e. dirty against itself.
+  const detail = state.details.get(name);
+  if (detail) {
+    state.details.set(name, {
+      ...detail,
+      rtmp_url: result.rtmp_url,
+      has_stream_key: result.has_stream_key,
+      encoder_requested: result.encoder,
+      fps_requested: result.fps,
+    });
+  }
+  resetDeliveryForm();
+  scheduleRefresh(200);
+  syncDelivery();
 }
 
 function syncDeleteButton() {
@@ -1690,6 +1829,12 @@ function wire() {
     syncResolution();
   });
   $('btn-resolution-apply').addEventListener('click', () => applyResolution());
+
+  for (const id of DELIVERY_INPUTS) {
+    $(id).addEventListener('input', () => syncDelivery());
+    $(id).addEventListener('change', () => syncDelivery());
+  }
+  $('btn-delivery-apply').addEventListener('click', () => applyDelivery());
 
   $('tabs').addEventListener('click', (event) => {
     const tab = event.target.closest('.tab');

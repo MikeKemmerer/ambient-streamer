@@ -119,6 +119,56 @@
           </div>
 
           <div class="card-flat">
+            <h3>Delivery</h3>
+            <p class="small muted">
+              Where this channel publishes, and how the compositor encodes it. These live in the
+              channel&#8217;s <span class="num">.env</span>, so nothing here touches a stream that is
+              already on air — every change applies on the next start.
+            </p>
+
+            <div class="row">
+              <label class="inline field">stream key
+                <input type="password" id="delivery-key" class="wide-input" placeholder="unchanged"
+                       autocomplete="off" spellcheck="false" aria-describedby="delivery-key-note">
+              </label>
+              <span class="chip" id="delivery-key-state" data-tone="idle">—</span>
+            </div>
+            <p class="small muted" id="delivery-key-note">
+              Write&#8209;only. The control plane never sends a key back, so this box starts empty and
+              leaving it empty keeps the stored key.
+            </p>
+
+            <div class="row">
+              <label class="inline field">rtmp url
+                <input type="text" id="delivery-rtmp" class="wide-input num"
+                       placeholder="rtmp://a.rtmp.youtube.com/live2" autocomplete="off" spellcheck="false">
+              </label>
+            </div>
+
+            <div class="row">
+              <label class="inline">encoder
+                <select id="delivery-encoder">
+                  <option value="">use default</option>
+                  <option value="libx264">libx264</option>
+                  <option value="h264_nvenc">h264_nvenc</option>
+                  <option value="h264_qsv">h264_qsv</option>
+                </select>
+              </label>
+              <label class="inline">fps
+                <input type="number" id="delivery-fps" class="num-input" min="1" max="60" step="1">
+              </label>
+              <label class="inline"><input type="checkbox" id="delivery-fps-default"> use default</label>
+            </div>
+            <p class="small muted" id="delivery-effective"></p>
+
+            <div class="row">
+              <span class="chip" id="delivery-lock" data-tone="warn" hidden></span>
+              <span class="spacer"></span>
+              <button id="btn-delivery-apply" type="button" disabled>Apply</button>
+            </div>
+          </div>
+
+          <div class="card-flat">
             <h3>Metrics</h3>
             <div class="metric-grid" id="metric-grid"></div>
             <h3>Danger zone</h3>

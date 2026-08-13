@@ -122,6 +122,9 @@ export const api = {
   // Not live: the filtergraph is fixed at launch, so this restarts the channel.
   setResolution: (name, resolution) =>
     request('PUT', `/api/channels/${enc(name)}/resolution`, { resolution }),
+  // Refused with 409 while the channel runs. `stream_key` is write-only: it travels
+  // in the body only when the operator typed one, and is never read back.
+  setDelivery: (name, body) => request('PUT', `/api/channels/${enc(name)}/delivery`, body),
 
   mediaAudio: () => request('GET', '/api/media/audio'),
   mediaImages: () => request('GET', '/api/media/images'),

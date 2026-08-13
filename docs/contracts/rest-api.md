@@ -149,6 +149,36 @@ temp then `rename()`) so a directory-watched folder never sees a partial file.
 Returns `202`. Resolution changes the filtergraph, so this is **not** a live
 change — the channel performs a make-before-break restart.
 
+## Ingest settings
+
+| Method | Path | Purpose |
+|---|---|---|
+| PUT | `/api/channels/{name}/delivery` | stream key, RTMP URL, encoder, fps |
+
+Every field is optional; only what is sent changes, so editing the fps can never
+overwrite the stream key. `clear_encoder` and `clear_fps` fall back to the global
+default, which is distinct from omitting the field.
+
+```json
+{"stream_key": "abcd-1234", "rtmp_url": "rtmp://a.rtmp.youtube.com/live2",
+ "encoder": "libx264", "fps": 30, "clear_encoder": false, "clear_fps": false}
+```
+
+**Refused with `409 channel_running` while the channel is up**, rather than
+restarting it. These settings decide *where* the stream goes; changing them
+under a live broadcast would move it mid-flight. They apply on the next start.
+
+Also `400 invalid_stream_key` and `400 invalid_rtmp_url`. The URL is handed to
+the publisher as an argument, so anything that is not a plain `rtmp://` or
+`rtmps://` URL is refused rather than escaped.
+
+The stream key is **write-only**. It is never returned by any endpoint, never
+logged, and never placed in argv. `GET /api/channels/{name}` reports only
+`has_stream_key`, alongside `rtmp_url`, `encoder_requested` and `fps_requested`.
+
+`fps_requested` is what was configured; the `fps` field is what is measured and
+reads `0` on a stopped channel.
+
 ## Bumpers
 
 | Method | Path | Purpose |

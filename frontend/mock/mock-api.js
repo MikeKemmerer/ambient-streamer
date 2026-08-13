@@ -102,6 +102,13 @@ const UPLOAD_KINDS = {
 
 const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
 
+// What an unset CHANNEL_ENCODER / CHANNEL_FPS falls back to.
+const DEFAULT_RTMP_URL = 'rtmp://a.rtmp.youtube.com/live2';
+const DEFAULT_ENCODER = 'libx264';
+const DEFAULT_FPS = 30;
+const STREAM_KEY_RE = /^[A-Za-z0-9_-]{0,64}$/;
+const RTMP_URL_RE = /^rtmps?:\/\/[A-Za-z0-9.-]+(?::\d{1,5})?(?:\/[A-Za-z0-9._~/-]*)?$/;
+
 const SIGNATURES = {
   audio: [[0x49, 0x44, 0x33], [0xff, 0xfb], [0xff, 0xf3], [0xff, 0xf2], [0x66, 0x4c, 0x61, 0x43],
     [0x4f, 0x67, 0x67, 0x53], [0x52, 0x49, 0x46, 0x46]],
@@ -109,7 +116,16 @@ const SIGNATURES = {
 };
 
 function channel(name, status, config, playlist, images) {
-  return { name, status: { name, ...status }, config, playlist, images, watched: { audio: [], images: [] } };
+  return {
+    name,
+    status: { name, ...status },
+    config,
+    playlist,
+    images,
+    watched: { audio: [], images: [] },
+    // Stands in for the channel .env. null means "inherit the global default".
+    delivery: { stream_key: '', rtmp_url: DEFAULT_RTMP_URL, encoder: null, fps: null },
+  };
 }
 
 const db = new Map([
@@ -225,6 +241,13 @@ const db = new Map([
 db.get('lofi').watched.images = ['channels/lofi/images'];
 db.get('deepspace').watched.audio = ['channels/deepspace/audio'];
 db.get('deepspace').watched.images = ['channels/deepspace/images'];
+
+// deepspace is the stopped channel, so it is the one whose delivery is editable:
+// it starts with no key at all, and an encoder override to clear back to default.
+for (const entry of db.values()) entry.delivery.encoder = entry.status.encoder_requested;
+db.get('lofi').delivery.stream_key = 'seeded-key-lofi';
+db.get('chant').delivery.stream_key = 'seeded-key-chant';
+db.get('chant').delivery.fps = 30;
 
 // --------------------------------------------------------------------------
 // Event bus
@@ -592,7 +615,17 @@ async function route(url, init) {
     const extra = name === 'chant'
       ? { fault: 'liquidsoap_starving', fault_detail: 'icecast fallback mount served 12s of the last minute' }
       : { fault: null, fault_detail: '' };
-    return json({ ...entry.status, ...extra, warnings: entry.warnings || [], config: entry.config });
+    return json({
+      ...entry.status,
+      ...extra,
+      warnings: entry.warnings || [],
+      config: entry.config,
+      // What was asked for, not what is measured: a stopped channel reports 0 fps.
+      fps_requested: entry.delivery.fps || DEFAULT_FPS,
+      rtmp_url: entry.delivery.rtmp_url,
+      // Presence only. The key is a credential and is never echoed back.
+      has_stream_key: Boolean(entry.delivery.stream_key),
+    });
   }
 
   if (!tail && method === 'PATCH') {
@@ -710,6 +743,74 @@ async function route(url, init) {
       }, 2500);
     }
     return json({ resolution: value, restart: 'make-before-break' }, 202);
+  }
+
+  // Refused while the channel runs rather than restarting it: these settings
+  // decide where the stream goes.
+  if (tail === 'delivery' && method === 'PUT') {
+    if (entry.status.state !== 'stopped') {
+      return fail(409, 'channel_running', `stop ${name} before changing where it publishes`);
+    }
+    const b = body || {};
+    const changed = [];
+
+    if (b.stream_key !== undefined && b.stream_key !== null) {
+      const key = String(b.stream_key).trim();
+      if (!STREAM_KEY_RE.test(key)) {
+        return fail(400, 'invalid_stream_key', 'a stream key is letters, digits, - and _');
+      }
+      entry.delivery.stream_key = key;
+      changed.push('stream_key');
+    }
+
+    if (b.rtmp_url !== undefined && b.rtmp_url !== null) {
+      const url = String(b.rtmp_url).trim();
+      if (!RTMP_URL_RE.test(url)) {
+        return fail(400, 'invalid_rtmp_url', `'${url}' is not an rtmp:// or rtmps:// URL`);
+      }
+      entry.delivery.rtmp_url = url;
+      changed.push('rtmp_url');
+    }
+
+    if (b.clear_encoder) {
+      entry.delivery.encoder = null;
+      changed.push('encoder');
+    } else if (b.encoder !== undefined && b.encoder !== null) {
+      if (!['libx264', 'h264_nvenc', 'h264_qsv'].includes(b.encoder)) {
+        return fail(400, 'invalid_encoder', `${b.encoder} is not a supported encoder.`);
+      }
+      entry.delivery.encoder = b.encoder;
+      changed.push('encoder');
+    }
+
+    if (b.clear_fps) {
+      entry.delivery.fps = null;
+      changed.push('fps');
+    } else if (b.fps !== undefined && b.fps !== null) {
+      if (!Number.isInteger(b.fps) || b.fps < 1 || b.fps > 60) {
+        return fail(400, 'invalid_fps', 'fps must be a whole number between 1 and 60.');
+      }
+      entry.delivery.fps = b.fps;
+      changed.push('fps');
+    }
+
+    if (!changed.length) {
+      return json({ accepted: false, channel: name, changed: [], detail: 'nothing to change' });
+    }
+    entry.status.encoder_requested = entry.delivery.encoder || DEFAULT_ENCODER;
+    entry.status.encoder = entry.status.encoder_requested;
+    emit('channel.status', { channel: name, state: entry.status.state, changed });
+    return json({
+      accepted: true,
+      channel: name,
+      changed,
+      // Never the key itself, only whether one is present.
+      has_stream_key: Boolean(entry.delivery.stream_key),
+      rtmp_url: entry.delivery.rtmp_url,
+      encoder: entry.delivery.encoder || DEFAULT_ENCODER,
+      fps: entry.delivery.fps || DEFAULT_FPS,
+      detail: 'applies on the next start',
+    });
   }
 
   if (tail === 'color') {

@@ -109,6 +109,8 @@ input[type="color"] {
 }
 .num-input { width: 62px; font-family: var(--mono); }
 .hex-input { width: 78px; font-family: var(--mono); text-transform: uppercase; }
+.field { flex: 1 1 220px; }
+.wide-input { flex: 1 1 auto; min-width: 0; }
 .tz-input { width: 200px; font-family: var(--mono); }
 input[type="search"] { width: 100%; margin-bottom: 6px; }
 
