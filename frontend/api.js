@@ -140,6 +140,9 @@ export const api = {
   // `active` and `hot_set` are deliberately untouched, so the look comes back intact.
   setVisualizationEnabled: (name, enabled) =>
     request('PATCH', `/api/channels/${enc(name)}`, { visualization: { enabled } }),
+
+  setHotSet: (name, body) =>
+    request('PUT', `/api/channels/${enc(name)}/hot-set`, body),
   presets: () => request('GET', '/api/presets'),
   applyPreset: (name, preset) => request('POST', `/api/channels/${enc(name)}/preset`, { preset }),
   setColor: (name, color) => request('PUT', `/api/channels/${enc(name)}/color`, color),

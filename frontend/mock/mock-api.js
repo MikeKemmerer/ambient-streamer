@@ -756,6 +756,46 @@ async function route(url, init) {
     return json({ visualization: active }, 202);
   }
 
+  if (tail === 'hot-set') {
+    const wanted = [...new Set((body && body.hot_set) || [])];
+    if (!wanted.length) {
+      return fail(400, 'empty_hot_set', 'A channel with no branches cannot draw a visualization.');
+    }
+    const missing = wanted.filter((p) => !PLUGINS.some((x) => x.name === p));
+    if (missing.length) {
+      return fail(404, 'unknown_plugin', `Not installed: ${missing.join(', ')}.`);
+    }
+    const active = (body && body.active) || entry.config.visualization.active;
+    if (!wanted.includes(active)) {
+      return fail(409, 'active_not_in_hot_set',
+        `${active} is on air but not in the requested hot set.`);
+    }
+    const wasEnabled = entry.config.visualization.enabled !== false;
+    const running = entry.status.state !== 'stopped';
+    entry.config.visualization.hot_set = wanted;
+    entry.config.visualization.active = active;
+    entry.status.visualization = active;
+
+    if (running && wasEnabled) {
+      entry.status.state = 'starting';
+      statusEvent(name);
+      setTimeout(() => {
+        entry.status.state = 'running';
+        entry.status.health = 'healthy';
+        entry.status.uptime_seconds = 1;
+        statusEvent(name);
+      }, 2000);
+    }
+    return json({
+      accepted: true, channel: name, hot_set: wanted, active,
+      restarted: running && wasEnabled,
+      projected_cores: projectedCores(entry),
+      detail: running && wasEnabled
+        ? 'the compositor is being replaced with a graph containing exactly these branches'
+        : 'applies on the next start',
+    }, 202);
+  }
+
   if (tail === 'resolution') {
     const value = body && body.resolution;
     if (!['480p', '720p', '1080p', '1440p', '2160p'].includes(value)) {

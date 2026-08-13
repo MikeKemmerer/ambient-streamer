@@ -133,6 +133,7 @@ def compose_context(workspace: Workspace, channel: ResolvedChannel) -> dict[str,
         # 1280x720 default and the resolution setting does nothing.
         "width": str(channel.width),
         "height": str(channel.height),
+        "fps": str(channel.fps),
         # Without the mode the producer cannot tell a manual color from a
         # derived one and overwrites an operator's color at the next slide.
         "color_mode": channel.color_mode,

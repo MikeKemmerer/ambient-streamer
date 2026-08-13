@@ -96,6 +96,8 @@ const state = {
   resolutionDraft: null,
   // Same, for the visualization on/off toggle: an unapplied tick must survive a refresh.
   vizEnabledDraft: null,
+  // Null means "no pending edit"; an array is a staged hot set awaiting Apply.
+  hotSetDraft: null,
   // The channel the delivery form is filled in for; null until its detail lands.
   deliveryFor: null,
   // Paths the Add all buttons would append: what is visible and not yet selected.
@@ -418,6 +420,7 @@ function selectChannel(name) {
   state.slides = { saved: [], draft: [], watched: [] };
   state.resolutionDraft = null;
   state.vizEnabledDraft = null;
+  state.hotSetDraft = null;
   resetDeliveryForm();
   renderDetail();
   loadChannelDetail(name);
@@ -1204,6 +1207,7 @@ function renderLookTab() {
   const list = $('plugin-list');
   clear(list);
   list.dataset.inert = String(!enabled);
+  const draftHot = state.hotSetDraft || hot;
 
   const known = new Set(state.plugins.map((p) => p.name));
   const rows = [...state.plugins];
@@ -1247,6 +1251,24 @@ function renderLookTab() {
         el('div', { class: 'pcost', text: where }),
       ]),
       el('div', { class: 'pactions' }, [
+        // Hot set membership is the CPU budget, and switching a plugin in can only
+        // ever grow it, so removal has to be explicit rather than implied.
+        el('label', {
+          class: 'inline small',
+          title: missing
+            ? 'not installed, so it cannot be instantiated'
+            : isActive
+              ? 'on air \u2014 switch to another plugin before dropping this one'
+              : 'instantiate this branch at launch so it can be switched to instantly',
+        }, [
+          el('input', {
+            type: 'checkbox',
+            checked: draftHot.includes(plugin.name),
+            disabled: missing || isActive,
+            onchange: (event) => toggleHotSet(plugin.name, event.target.checked),
+          }),
+          'hot',
+        ]),
         el('span', { class: 'chip', dataset: { tone: tag.tone }, text: tag.text }),
         isActive
           ? el('span', { class: 'chip', dataset: { tone: 'info' }, text: enabled ? 'on air' : 'selected' })
@@ -1263,6 +1285,7 @@ function renderLookTab() {
 
   const color = cfg.color || {};
   const manual = color.manual || {};
+  syncHotSet();
   for (const radio of document.querySelectorAll('input[name="color-mode"]')) {
     radio.checked = radio.value === (color.mode || 'automatic');
   }
@@ -1365,8 +1388,84 @@ async function applyVizEnabled() {
   scheduleRefresh();
 }
 
-async function switchVisualization(plugin, instant) {
+/** Membership is a CPU budget, so it is staged and applied, never live per click. */
+function toggleHotSet(plugin, wanted) {
+  const current = state.hotSetDraft || hotSet(state.selected);
+  const next = wanted
+    ? [...current, plugin]
+    : current.filter((p) => p !== plugin);
+  state.hotSetDraft = next;
+  renderLookTab();
+}
+
+function estimateHotSetCores(names) {
+  const scale = { '480p': 0.6, '720p': 1.0, '1080p': 1.9, '1440p': 3.4, '2160p': 7.6 };
+  const factor = scale[resolutionOf(state.selected)] || 1;
+  let cores = 0;
+  for (const name of names) {
+    const plugin = state.plugins.find((p) => p.name === name);
+    cores += (plugin && plugin.cost ? plugin.cost.cores_720p30 : 0.28) * factor;
+  }
+  return cores;
+}
+
+function syncHotSet() {
   const name = state.selected;
+  const saved = hotSet(name);
+  const draft = state.hotSetDraft || saved;
+  const dirty = draft.length !== saved.length || draft.some((p) => !saved.includes(p));
+  const note = $('hot-set-state');
+  const chip = $('hot-set-cores');
+
+  $('btn-hot-set-apply').disabled = !dirty || !draft.length;
+  $('btn-hot-set-revert').disabled = !dirty;
+
+  if (!draft.length) {
+    note.textContent = 'A channel needs at least one branch. Switch the visualization off instead '
+      + 'of emptying the hot set.';
+    note.dataset.tone = 'bad';
+    chip.hidden = true;
+    return;
+  }
+  if (!dirty) {
+    note.textContent = '';
+    note.dataset.tone = '';
+    chip.hidden = true;
+    return;
+  }
+
+  const delta = estimateHotSetCores(draft) - estimateHotSetCores(saved);
+  chip.hidden = false;
+  chip.textContent = `${delta >= 0 ? '+' : ''}${delta.toFixed(2)} cores`;
+  chip.dataset.tone = delta > 0 ? 'warn' : 'ok';
+  note.dataset.tone = 'warn';
+  const running = (state.channels.get(name) || {}).state !== 'stopped';
+  note.textContent = vizEnabled(name) && running
+    ? 'Not applied. Changing which branches exist rebuilds the graph, so Apply restarts the '
+      + 'compositor \u2014 about a 1s gap and a new YouTube ingest session.'
+    : 'Not applied. Applies on the next start; nothing is drawing these branches right now.';
+}
+
+async function applyHotSet() {
+  const name = state.selected;
+  const draft = state.hotSetDraft;
+  if (!name || !draft || !draft.length) return;
+
+  const active = (config(name).visualization || {}).active;
+  const body = { hot_set: draft };
+  // Dropping the branch on air needs a replacement named, or the backend refuses.
+  if (!draft.includes(active)) body.active = draft[0];
+
+  const result = await guard('hot set', () => api.setHotSet(name, body), 'accepted');
+  if (result === undefined) return;
+
+  state.hotSetDraft = null;
+  toast('ok', 'hot set', result.detail || 'saved');
+  await loadChannelDetail(name);
+  scheduleRefresh();
+}
+
+async function switchVisualization(plugin, instant) {
   if (!name) return;
   const live = (state.channels.get(name) || {}).state !== 'stopped';
   const error = $('viz-error');
@@ -1991,6 +2090,11 @@ function wire() {
   });
   $('btn-preview-stop').addEventListener('click', () => preview.stop());
   $('btn-preview-copy').addEventListener('click', () => copyPreviewUrl());
+  $('btn-hot-set-apply').addEventListener('click', () => applyHotSet());
+  $('btn-hot-set-revert').addEventListener('click', () => {
+    state.hotSetDraft = null;
+    renderLookTab();
+  });
   $('preview-audio').addEventListener('change', (event) => preview.setAudio(event.target.checked));
   $('preview-video').addEventListener('click', () => $('preview-video').play().catch(() => {}));
 

@@ -39,6 +39,12 @@ class VisualizationBody(StrictModel):
     active: str
 
 
+class HotSetBody(StrictModel):
+    hot_set: list[str] = Field(..., min_length=1)
+    # Optional: only needed when the change drops the branch currently on air.
+    active: str | None = None
+
+
 class PresetBody(StrictModel):
     preset: str
 
@@ -201,6 +207,79 @@ async def _stage(
             "session"
             if running
             else f"{active!r} was staged into hot_set; it applies on the next start"
+        ),
+    }
+
+
+@router.put("/channels/{name}/hot-set", status_code=202)
+async def set_hot_set(name: str, body: HotSetBody, state: AppState = Authed) -> dict[str, Any]:
+    """Choose which branches the graph instantiates.
+
+    Not a live change in either direction: a filtergraph is fixed at launch, so
+    both adding and removing a branch replaces the compositor. Removing is the
+    only way to give idle-branch cores back, which is why this endpoint exists
+    at all — switching a plugin in can only ever grow the set.
+    """
+    channel = state.channel(name, resolve_media=False)
+    config = channel.config
+    requested = list(dict.fromkeys(body.hot_set))
+
+    registry = plugin_registry.load_registry(state.workspace.plugins_dir)
+    if registry:
+        missing = [p for p in requested if p not in registry]
+        if missing:
+            raise ApiError(
+                404, "unknown_plugin",
+                f"not installed: {', '.join(sorted(missing))}; GET /api/plugins lists what is",
+            )
+
+    # Dropping the branch that is on air would leave `active` pointing at nothing,
+    # so the caller must say what replaces it rather than have one chosen for them.
+    active = body.active or config.visualization.active
+    if active not in requested:
+        raise ApiError(
+            409, "active_not_in_hot_set",
+            f"{active!r} is on air but not in the requested hot set; pass `active` to say "
+            "which branch takes over",
+        )
+
+    if requested == list(config.visualization.hot_set) and active == config.visualization.active:
+        return {
+            "accepted": False, "channel": name, "hot_set": requested, "active": active,
+            "restarted": False, "detail": f"{name} already instantiates exactly that set",
+        }
+
+    data = config.model_dump(mode="json")
+    data["visualization"]["hot_set"] = requested
+    data["visualization"]["active"] = active
+    save_channel_config(channel.directory, ChannelConfig.model_validate(data))
+    try:
+        reloaded = state.channel(name, resolve_media=False)
+        recompile(state, name)
+    except ApiError:
+        save_channel_config(channel.directory, config)
+        raise
+
+    running = (await state.supervisor.containers(name)).composer.running
+    if running and config.visualization.enabled:
+        asyncio.create_task(run_action(state, name, state.supervisor.restart(name), "hot_set"))
+    await state.events.publish(
+        CHANNEL_VISUALIZATION, {"active": active, "hot_set": requested}, channel=name
+    )
+    return {
+        "accepted": True,
+        "channel": name,
+        "hot_set": requested,
+        "active": active,
+        # A channel drawing nothing has no branches in its graph, so changing which
+        # ones it would instantiate costs it nothing until the visualization is on.
+        "restarted": running and config.visualization.enabled,
+        "projected_cores": round(reloaded.projected_cores, 3),
+        "detail": (
+            "the compositor is being replaced with a graph containing exactly these "
+            "branches; measured ~1s of RTMP gap and a new YouTube ingest session"
+            if running and config.visualization.enabled
+            else "applies on the next start"
         ),
     }
 

@@ -135,6 +135,33 @@ def test_the_detail_reports_what_was_asked_for_not_what_is_measured(api) -> None
     assert detail["rtmp_url"].startswith("rtmp")
 
 
+def test_the_requested_fps_actually_reaches_the_composer(api, repo) -> None:
+    """The .env is not the finish line.
+
+    `CHANNEL_FPS` used to be written, resolved and echoed back while the template
+    emitted `FPS: ${FPS:-30}` - a compose interpolation of a variable nothing ever
+    defines. Every channel encoded at 30 and the API reported success.
+    """
+    from ambient.supervisor import compose_context
+
+    client, state = api
+    client.put("/api/channels/lofi/delivery", headers=AUTH, json={"fps": 24})
+
+    channel = state.channel("lofi")
+    assert channel.fps == 24
+    assert compose_context(state.workspace, channel)["fps"] == "24"
+
+    client.post("/api/channels/lofi/restart", headers=AUTH)
+    rendered = (repo / "channels" / "lofi" / "docker-compose.yml").read_text(encoding="utf-8")
+    fps_lines = [
+        line.split(":", 1)[1].strip()
+        for line in rendered.splitlines()
+        if line.strip().startswith("FPS:")
+    ]
+    assert fps_lines == ['"24"'], rendered
+    assert "$" not in fps_lines[0], "an interpolation nothing sets always wins its default"
+
+
 def test_the_endpoint_requires_a_token(api) -> None:
     client, _state = api
     assert client.put("/api/channels/lofi/delivery", json={"fps": 24}).status_code == 401

@@ -368,6 +368,13 @@
               staged: the channel restarts make&#8209;before&#8209;break, about a 1s gap.
             </p>
             <ul class="plugin-list" id="plugin-list"></ul>
+            <div class="row hot-set-bar" id="hot-set-bar">
+              <span class="small" id="hot-set-state"></span>
+              <span class="spacer"></span>
+              <span class="chip num" data-tone="info" id="hot-set-cores" hidden></span>
+              <button id="btn-hot-set-revert" type="button" disabled>Revert</button>
+              <button id="btn-hot-set-apply" type="button" disabled>Apply hot set</button>
+            </div>
             <p class="inline-error" id="viz-error" hidden></p>
           </div>
 

@@ -146,8 +146,10 @@ services:
       FADE_SECONDS: "{{ fade_seconds }}"
       PRODUCER_FPS: "{{ producer_fps }}"
       JPEG_QUALITY: "{{ jpeg_quality }}"
-      RESOLUTION: ${RESOLUTION:-720p}
-      FPS: ${FPS:-30}
+      # Rendered, not `${FPS:-30}`: nothing ever defines a bare FPS, so the
+      # interpolation default won unconditionally and every channel encoded at 30
+      # no matter what CHANNEL_FPS said.
+      FPS: "{{ fps }}"
       # ipc:// on tmpfs, not tcp://. A published ZMQ port is a remote kill surface.
       ZMQ_BIND_HOST: 127.0.0.1
       ZMQ_BIND_PORT: "5555"

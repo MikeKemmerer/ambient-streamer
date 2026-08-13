@@ -11,6 +11,7 @@ a broken driver, so the list alone is not evidence.
 
 from __future__ import annotations
 
+import os
 import shlex
 import subprocess
 from dataclasses import dataclass, field
@@ -174,10 +175,19 @@ def probe_device_args(encoder: Encoder | str) -> list[str]:
     """What the encoder's hardware needs passed into a container.
 
     Absent hardware makes `docker run` fail, which is the truthful answer.
+
+    This must match what compose.channel.yml.j2 gives a real channel. `--gpus all`
+    alone grants compute,utility but NOT video, so NVENC sees the GPU, loads
+    libcuda, and then fails on libnvidia-encode.so.1 — a probe that says the
+    encoder is unavailable on a host that streams with it every day.
     """
     value = _name_of(encoder)
     if value == Encoder.NVENC.value:
-        return ["--gpus", "all"]
+        return [
+            "--gpus", "all",
+            "-e", "NVIDIA_DRIVER_CAPABILITIES=compute,video,utility",
+            "-e", f"NVIDIA_VISIBLE_DEVICES={os.environ.get('NVIDIA_DEVICE_ID', 'all')}",
+        ]
     if value == Encoder.QSV.value:
         return ["--device", "/dev/dri"]
     return []
@@ -239,10 +249,27 @@ def probe_encoder(
     return result
 
 
+# ffmpeg's closing lines describe the symptom, not the cause. Every failed encode
+# ends with "Nothing was written into output file", and "Error while opening
+# encoder - maybe incorrect parameters" is the generic fallback it prints even
+# when the real problem is a driver that will not load.
+_PROBE_NOISE = (
+    "nothing was written into output file",
+    "error while filtering",
+    "conversion failed",
+    "error while opening encoder",
+)
+
+
 def probe_failure_detail(stderr: str, returncode: int) -> str:
-    """The last real line of ffmpeg's stderr — where `OpenEncodeSessionEx failed` lands."""
+    """The last real line of ffmpeg's stderr, skipping its generic trailer."""
     lines = [line.strip() for line in (stderr or "").strip().splitlines() if line.strip()]
-    return lines[-1] if lines else f"rc={returncode}"
+    if not lines:
+        return f"rc={returncode}"
+    for line in reversed(lines):
+        if not any(noise in line.lower() for noise in _PROBE_NOISE):
+            return line
+    return lines[-1]
 
 
 def _name_of(encoder: Encoder | str) -> str:
