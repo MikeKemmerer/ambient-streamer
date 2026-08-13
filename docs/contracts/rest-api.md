@@ -112,6 +112,26 @@ already be rendering. Callers that will not accept a restart pass
 
 A plugin that is not installed at all returns `404 unknown_plugin`.
 
+## Skipping a track
+
+`POST /api/channels/{name}/skip` → `202`.
+
+Free, and the only channel action that is. Liquidsoap owns audio in its own
+process and the compositor is a consumer of a live Icecast mount, so it never
+learns a track changed — verified on a live channel with the composer's
+container start time unchanged either side and the stream holding 0.999x.
+
+The backend talks to Liquidsoap's telnet server over the compose network, on a
+strict whitelist: the same socket accepts `shutdown`. It sends `icecast.skip`,
+which was measured moving the audio and answering `Done`. `playlist.skip` is
+deliberately **not** offered — it answers `OK` and only advances the playlist
+cursor, leaving what is playing exactly where it was.
+
+There is no seek. `icecast.seek 30` on the running source answers `Seeked 0.00`:
+the playlist sits behind `crossfade` and `mksafe`, and the result is not
+seekable. Scrubbing would mean restructuring the audio graph, and crossfade is
+the thing that would have to go.
+
 ## Standby: taking the visualization off air without a restart
 
 `PUT /api/channels/{name}/visualization/visible` with `{"visible": false}`.

@@ -436,6 +436,16 @@ async function lifecycle(name, action) {
   scheduleRefresh(500);
 }
 
+/** Audio only. No restart, so the refresh is just to pick up the new track. */
+async function skipTrack() {
+  const name = state.selected;
+  if (!name) return;
+  const result = await guard(`skip ${name}`, () => api.skip(name), 'accepted');
+  if (result === undefined) return;
+  toast('ok', 'skipped', 'the next track is on air');
+  scheduleRefresh(1500);
+}
+
 let refreshTimer = null;
 
 /** channel.status carries state/health/speed only, so a transition invalidates the rest. */
@@ -468,6 +478,7 @@ function renderDetail() {
   $('btn-start').disabled = !stopped;
   $('btn-stop').disabled = ch.state === 'stopped';
   $('btn-restart').disabled = ch.state === 'stopped';
+  $('btn-skip').disabled = ch.state === 'stopped';
 
   renderOverview(ch, cfg);
   syncDeleteButton();
@@ -2194,6 +2205,7 @@ function wire() {
   $('btn-start').addEventListener('click', () => lifecycle(state.selected, 'start'));
   $('btn-stop').addEventListener('click', () => lifecycle(state.selected, 'stop'));
   $('btn-restart').addEventListener('click', () => lifecycle(state.selected, 'restart'));
+  $('btn-skip').addEventListener('click', () => skipTrack());
   $('delete-confirm').addEventListener('input', syncDeleteButton);
   $('btn-delete').addEventListener('click', () => deleteChannel());
   $('output-resolution').addEventListener('change', (event) => {

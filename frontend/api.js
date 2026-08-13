@@ -119,6 +119,9 @@ export const api = {
   start: (name) => request('POST', `/api/channels/${enc(name)}/start`),
   stop: (name) => request('POST', `/api/channels/${enc(name)}/stop`),
   restart: (name) => request('POST', `/api/channels/${enc(name)}/restart`),
+  // Audio only, and free: the compositor reads a live Icecast mount and never
+  // learns a track changed.
+  skip: (name) => request('POST', `/api/channels/${enc(name)}/skip`),
   // Not live: the filtergraph is fixed at launch, so this restarts the channel.
   setResolution: (name, resolution) =>
     request('PUT', `/api/channels/${enc(name)}/resolution`, { resolution }),

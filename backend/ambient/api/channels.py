@@ -15,6 +15,7 @@ from typing import Any
 from fastapi import APIRouter, Request
 from pydantic import Field
 
+from .. import liqctl
 from .. import plugins as plugin_registry
 from ..config import (
     ResolvedChannel,
@@ -22,7 +23,7 @@ from ..config import (
     ignored_channel_names,
     parse_env_file,
 )
-from ..events import CHANNEL_STATUS
+from ..events import CHANNEL_STATUS, CHANNEL_TRACK
 from ..main import ApiError, AppState
 from ..models import (
     CHANNEL_NAME_RE,
@@ -350,6 +351,30 @@ async def stop_channel(name: str, state: AppState = Authed) -> dict[str, Any]:
     state.channel(name, resolve_media=False)
     asyncio.create_task(run_action(state, name, state.supervisor.stop(name), "stop"))
     return {"accepted": True, "channel": name, "action": "stop"}
+
+
+@router.post("/{name}/skip", status_code=202)
+async def skip_track(name: str, state: AppState = Authed) -> dict[str, Any]:
+    """Move to the next track.
+
+    Costs the video nothing. Liquidsoap owns audio in its own process and the
+    compositor is a consumer of a live Icecast mount, so it never learns a track
+    changed — there is no restart and no gap.
+    """
+    channel = state.channel(name, resolve_media=False)
+    if not (await state.supervisor.containers(name)).liquidsoap.running:
+        raise ApiError(
+            409, "channel_not_running", f"{name} has no Liquidsoap to skip on"
+        )
+
+    host = liqctl.liquidsoap_host(channel.name)
+    try:
+        reply = await asyncio.to_thread(liqctl.send, host, liqctl.SKIP)
+    except liqctl.LiquidsoapError as exc:
+        raise ApiError(502, "liquidsoap_unreachable", str(exc)) from exc
+
+    await state.events.publish(CHANNEL_TRACK, {"skipped": True}, channel=name)
+    return {"accepted": True, "channel": name, "action": "skip", "detail": reply}
 
 
 @router.post("/{name}/restart", status_code=202)
