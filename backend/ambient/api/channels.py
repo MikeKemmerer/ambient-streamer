@@ -377,6 +377,47 @@ async def skip_track(name: str, state: AppState = Authed) -> dict[str, Any]:
     return {"accepted": True, "channel": name, "action": "skip", "detail": reply}
 
 
+class PlayBody(StrictModel):
+    track: str
+
+
+@router.post("/{name}/play", status_code=202)
+async def play_track(name: str, body: PlayBody, state: AppState = Authed) -> dict[str, Any]:
+    """Put one specific track on air.
+
+    `playlist` has no "play this one" verb — its telnet commands move an
+    internal cursor and leave the audio where it was, measured on a live
+    channel — so the track goes onto a request queue that sits in front of the
+    playlist. Like a skip, this costs the video nothing.
+
+    `track` must be a container path this channel already resolved. Anything
+    else is refused: `queue.push` would happily resolve an arbitrary path or
+    URL on the Liquidsoap container.
+    """
+    channel = state.channel(name)
+    if not (await state.supervisor.containers(name)).liquidsoap.running:
+        raise ApiError(409, "channel_not_running", f"{name} has no Liquidsoap to play on")
+
+    host = liqctl.liquidsoap_host(channel.name)
+    try:
+        reply = await asyncio.to_thread(
+            liqctl.push, host, body.track, allowed=channel.audio.container_paths
+        )
+    except liqctl.LiquidsoapError as exc:
+        if "is not a track on this channel" in str(exc):
+            raise ApiError(404, "unknown_track", str(exc)) from exc
+        raise ApiError(502, "liquidsoap_unreachable", str(exc)) from exc
+
+    await state.events.publish(CHANNEL_TRACK, {"requested": body.track}, channel=name)
+    return {
+        "accepted": True,
+        "channel": name,
+        "action": "play",
+        "track": body.track,
+        "detail": reply,
+    }
+
+
 @router.post("/{name}/restart", status_code=202)
 async def restart_channel(name: str, state: AppState = Authed) -> dict[str, Any]:
     state.channel(name)

@@ -52,6 +52,16 @@ ICY metadata is not the cause — the same results were measured with `-icy 0`.
 ## Liquidsoap side
 
 ```liquidsoap
+pl       = playlist(id="playlist", mode="normal", reload_mode="watch", playlist_file)
+requests = request.queue(id="queue")
+
+# `playlist` has no "play this one" verb, so a request queue in front of it is
+# the only way to honour a choice. track_sensitive=false so a push interrupts
+# rather than waiting for the current track to end.
+programme = fallback(id="programme", track_sensitive=false, [requests, pl])
+
+radio = crossfade(duration=crossfade_s, programme)
+
 # mksafe must be OUTERMOST. A fallible source reaching output.icecast drops the
 # mount, which is the one failure Icecast cannot paper over.
 radio = mksafe(radio)
@@ -73,6 +83,11 @@ Requirements:
 - A telnet control socket on the channel's internal network for status queries
   (current track, next track, buffer state). Never published to the host.
 - The source password comes from the environment. Never a literal.
+- **`on_track` attaches to `programme`, below the crossfade, not to the
+  output.** `crossfade` merges a mid-track switch into the track it is already
+  playing, so a queue takeover produces no track mark at the output at all —
+  measured, the audio changed and the reported track never moved. The price is
+  that it fires up to `crossfade_seconds` early, because crossfade reads ahead.
 
 ## Icecast side
 

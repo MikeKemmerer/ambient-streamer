@@ -59,9 +59,19 @@ settings.server.telnet.port.set(telnet_port)
 # order and mixes the two media trees. See docs/contracts/media-selection.md.
 pl = playlist(id="playlist", mode="normal", reload_mode="watch", playlist_file)
 
+# Lets the operator put one specific track on air. `playlist` has no "play this
+# one" command - its telnet verbs only move an internal cursor and leave the
+# audio where it was, measured on a live channel - so a request queue in front
+# of it is the only way to honour a choice.
+#
+# track_sensitive=false so a push interrupts the current track rather than
+# waiting for it to end; that is what an operator clicking a track means.
+requests = request.queue(id="queue")
+programme = fallback(id="programme", track_sensitive=false, [requests, pl])
+
 # mksafe must be OUTERMOST: a fallible source reaching output.icecast drops the
 # mount, which is the one failure Icecast cannot paper over.
-faded = if crossfade_s > 0. then crossfade(id="xfade", duration=crossfade_s, pl) else pl end
+faded = if crossfade_s > 0. then crossfade(id="xfade", duration=crossfade_s, programme) else programme end
 radio = mksafe(faded)
 
 current = ref("")
@@ -102,7 +112,12 @@ def log_track(m) =
     logf("track", "file='#{fn}' title='#{ti}' artist='#{ar}'")
   end
 end
-radio.on_track(synchronous=false, log_track)
+# Tracked below the crossfade, not on the output: crossfade merges a mid-track
+# switch into the track it is already playing, so a queue takeover produces no
+# track mark at `radio` at all - measured, the switch happened and the reported
+# track never moved. The cost is that this fires up to `crossfade_s` early,
+# because crossfade reads that far ahead.
+programme.on_track(synchronous=false, log_track)
 
 seed_current()
 

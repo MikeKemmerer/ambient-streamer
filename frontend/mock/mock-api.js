@@ -730,8 +730,29 @@ async function route(url, init) {
     return json({ accepted: true }, 202);
   }
 
+  if (tail === 'play') {
+    if (entry.status.state !== 'running') {
+      return fail(409, 'channel_not_running', `${name} has no Liquidsoap to play on.`);
+    }
+    const wanted = String((body && body.track) || '');
+    const known = entry.playlist.map((p) => `/media/channel/${p}`);
+    const at = known.indexOf(wanted);
+    if (at < 0) return fail(404, 'unknown_track', `${wanted} is not a track on this channel.`);
+    entry.status.current_track = entry.playlist[at];
+    entry.status.next_track = entry.playlist[(at + 1) % entry.playlist.length];
+    statusEvent(name);
+    return json({ accepted: true, channel: name, action: 'play', track: wanted, detail: '4' }, 202);
+  }
+
   if (tail === 'playlist') {
-    if (method === 'GET') return json({ tracks: entry.playlist, watched: entry.watched.audio });
+    if (method === 'GET') {
+      return json({
+        tracks: entry.playlist,
+        watched: entry.watched.audio,
+        resolved: entry.playlist,
+        container_paths: entry.playlist.map((p) => `/media/channel/${p}`),
+      });
+    }
     entry.playlist = Array.isArray(body && body.tracks) ? body.tracks : [];
     if (!entry.playlist.length) return fail(400, 'empty_selection', 'A channel with no audio cannot stream.');
     return json({ tracks: entry.playlist }, 202);

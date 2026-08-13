@@ -341,6 +341,32 @@ export function availableRow(path, tree, used, onAdd) {
 }
 
 /**
+ * One resolved track, playable. Separate from `pickRow` because this list is
+ * not an editor: it is the live playlist as Liquidsoap sees it, and the only
+ * verb is "put this on air now".
+ */
+export function onAirRow(entry, index, { playing, disabled, onPlay }) {
+  const { dir, base } = splitPath(entry.label);
+  return el('li', { class: playing ? 'playing' : '', dataset: { index: String(index) } }, [
+    el('span', { class: 'idx', text: playing ? '\u25b6' : String(index + 1) }),
+    el('span', { class: 'name', title: entry.path }, [
+      el('span', { class: 'dir', text: dir }),
+      el('span', { class: 'base', text: base }),
+    ]),
+    el('button', {
+      class: 'tiny',
+      type: 'button',
+      disabled,
+      title: disabled
+        ? 'The channel is not running.'
+        : 'Interrupts the current track. Audio only — the video never restarts.',
+      text: playing ? 'on air' : 'Play',
+      onclick: () => onPlay(entry.path),
+    }),
+  ]);
+}
+
+/**
  * One row per file in an upload batch. Built once and updated in place, so a
  * re-render of the media lists beside it cannot wipe a transfer in progress.
  */

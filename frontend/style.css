@@ -404,6 +404,15 @@ main {
 }
 .pick-list .btns { display: flex; gap: 1px; flex: none; }
 
+/* ---------- play now ---------- */
+
+.onair-pick { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 4px; }
+.onair-list { max-height: 32vh; }
+.onair-list li button { flex: none; }
+.onair-list li.playing { border-color: var(--accent); }
+.onair-list li.playing .idx { color: var(--accent); }
+.onair-list li.playing .name .base { color: var(--accent); }
+
 /* ---------- upload ---------- */
 
 .upload { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 4px; }

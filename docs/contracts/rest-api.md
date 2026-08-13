@@ -127,6 +127,37 @@ which was measured moving the audio and answering `Done`. `playlist.skip` is
 deliberately **not** offered — it answers `OK` and only advances the playlist
 cursor, leaving what is playing exactly where it was.
 
+## Playing one specific track
+
+`POST /api/channels/{name}/play` with `{"track": "<container path>"}` → `202`.
+Costs the same as a skip: nothing.
+
+`playlist` has no "play this one" verb, which is why the audio graph carries a
+`request.queue` in front of the playlist:
+
+```
+programme = fallback(track_sensitive=false, [request.queue, playlist])
+```
+
+`track_sensitive=false` so a push interrupts the current track rather than
+waiting for it to end — that is what an operator clicking a track means. When
+the request is exhausted the fallback drops back to the playlist on its own.
+Both halves were measured on a live channel.
+
+`track` must be one of the channel's own `container_paths` from
+`GET /api/channels/{name}/playlist`. Anything else is `404 unknown_track`.
+This is not cosmetic validation: `queue.push` resolves whatever it is handed,
+so an unchecked value is an arbitrary file read on the Liquidsoap container and
+an outbound fetch for any `http://` URI.
+
+**The track tracker has to sit below the crossfade.** `crossfade` merges a
+mid-track switch into the track it is already playing, so a queue takeover
+produces no track mark at the output at all — measured: the audio changed and
+the reported track did not move for the whole 20 s the probe watched. The
+`on_track` handler is attached to the `fallback`, not to the output. The cost is
+that it fires up to `crossfade_seconds` early, because crossfade reads that far
+ahead.
+
 There is no seek. `icecast.seek 30` on the running source answers `Seeked 0.00`:
 the playlist sits behind `crossfade` and `mksafe`, and the result is not
 seekable. Scrubbing would mean restructuring the audio graph, and crossfade is

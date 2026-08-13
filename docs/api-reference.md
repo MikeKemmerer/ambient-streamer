@@ -81,6 +81,8 @@ Common `error` tokens: `unauthorized`, `unknown_channel`, `invalid_channel_name`
 | POST | `/api/channels/{name}/start` | contract |
 | POST | `/api/channels/{name}/stop` | contract |
 | POST | `/api/channels/{name}/restart` | contract |
+| POST | `/api/channels/{name}/skip` | contract — next track, no restart |
+| POST | `/api/channels/{name}/play` | contract — one chosen track, no restart |
 | GET | `/api/channels/{name}/preview` | **extension** — resolves the HLS URL |
 | GET | `/api/media/audio` | contract |
 | GET | `/api/media/images` | contract |

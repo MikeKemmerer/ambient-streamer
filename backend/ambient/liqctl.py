@@ -15,6 +15,7 @@ channel.
 from __future__ import annotations
 
 import socket
+from collections.abc import Iterable
 
 # `icecast.skip` is the one that moves the audio. `playlist.skip` answers OK and
 # advances the playlist cursor without changing what is playing - measured on a
@@ -23,6 +24,9 @@ SKIP = "icecast.skip"
 STATUS = "ambient.status"
 CURRENT = "ambient.current"
 NEXT = "ambient.next"
+
+# Takes an argument, so it cannot go through the plain whitelist - see `push`.
+PUSH = "queue.push"
 
 _ALLOWED = frozenset({SKIP, STATUS, CURRENT, NEXT})
 
@@ -46,11 +50,14 @@ def validate_command(command: str) -> str:
 
 def send(host: str, command: str, *, port: int = TELNET_PORT, timeout: float = 5.0) -> str:
     """Send one command and return the reply with the protocol lines removed."""
-    token = validate_command(command)
+    return _exchange(host, validate_command(command), port=port, timeout=timeout)
+
+
+def _exchange(host: str, line: str, *, port: int, timeout: float) -> str:
     try:
         with socket.create_connection((host, port), timeout=timeout) as sock:
             sock.settimeout(timeout)
-            sock.sendall(f"{token}\nquit\n".encode())
+            sock.sendall(f"{line}\nquit\n".encode())
             chunks: list[bytes] = []
             while True:
                 try:
@@ -64,15 +71,47 @@ def send(host: str, command: str, *, port: int = TELNET_PORT, timeout: float = 5
         raise LiquidsoapError(f"{host}:{port} did not answer: {exc}") from exc
 
     lines = [
-        line.strip()
-        for line in b"".join(chunks).decode("utf-8", "replace").splitlines()
-        if line.strip() and line.strip() not in {"END", "Bye!"}
+        stripped
+        for stripped in (
+            raw.strip() for raw in b"".join(chunks).decode("utf-8", "replace").splitlines()
+        )
+        if stripped and stripped not in {"END", "Bye!"}
     ]
     if not lines:
-        raise LiquidsoapError(f"{host}:{port} answered nothing to {token!r}")
+        raise LiquidsoapError(f"{host}:{port} answered nothing to {line!r}")
     return "\n".join(lines)
 
 
 def liquidsoap_host(channel: str) -> str:
     """Matches the container name the per-channel Compose file pins."""
     return f"{channel}-liquidsoap"
+
+
+def validate_uri(uri: str, allowed: Iterable[str]) -> str:
+    """Only a track this channel already resolved may be put on air.
+
+    `queue.push` resolves whatever it is handed, so an unchecked value here is
+    an arbitrary file read on the Liquidsoap container and an outbound request
+    for any `http://` URI. The membership test is the whole defence; the
+    newline check only stops a second command riding along on the same line.
+    """
+    token = uri.strip()
+    if not token:
+        raise LiquidsoapError("no track given")
+    if any(ch in token for ch in "\r\n"):
+        raise LiquidsoapError("track contains a line break")
+    if token not in set(allowed):
+        raise LiquidsoapError(f"{uri!r} is not a track on this channel")
+    return token
+
+
+def push(
+    host: str,
+    uri: str,
+    *,
+    allowed: Iterable[str],
+    port: int = TELNET_PORT,
+    timeout: float = 5.0,
+) -> str:
+    """Put one specific track on air, interrupting whatever is playing."""
+    return _exchange(host, f"{PUSH} {validate_uri(uri, allowed)}", port=port, timeout=timeout)

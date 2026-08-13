@@ -198,6 +198,17 @@
             </div>
             <p class="small muted">Order is the play order. PUT replaces the whole list.</p>
             <ul class="pick-list" id="playlist-selected"></ul>
+
+            <div class="onair-pick" id="onair-pick" hidden>
+              <div class="pane-head">
+                <h3>Play now <span class="muted num" id="onair-count"></span></h3>
+              </div>
+              <p class="small muted" id="onair-note">
+                Every resolved track, in play order. Clicking one interrupts what is playing.
+                Audio only &mdash; the video never restarts.
+              </p>
+              <ul class="pick-list onair-list" id="onair-tracks"></ul>
+            </div>
           </div>
           <div class="editor-col">
             <div class="pane-head">

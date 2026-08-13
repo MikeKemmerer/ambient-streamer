@@ -150,6 +150,8 @@ docker compose --project-name ambient-lofi \
 |--------|-----|---------------|
 | Add/remove/reorder tracks | edit `config.yaml` or `PUT /api/channels/<ch>/playlist`, recompile; Liquidsoap reloads | 0 s |
 | Add/remove/reorder images | edit `config.yaml` or `PUT /api/channels/<ch>/images`, recompile; producer reloads between slides | 0 s, FFmpeg PID unchanged |
+| Next track | `POST /api/channels/<ch>/skip` | 0 s, composer never notices |
+| Play one chosen track | `POST /api/channels/<ch>/play` — a request queue in front of the playlist | 0 s, composer never notices |
 | Color | `PUT /api/channels/<ch>/color`, or an image's color profile | one frame |
 | Visualization plugin | `PUT /api/channels/<ch>/visualization` | one frame, clean cut |
 | Restart Liquidsoap | Icecast fallback mount absorbs it | 0 s, 0.00 % silence |

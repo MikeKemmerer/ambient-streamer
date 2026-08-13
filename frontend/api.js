@@ -132,6 +132,7 @@ export const api = {
   mediaAudio: () => request('GET', '/api/media/audio'),
   mediaImages: () => request('GET', '/api/media/images'),
   playlist: (name) => request('GET', `/api/channels/${enc(name)}/playlist`),
+  play: (name, track) => request('POST', `/api/channels/${enc(name)}/play`, { track }),
   setPlaylist: (name, tracks) => request('PUT', `/api/channels/${enc(name)}/playlist`, { tracks }),
   images: (name) => request('GET', `/api/channels/${enc(name)}/images`),
   setImages: (name, slides) => request('PUT', `/api/channels/${enc(name)}/images`, { slides }),

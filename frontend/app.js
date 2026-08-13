@@ -19,6 +19,7 @@ import { Preview } from './preview.js';
 import {
   $,
   availableRow,
+  onAirRow,
   basename,
   buildCard,
   channelTone,
@@ -90,7 +91,7 @@ const state = {
   media: { audio: [], images: [] },
   capacity: null,
   system: null,
-  playlist: { saved: [], draft: [], watched: [] },
+  playlist: { saved: [], draft: [], watched: [], onair: [] },
   slides: { saved: [], draft: [], watched: [] },
   // Held apart from the config so the 1 Hz progress render cannot reset the picker.
   resolutionDraft: null,
@@ -334,6 +335,11 @@ async function loadSelection(name) {
     state.playlist.saved = asList(tracks, 'tracks', 'playlist', 'items').map(String);
     state.playlist.draft = [...state.playlist.saved];
     state.playlist.watched = asList(tracks, 'watched').map(String);
+    // `resolved` is display text, `container_paths` is what Liquidsoap answers
+    // to. They are the same list, so pair them by index.
+    const shown = asList(tracks, 'resolved').map(String);
+    state.playlist.onair = asList(tracks, 'container_paths')
+      .map((path, i) => ({ path: String(path), label: shown[i] || String(path) }));
   }
   if (slides !== undefined) {
     state.slides.saved = asList(slides, 'slides', 'images', 'items').map(String);
@@ -420,7 +426,7 @@ function selectChannel(name) {
   if (!name) return;
 
   updateCard(name);
-  state.playlist = { saved: [], draft: [], watched: [] };
+  state.playlist = { saved: [], draft: [], watched: [], onair: [] };
   state.slides = { saved: [], draft: [], watched: [] };
   state.resolutionDraft = null;
   state.vizEnabledDraft = null;
@@ -443,6 +449,20 @@ async function skipTrack() {
   const result = await guard(`skip ${name}`, () => api.skip(name), 'accepted');
   if (result === undefined) return;
   toast('ok', 'skipped', 'the next track is on air');
+  scheduleRefresh(1500);
+}
+
+/**
+ * Puts one track on air through the request queue in front of the playlist.
+ * `playlist` itself has no "play this one" verb, so this is the only way to
+ * honour a choice. Audio only, like a skip.
+ */
+async function playTrack(path) {
+  const name = state.selected;
+  if (!name) return;
+  const result = await guard(`play on ${name}`, () => api.play(name, path), 'accepted');
+  if (result === undefined) return;
+  toast('ok', 'now playing', basename(path));
   scheduleRefresh(1500);
 }
 
@@ -481,6 +501,7 @@ function renderDetail() {
   $('btn-skip').disabled = ch.state === 'stopped';
 
   renderOverview(ch, cfg);
+  renderOnAir();
   syncDeleteButton();
 }
 
@@ -835,7 +856,35 @@ function renderAudioTab() {
 
   $('playlist-count').textContent = String(state.playlist.draft.length);
   $('playlist-dirty').hidden = !isDirty(state.playlist);
+  renderOnAir();
   syncUpload('audio');
+}
+
+/** The live playlist as Liquidsoap sees it — resolved files, not config entries. */
+function renderOnAir() {
+  const entries = state.playlist.onair;
+  $('onair-pick').hidden = entries.length === 0;
+  if (!entries.length) return;
+
+  const ch = state.channels.get(state.selected) || {};
+  const disabled = ch.state !== 'running';
+  // now.json reports the repo-relative path, which is what `resolved` holds;
+  // `container_paths` is the separate form Liquidsoap answers to.
+  const current = ch.current_track || '';
+  const list = $('onair-tracks');
+  clear(list);
+  entries.forEach((entry, index) => {
+    list.append(onAirRow(entry, index, {
+      playing: entry.label === current,
+      disabled,
+      onPlay: (path) => playTrack(path),
+    }));
+  });
+  $('onair-count').textContent = String(entries.length);
+  $('onair-note').textContent = disabled
+    ? 'Start the channel to play a track from here.'
+    : 'Every resolved track, in play order. Clicking one interrupts what is playing. '
+      + 'Audio only \u2014 the video never restarts.';
 }
 
 // Form fields are seeded from config on load only. Re-deriving them on every list
