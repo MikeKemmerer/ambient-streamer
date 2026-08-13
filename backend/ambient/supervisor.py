@@ -65,6 +65,15 @@ DEFAULT_TIMEOUT = 180.0
 TAKEOVER_TIMEOUT = 60.0
 PROBE_TIMEOUT = 120.0
 RUN_DIR = "/run/ambient"
+# One progress file per slot. The run directory is shared, so a single file has
+# two writers during a make-before-break restart and the takeover check cannot
+# tell the incoming composer's frames from the outgoing one's.
+PROGRESS_LIVE = "progress"
+PROGRESS_NEXT = "progress-next"
+
+
+def progress_name(slot_next: bool) -> str:
+    return PROGRESS_NEXT if slot_next else PROGRESS_LIVE
 # Matches docker/compose.channel.yml.j2, which pins ambient-composer:dev.
 DEFAULT_COMPOSER_IMAGE = "ambient-composer:dev"
 # Matches ZMQ_BIND_HOST/ZMQ_BIND_PORT in docker/compose.channel.yml.j2.
@@ -308,7 +317,13 @@ def _override_file(name: str, container: str) -> Iterator[Path]:
         path = Path(directory) / "compose.next.yml"
         path.write_text(
             yaml.safe_dump(
-                {"services": {f"{name}{COMPOSER_SUFFIX}": {"container_name": container}}},
+                {"services": {f"{name}{COMPOSER_SUFFIX}": {
+                    "container_name": container,
+                    # Its own progress file. Both slots share the run directory,
+                    # so one file would have two writers and the takeover check
+                    # could not tell which composer it was watching.
+                    "environment": {"PROGRESS_NAME": PROGRESS_NEXT},
+                }}},
                 sort_keys=False,
             ),
             encoding="utf-8",
@@ -491,12 +506,25 @@ class Supervisor:
         """
         if "/" in filename or filename.startswith("."):
             raise ValueError(f"invalid runtime filename {filename!r}")
-        container = self.composer_container(name, slot_next=await self.live_slot(name))
-        result = await self.docker_argv(
-            ["exec", container, "tail", "-c", str(int(tail_bytes)), f"{RUN_DIR}/{name}/{filename}"],
-            timeout=20.0,
-        )
-        return result.stdout if result.ok else ""
+        slot_next = await self.live_slot(name)
+        container = self.composer_container(name, slot_next=slot_next)
+        # Callers ask for "progress" and mean "whichever composer is on air".
+        # The canonical name is the fallback, not a legacy path: a composer that
+        # predates per-slot files writes it, and a watchdog that cannot find
+        # progress restarts a perfectly healthy channel in a loop.
+        candidates = [filename]
+        if filename == PROGRESS_LIVE and slot_next:
+            candidates = [progress_name(True), PROGRESS_LIVE]
+
+        for candidate in candidates:
+            result = await self.docker_argv(
+                ["exec", container, "tail", "-c", str(int(tail_bytes)),
+                 f"{RUN_DIR}/{name}/{candidate}"],
+                timeout=20.0,
+            )
+            if result.ok and result.stdout.strip():
+                return result.stdout
+        return ""
 
     # ---------------------------------------------------------- zmq control
 
@@ -575,7 +603,7 @@ class Supervisor:
                         extra_files=[override] if to_next else [],
                     )
                 ).check()
-                claimed = await self._await_takeover(name, incoming)
+                claimed = await self._await_takeover(name, incoming, slot_next=to_next)
                 await self.compose(
                     name,
                     ["rm", "--stop", "--force", f"{name}{COMPOSER_SUFFIX}"],
@@ -587,9 +615,13 @@ class Supervisor:
             return {"outgoing": outgoing, "incoming": incoming, "took_over": claimed}
 
     async def _await_takeover(
-        self, name: str, container: str, timeout: float | None = None
+        self, name: str, container: str, *, slot_next: bool, timeout: float | None = None
     ) -> bool:
-        """Wait for the replacement's `out_time` to advance, then hand over.
+        """Wait for the replacement's own `out_time` to advance, then hand over.
+
+        Its own, not the channel's: both composers share the run directory, so
+        watching one file meant watching the outgoing composer's frames and
+        declaring the handover done before the replacement had produced any.
 
         Bounded: a replacement that never publishes must not keep the outgoing
         composer alive indefinitely, because two composers cost two composers.
@@ -598,10 +630,11 @@ class Supervisor:
 
         loop = asyncio.get_running_loop()
         deadline = loop.time() + (self.takeover_timeout if timeout is None else timeout)
+        filename = progress_name(slot_next)
         first: int | None = None
         while loop.time() < deadline:
             result = await self.docker_argv(
-                ["exec", container, "tail", "-c", "4096", f"{RUN_DIR}/{name}/progress"],
+                ["exec", container, "tail", "-c", "4096", f"{RUN_DIR}/{name}/{filename}"],
                 timeout=15.0,
             )
             sample = parse_progress(result.stdout) if result.ok else None
