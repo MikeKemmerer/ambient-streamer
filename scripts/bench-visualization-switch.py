@@ -108,7 +108,11 @@ def phase(name: str, enabled: bool) -> tuple[float, float, float]:
 
 
 def main() -> int:
-    name = sys.argv[1] if len(sys.argv) > 1 else "kemmicalrhythmz"
+    # No default: this restarts the channel repeatedly.
+    if len(sys.argv) < 2:
+        print("usage: bench-visualization-switch.py <channel>")
+        return 2
+    name = sys.argv[1]
     before = call(f"/api/channels/{name}")
     original = (before.get("config") or {}).get("visualization", {}).get("enabled", True)
     res = before.get("resolution")

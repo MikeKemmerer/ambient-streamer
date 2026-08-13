@@ -76,7 +76,11 @@ def speed(name: str) -> str:
 
 
 def main() -> int:
-    name = sys.argv[1] if len(sys.argv) > 1 else "westcoastclassics"
+    # No default: this restarts the channel.
+    if len(sys.argv) < 2:
+        print("usage: verify-nvenc.py <channel>")
+        return 2
+    name = sys.argv[1]
     encoder = sys.argv[2] if len(sys.argv) > 2 else "h264_nvenc"
     failures: list[str] = []
 

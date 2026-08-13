@@ -134,6 +134,18 @@ process is doing now, never a source of truth.
 | `zmq.sock` | composer | control socket address for this channel |
 | `health.json` | backend | last watchdog verdict and timestamp |
 | `color-mode` | backend | `manual` or `auto`, read live by the slideshow producer |
+| `slide-position` | composer | the slide on screen, so a rebuilt graph resumes there |
+
+`slide-position` exists because applying most settings replaces the compositor,
+and the producer goes with it. Audio survives that — Liquidsoap is a separate
+process feeding Icecast and `restart` uses `--no-deps` — but the producer's slide
+index is in-process, so without this the images jumped back to the top of the
+order every time an operator changed the resolution. The producer records the
+slide as it goes up and resumes on **that** slide, not the next one: it was on
+screen when the graph was rebuilt, so it never finished its hold. A recorded
+slide that has since left `images.list` falls back to the top rather than
+stalling. Writing it is best-effort — losing continuity is survivable, and a
+producer that dies EOFs the pipe and ends the broadcast.
 
 `color-mode` exists because the producer receives the mode as a launch-time
 environment variable, and a filtergraph is fixed at launch. Without a live

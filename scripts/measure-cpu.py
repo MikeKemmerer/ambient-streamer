@@ -59,7 +59,7 @@ def speed(name: str) -> str:
 
 
 def main() -> int:
-    names = sys.argv[1:] or ["vibecoding", "westcoastclassics"]
+    names = sys.argv[1:] or ["vibecoding"]
     rounds = 12
     interval = 5
 

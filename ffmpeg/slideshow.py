@@ -369,6 +369,32 @@ class Settings:
     transition: float
     color_mode: str
     color_mode_file: str
+    # Where the slide on screen is recorded, so a restart can pick it up again.
+    position_file: str = ""
+
+
+def read_position(path: str) -> str:
+    """The slide that was on screen when the last compositor stopped."""
+    if not path:
+        return ""
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            return handle.read().strip()
+    except OSError:
+        return ""
+
+
+def write_position(path: str, slide: str) -> None:
+    """Never fatal: losing the position costs continuity, not the broadcast."""
+    if not path:
+        return
+    try:
+        temporary = f"{path}.tmp"
+        with open(temporary, "w", encoding="utf-8") as handle:
+            handle.write(slide)
+        os.replace(temporary, path)
+    except OSError as exc:
+        log("position_write_failed", error=type(exc).__name__)
 
 
 class SlideLoader:
@@ -392,6 +418,10 @@ class SlideLoader:
         self.ready: Optional[Slide] = None
         self.current = ""
         self.holding = False
+        # Consumed by the first adopt() only: after that the live position wins.
+        self.resume = read_position(cfg.position_file)
+        if self.resume:
+            log("slide_resume", path=self.resume)
 
     def start(self) -> None:
         self.poll()
@@ -441,6 +471,11 @@ class SlideLoader:
             if self.ready is not None and self.ready.path not in found:
                 self.ready = None  # dropped from the list, so it loses its turn
         self.index = order.index(current) + 1 if current in order else 0
+        if not current and self.resume in order:
+            # Where the last compositor left off. Not +1: that slide was on
+            # screen when the graph was rebuilt, so it never finished its hold.
+            self.index = order.index(self.resume)
+        self.resume = ""
         self.index %= len(order)
 
     # -- slide selection ---------------------------------------------------
@@ -476,6 +511,7 @@ class SlideLoader:
             self.ready = None
             self.current = slide.path
         self.wake.set()
+        write_position(self.cfg.position_file, slide.path)
         return slide
 
 
@@ -629,13 +665,21 @@ def default_color_mode_file() -> str:
     Empty when neither is set — outside a container there is nothing to watch,
     and the flag alone then behaves exactly as it did before.
     """
+    return _run_dir_file("color-mode")
+
+
+def default_position_file() -> str:
+    return _run_dir_file("slide-position")
+
+
+def _run_dir_file(leaf: str) -> str:
     run_dir = os.environ.get("RUN_DIR", "").strip()
     if not run_dir:
         channel = os.environ.get("CHANNEL_NAME", "").strip()
         if not channel:
             return ""
         run_dir = f"/run/ambient/{channel}"
-    return os.path.join(run_dir, "color-mode")
+    return os.path.join(run_dir, leaf)
 
 
 def parse_args() -> Settings:
@@ -660,6 +704,8 @@ def parse_args() -> Settings:
                     default=env_str("COLOR_MODE_FILE", default_color_mode_file()))
     ap.add_argument("--transition", type=float,
                     default=env_float("COLOR_TRANSITION_SECONDS", 2.0))
+    ap.add_argument("--position-file",
+                    default=env_str("SLIDE_POSITION_FILE", default_position_file()))
     args = ap.parse_args()
     if args.fps <= 0:
         ap.error("--fps must be positive")
@@ -672,6 +718,7 @@ def parse_args() -> Settings:
         zmq_endpoint=args.zmq_endpoint, transition=args.transition,
         color_mode=resolve_color_mode(args.color_mode),
         color_mode_file=args.color_mode_file,
+        position_file=args.position_file,
     )
 
 

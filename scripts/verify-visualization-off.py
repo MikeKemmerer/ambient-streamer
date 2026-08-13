@@ -52,7 +52,11 @@ def speed(name: str) -> str:
 
 
 def main() -> int:
-    name = sys.argv[1] if len(sys.argv) > 1 else "kemmicalrhythmz"
+    # No default: this restarts the channel.
+    if len(sys.argv) < 2:
+        print("usage: verify-visualization-off.py <channel>")
+        return 2
+    name = sys.argv[1]
     failures: list[str] = []
 
     def check(label: str, ok: bool, note: str) -> None:
