@@ -51,6 +51,7 @@ Each **channel** is one continuous YouTube broadcast. A channel pairs:
 | FFmpeg compositor | Renders a color-adaptive image slideshow plus real-time audio visualization, encodes, and publishes over RTMP. |
 | Color profile | Per-image palette data that drives the visualization and background colors so they track the current image. Extracted by the backend, applied by the slideshow producer over ZMQ. |
 | HLS preview | A second, low-resolution feed the composer publishes alongside the program, which an operator can watch without touching the YouTube broadcast. It is a **second encode**, and it is why a channel costs what [§7.2](#72-capacity) says it costs. |
+| Internal channel | A channel that publishes only that local feed, at full resolution, and never reaches YouTube — structurally, because the relay path carrying the publisher hook is never published. One encode, not two. |
 
 A **FastAPI control plane** orchestrates all channels: it renders each channel's Compose file,
 starts and stops channels, watches their health, restarts what dies, applies scheduled changes,
@@ -251,6 +252,13 @@ directly to YouTube ends the broadcast.
 MediaMTX sits between them. The composer publishes two RTMP streams per channel — the program
 feed on `<channel>` and a low-resolution operator feed on `<channel>/preview`. MediaMTX relays
 the program feed on to YouTube and serves the preview path as HLS. It does not transcode.
+
+Hanging the publisher hook on the program path alone is also what makes an **internal channel**
+possible: set `CHANNEL_PUBLISH_YOUTUBE=false` and the composer publishes the local rendition
+only, at the channel's own resolution. The program path never goes ready, so the hook has
+nothing to fire on, and the channel is incapable of reaching YouTube even with a valid stream
+key in its `.env` — verified live. Such a channel encodes once rather than twice, so it costs
+less than a public one, not more.
 
 **The relay does not hold the YouTube session open.** Spike S5 measured MediaMTX 1.9.3
 terminating *reader* connections whenever the publisher on a path changes:

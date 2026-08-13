@@ -140,7 +140,10 @@ function channel(name, status, config, playlist, images) {
     images,
     watched: { audio: [], images: [] },
     // Stands in for the channel .env. null means "inherit the global default".
-    delivery: { stream_key: '', rtmp_url: DEFAULT_RTMP_URL, encoder: null, fps: null },
+    delivery: {
+      stream_key: '', rtmp_url: DEFAULT_RTMP_URL, encoder: null, fps: null,
+      youtube: true, local_height: null, local_fps: null,
+    },
   };
 }
 
@@ -264,6 +267,17 @@ for (const entry of db.values()) entry.delivery.encoder = entry.status.encoder_r
 db.get('lofi').delivery.stream_key = 'seeded-key-lofi';
 db.get('chant').delivery.stream_key = 'seeded-key-chant';
 db.get('chant').delivery.fps = 30;
+
+/**
+ * A public channel serves an operator-sized preview; an internal one serves its
+ * own full size, because for it the local rendition is the whole product.
+ */
+function localRendition(entry) {
+  const youtube = entry.delivery.youtube;
+  const height = entry.delivery.local_height || (youtube ? 360 : 720);
+  const fps = entry.delivery.local_fps || (youtube ? 15 : entry.delivery.fps || DEFAULT_FPS);
+  return `${Math.round(height * 16 / 9 / 2) * 2}x${height}@${fps}`;
+}
 
 // Capacity model, following backend/ambient/plugins.py: pipeline + preview + one
 // cost per instantiated branch. Off, no branch is instantiated at all, so the
@@ -668,6 +682,10 @@ async function route(url, init) {
       // What was asked for, not what is measured: a stopped channel reports 0 fps.
       fps_requested: entry.delivery.fps || DEFAULT_FPS,
       rtmp_url: entry.delivery.rtmp_url,
+      youtube: entry.delivery.youtube,
+      local: localRendition(entry),
+      local_height_requested: entry.delivery.local_height || 0,
+      local_fps_requested: entry.delivery.local_fps || 0,
       // Presence only. The key is a credential and is never echoed back.
       has_stream_key: Boolean(entry.delivery.stream_key),
       hls_url: `http://${location.hostname}:8888/${name}/preview/index.m3u8`,
@@ -948,6 +966,20 @@ async function route(url, init) {
       changed.push('fps');
     }
 
+    if (b.youtube !== undefined && b.youtube !== null) {
+      entry.delivery.youtube = Boolean(b.youtube);
+      changed.push('youtube');
+    }
+
+    if (b.clear_local) {
+      entry.delivery.local_height = null;
+      entry.delivery.local_fps = null;
+      changed.push('local');
+    } else {
+      if (b.local_height) { entry.delivery.local_height = b.local_height; changed.push('local_height'); }
+      if (b.local_fps) { entry.delivery.local_fps = b.local_fps; changed.push('local_fps'); }
+    }
+
     if (!changed.length) {
       return json({ accepted: false, channel: name, changed: [], detail: 'nothing to change' });
     }
@@ -963,6 +995,10 @@ async function route(url, init) {
       rtmp_url: entry.delivery.rtmp_url,
       encoder: entry.delivery.encoder || DEFAULT_ENCODER,
       fps: entry.delivery.fps || DEFAULT_FPS,
+      youtube: entry.delivery.youtube,
+      local: localRendition(entry),
+      local_height_requested: entry.delivery.local_height || 0,
+      local_fps_requested: entry.delivery.local_fps || 0,
       detail: 'applies on the next start',
     });
   }

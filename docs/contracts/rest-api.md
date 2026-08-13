@@ -268,7 +268,7 @@ change — the channel performs a make-before-break restart.
 
 | Method | Path | Purpose |
 |---|---|---|
-| PUT | `/api/channels/{name}/delivery` | stream key, RTMP URL, encoder, fps |
+| PUT | `/api/channels/{name}/delivery` | stream key, RTMP URL, encoder, fps, reach |
 
 Every field is optional; only what is sent changes, so editing the fps can never
 overwrite the stream key. `clear_encoder` and `clear_fps` fall back to the global
@@ -276,7 +276,8 @@ default, which is distinct from omitting the field.
 
 ```json
 {"stream_key": "abcd-1234", "rtmp_url": "rtmp://a.rtmp.youtube.com/live2",
- "encoder": "libx264", "fps": 30, "clear_encoder": false, "clear_fps": false}
+ "encoder": "libx264", "fps": 30, "clear_encoder": false, "clear_fps": false,
+ "youtube": true, "local_height": 720, "local_fps": 30, "clear_local": false}
 ```
 
 **Refused with `409 channel_running` while the channel is up**, rather than
@@ -293,6 +294,44 @@ logged, and never placed in argv. `GET /api/channels/{name}` reports only
 
 `fps_requested` is what was configured; the `fps` field is what is measured and
 reads `0` on a stopped channel.
+
+## Internal channels
+
+`{"youtube": false}` makes a channel **internal**: it renders and serves HLS on
+the local network and never reaches YouTube.
+
+This is structural, not "leave the stream key blank". The composer publishes
+only the local rendition, so the relay's *program* path never goes ready — and
+`runOnReady` in `docker/mediamtx.yml`, the only thing in the system that ever
+talks to YouTube, hangs on that path alone. Verified on a live channel with a
+**valid stream key still present in its `.env`**: no publisher process, no
+publisher log line, and no program path on the relay.
+
+An internal channel is also **cheaper** than a public one, not more expensive:
+there is no second rendition to preview, so it encodes once instead of twice.
+It uses the channel's own encoder for that one encode rather than the preview's
+libx264, because there is no second encode to keep off the GPU.
+
+| | `youtube: true` | `youtube: false` |
+|---|---|---|
+| Relay paths published | `<ch>` and `<ch>/preview` | `<ch>/preview` only |
+| Encodes | 2 | 1 |
+| Local rendition default | 360p @ 15 (operator preview) | the channel's own resolution and fps |
+| Local encoder | `libx264` | the channel's encoder |
+| `rtmp` in status | `connected` / `disconnected` | `local-only` |
+| Stream key needed | yes | no, and one present is inert |
+
+`local_height` and `local_fps` override the local rendition in either mode; the
+width follows at 16:9, rounded to an even number because yuv420p cannot encode
+an odd dimension. `clear_local` returns both to the default for the current
+mode — they are cleared as a pair, because the pair moves with `youtube`.
+
+Measured on a live internal channel at 480p30: the HLS master reported
+`RESOLUTION=854x480, FRAME-RATE=30.000` at 1.77 Mbps, holding 1.0x realtime.
+
+The URL is the same one the operator preview uses,
+`/{name}/preview/index.m3u8` — proxied by the backend for the in-page player,
+or straight off the relay when `AMBIENT_HLS_PUBLISH` publishes its port.
 
 ## Bumpers
 

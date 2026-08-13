@@ -143,6 +143,9 @@ export function metricTone(kind, value) {
       if (value < SPEED_WARN) return 'warn';
       return 'ok';
     case 'rtmp':
+      // An internal channel has no YouTube leg to be disconnected from, so a
+      // red chip would report the configuration as an outage.
+      if (value === 'local-only') return 'ok';
       return value === 'connected' ? 'ok' : 'bad';
     case 'hls':
       return value === 'ok' ? 'ok' : 'warn';

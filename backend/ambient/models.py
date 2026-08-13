@@ -385,6 +385,17 @@ class ChannelEnv(EnvModel):
     mount: str = Field(..., alias="CHANNEL_MOUNT", pattern=MOUNT)
     fallback_mount: str = Field(..., alias="CHANNEL_FALLBACK_MOUNT", pattern=MOUNT)
 
+    # An internal channel publishes only its local HLS rendition. The relay's
+    # program path never goes ready, so the YouTube hook cannot fire — that is
+    # structural, not "the stream key happens to be blank", which a paste into
+    # the wrong channel would undo.
+    publish_youtube: bool = Field(True, alias="CHANNEL_PUBLISH_YOUTUBE")
+    # The local HLS rendition. Defaults differ by delivery: a YouTube channel
+    # gets an operator-sized preview, an internal channel gets its full size,
+    # because for it this is the only output there is.
+    local_height: int | None = Field(None, alias="CHANNEL_LOCAL_HEIGHT", ge=144, le=2160)
+    local_fps: int | None = Field(None, alias="CHANNEL_LOCAL_FPS", ge=1, le=60)
+
     @model_validator(mode="after")
     def _mounts_differ(self) -> ChannelEnv:
         if self.mount == self.fallback_mount:

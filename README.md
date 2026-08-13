@@ -121,6 +121,20 @@ curl -sS -X POST -H "Authorization: Bearer $TOKEN" \
 MediaMTX spawns the YouTube publisher when the channel's program path goes ready — measured at
 207 ms. A channel whose stream key is still empty runs normally and stays off YouTube.
 
+### Internal channels
+
+Set `CHANNEL_PUBLISH_YOUTUBE=false` (or `PUT /api/channels/<ch>/delivery {"youtube": false}`) and
+the channel renders and serves HLS on your network without ever reaching YouTube. Play it at
+`/<ch>/preview/index.m3u8`.
+
+This is structural rather than a blank stream key: the compositor publishes only the local
+rendition, so the relay's program path never goes ready and the publisher hook — the only thing
+that talks to YouTube — has nothing to fire on. Verified with a valid stream key still sitting in
+the channel's `.env`.
+
+It also costs less than a public channel, because there is no second rendition to preview: one
+encode instead of two, at the channel's own resolution rather than a 360p operator view.
+
 Full walkthrough, including verification and the current gaps:
 [docs/quickstart.md](docs/quickstart.md).
 

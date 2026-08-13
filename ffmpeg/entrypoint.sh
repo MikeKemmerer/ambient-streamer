@@ -35,6 +35,11 @@ RELAY_RTMP="${RELAY_RTMP:-rtmp://mediamtx:1935}"
 PREVIEW_WIDTH="${PREVIEW_WIDTH:-640}"
 PREVIEW_HEIGHT="${PREVIEW_HEIGHT:-360}"
 PREVIEW_FPS="${PREVIEW_FPS:-15}"
+# `off` publishes only the local rendition. The relay's program path never goes
+# ready, so its YouTube hook never runs — an internal channel is structurally
+# unable to leave the network, not merely missing a stream key. Anything other
+# than exactly "off" publishes, so a typo cannot silently take a channel off air.
+PUBLISH_PROGRAM="${PUBLISH_PROGRAM:-on}"
 
 PLUGIN_DIR="${PLUGIN_DIR:-/plugins}"
 HOT_SET="${HOT_SET:-showfreqs-bars}"
@@ -209,8 +214,16 @@ MAIN_VIDEO=("${VIDEO_FLAGS[@]}")
 # would cost a whole channel. Quadro and datacenter cards have no such cap, so a
 # host with one can set PREVIEW_ENCODER to move it to the GPU as well. Mixing
 # encoders in one FFmpeg process is legal either way.
+#
+# An internal channel is the exception: its local rendition IS the product and
+# there is no second encode to share the host with, so it uses the channel's own
+# encoder.
 # Matches build_composer_command() in backend/ambient/ffmpeg_cmd.py.
-PREVIEW_ENCODER="${PREVIEW_ENCODER:-libx264}"
+if [[ "$PUBLISH_PROGRAM" == "off" ]]; then
+  PREVIEW_ENCODER="${PREVIEW_ENCODER:-$ENCODER}"
+else
+  PREVIEW_ENCODER="${PREVIEW_ENCODER:-libx264}"
+fi
 case "$PREVIEW_ENCODER" in
   libx264|h264_nvenc|h264_qsv) ;;
   *) warn "PREVIEW_ENCODER '$PREVIEW_ENCODER' unrecognized; using libx264"
@@ -218,7 +231,11 @@ case "$PREVIEW_ENCODER" in
 esac
 video_flags "$PREVIEW_ENCODER" "$PREVIEW_FPS" "$P_RATE" "$P_BUFSIZE" "$P_GOP"
 PREVIEW_VIDEO=("${VIDEO_FLAGS[@]}")
-ok "encoder: ${ENCODER} @ ${RATE} (preview ${PREVIEW_ENCODER} @ ${P_RATE})"
+if [[ "$PUBLISH_PROGRAM" == "off" ]]; then
+  ok "encoder: ${PREVIEW_ENCODER} @ ${P_RATE} (local only, ${PREVIEW_WIDTH}x${PREVIEW_HEIGHT}@${PREVIEW_FPS})"
+else
+  ok "encoder: ${ENCODER} @ ${RATE} (preview ${PREVIEW_ENCODER} @ ${P_RATE})"
+fi
 
 # --------------------------------------------------------------------- plugins
 # ffmpeg takes colors as 0xRRGGBB; '#' is a filtergraph escaping problem.
@@ -338,9 +355,20 @@ fi
   printf '%s' "eq@eq=eval=frame:contrast=1:brightness=${INIT_BRIGHTNESS}:saturation=${INIT_SATURATION}"
   printf '%s' ":gamma_r=${INIT_GAMMA_R}:gamma_g=${INIT_GAMMA_G}:gamma_b=${INIT_GAMMA_B},"
   printf '%s' "hue@hue=h=${INIT_HUE},format=yuv420p,setsar=1[vfull];"
+if [[ "$PUBLISH_PROGRAM" == "off" ]]; then
+  # One encode, one output. Splitting for a preview nobody watches would double
+  # the encode cost of a channel whose only consumer is the local HLS.
+  if [[ "$PREVIEW_WIDTH" == "$WIDTH" && "$PREVIEW_HEIGHT" == "$HEIGHT" ]]; then
+    printf '%s' "[vfull]fps=${PREVIEW_FPS}[vpreview];"
+  else
+    printf '%s' "[vfull]scale=${PREVIEW_WIDTH}:${PREVIEW_HEIGHT}:flags=fast_bilinear,fps=${PREVIEW_FPS}[vpreview];"
+  fi
+  printf '%s' "[0:a]aresample=44100:async=1000:first_pts=0,loudnorm=I=-14:TP=-1:LRA=11[apreview]"
+else
   printf '%s' "[vfull]split=2[vmain][vpre];"
   printf '%s' "[vpre]scale=${PREVIEW_WIDTH}:${PREVIEW_HEIGHT}:flags=fast_bilinear,fps=${PREVIEW_FPS}[vpreview];"
   printf '%s' "[0:a]aresample=44100:async=1000:first_pts=0,loudnorm=I=-14:TP=-1:LRA=11,asplit=2[amain][apreview]"
+fi
 } > "$GRAPH_FILE"
 log "filtergraph -> $GRAPH_FILE ($(wc -c < "$GRAPH_FILE") bytes)"
 # The accent is baked into the plugins at launch, so a live change has to be a
@@ -380,6 +408,25 @@ log "now.json -> $NOW_FILE (liquidsoap ${LIQ_TELNET_HOST}:${LIQ_TELNET_PORT})"
 # moment it connects. It was worth nothing until Icecast began bursting - before
 # that the wait was for audio to arrive at all, not for FFmpeg to buffer it.
 # stdin is the producer FIFO, never a terminal, so </dev/null is not used here.
+# The relay path a channel publishes to decides whether it can reach YouTube:
+# mediamtx.yml hangs the publisher hook on the program path only, and documents
+# the preview path as one that must never get there.
+OUTPUTS=(
+  -map '[vpreview]' -map '[apreview]'
+    "${PREVIEW_VIDEO[@]}"
+    -c:a aac -b:a "$P_AUDIO_BR" -ar 44100
+    -f flv "${RELAY_RTMP}/${CHANNEL_NAME}/preview"
+)
+if [[ "$PUBLISH_PROGRAM" != "off" ]]; then
+  OUTPUTS=(
+    -map '[vmain]' -map '[amain]'
+      "${MAIN_VIDEO[@]}"
+      -c:a aac -b:a "$AUDIO_BR" -ar 44100
+      -f flv "${RELAY_RTMP}/${CHANNEL_NAME}"
+    "${OUTPUTS[@]}"
+  )
+fi
+
 "$FFMPEG_BIN" -nostdin -hide_banner -loglevel "$FFMPEG_LOGLEVEL" \
   -progress "$PROGRESS_FILE" \
   -probesize 32k -analyzeduration 500000 -fflags nobuffer \
@@ -388,17 +435,14 @@ log "now.json -> $NOW_FILE (liquidsoap ${LIQ_TELNET_HOST}:${LIQ_TELNET_PORT})"
   -i "$AUDIO_URL" \
   -f image2pipe -framerate "$PRODUCER_FPS" -i pipe:0 \
   -filter_complex_script "$GRAPH_FILE" \
-  -map '[vmain]' -map '[amain]' \
-    "${MAIN_VIDEO[@]}" \
-    -c:a aac -b:a "$AUDIO_BR" -ar 44100 \
-    -f flv "${RELAY_RTMP}/${CHANNEL_NAME}" \
-  -map '[vpreview]' -map '[apreview]' \
-    "${PREVIEW_VIDEO[@]}" \
-    -c:a aac -b:a "$P_AUDIO_BR" -ar 44100 \
-    -f flv "${RELAY_RTMP}/${CHANNEL_NAME}/preview" \
+  "${OUTPUTS[@]}" \
   < "$FIFO" &
 FFMPEG_PID=$!
-ok "ffmpeg pid $FFMPEG_PID -> ${RELAY_RTMP}/${CHANNEL_NAME} (+ /preview)"
+if [[ "$PUBLISH_PROGRAM" == "off" ]]; then
+  ok "ffmpeg pid $FFMPEG_PID -> ${RELAY_RTMP}/${CHANNEL_NAME}/preview (local only, no YouTube leg)"
+else
+  ok "ffmpeg pid $FFMPEG_PID -> ${RELAY_RTMP}/${CHANNEL_NAME} (+ /preview)"
+fi
 
 # Producer death closes the FIFO, so waiting on FFmpeg covers both halves of
 # the supervised unit. Any exit is a fault; the supervisor decides what next.

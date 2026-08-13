@@ -59,6 +59,9 @@ class CreateChannel(StrictModel):
     rtmp_url: str = "rtmp://a.rtmp.youtube.com/live2"
     # Write-only. It is never echoed back and never logged.
     stream_key: str = ""
+    # False makes the channel internal: local HLS only, no YouTube leg and no
+    # stream key needed.
+    youtube: bool = True
     visualization: Visualization | None = None
 
 
@@ -91,8 +94,14 @@ class DeliveryBody(StrictModel):
     rtmp_url: str | None = None
     encoder: Encoder | None = None
     fps: int | None = Field(None, ge=1, le=60)
+    # Off makes the channel internal: it publishes only its local HLS rendition
+    # and the relay's YouTube hook has no path to fire on.
+    youtube: bool | None = None
+    local_height: int | None = Field(None, ge=144, le=2160)
+    local_fps: int | None = Field(None, ge=1, le=60)
     clear_encoder: bool = False
     clear_fps: bool = False
+    clear_local: bool = False
 
 
 # --------------------------------------------------------------------------
@@ -107,24 +116,32 @@ def _pick(source: dict[str, Any], *keys: str) -> Any:
     return None
 
 
-async def _relay_state(state: AppState, name: str) -> tuple[str, str]:
-    program = await state.relay_path(name)
+async def _relay_state(state: AppState, name: str, *, youtube: bool = True) -> tuple[str, str]:
     preview = await state.relay_path(f"{name}/preview")
+    hls = "ok" if (preview or {}).get("ready") else "down"
+    if not youtube:
+        # There is no program path to ask about. "disconnected" would read as a
+        # fault when it is the configuration.
+        return "local-only", hls
+    program = await state.relay_path(name)
     if program is None:
         return "unknown", "unknown"
     rtmp = "connected" if program.get("ready") else "disconnected"
-    hls = "ok" if (preview or {}).get("ready") else "down"
     return rtmp, hls
 
 
-def _relay_state_from(paths: dict[str, Any] | None, name: str) -> tuple[str, str]:
+def _relay_state_from(
+    paths: dict[str, Any] | None, name: str, *, youtube: bool = True
+) -> tuple[str, str]:
     """Same reading, from a path list fetched once for the whole channel list."""
     if paths is None:
         return "unknown", "unknown"
-    program = paths.get(name)
     preview = paths.get(f"{name}/preview")
-    rtmp = "connected" if (program or {}).get("ready") else "disconnected"
     hls = "ok" if (preview or {}).get("ready") else "down"
+    if not youtube:
+        return "local-only", hls
+    program = paths.get(name)
+    rtmp = "connected" if (program or {}).get("ready") else "disconnected"
     return rtmp, hls
 
 
@@ -176,6 +193,10 @@ async def channel_status(
         "bitrate_kbps": round(sample.bitrate_kbps) if sample else 0,
         "cpu_cores": state.channel_cores(name),
         "liquidsoap_buffer": "ok" if containers.liquidsoap.running else "down",
+        # An internal channel has no YouTube leg at all, so "rtmp: disconnected"
+        # would read as a fault rather than as the configuration.
+        "youtube": channel.publish_youtube,
+        "local": f"{channel.local_width}x{channel.local_height}@{channel.local_fps}",
         # Never a bare default: claiming "disconnected" for a channel nobody
         # asked the relay about reads as the YouTube leg being down.
         "rtmp": "unknown",
@@ -183,12 +204,16 @@ async def channel_status(
         "health": health.value,
     }
     if detail:
-        body["rtmp"], body["hls"] = await _relay_state(state, name)
+        body["rtmp"], body["hls"] = await _relay_state(
+            state, name, youtube=channel.publish_youtube
+        )
         body["warnings"] = channel.warnings
         body["fault"] = verdict.fault if verdict else None
         body["fault_detail"] = verdict.detail if verdict else ""
     elif relay is not None:
-        body["rtmp"], body["hls"] = _relay_state_from(relay, name)
+        body["rtmp"], body["hls"] = _relay_state_from(
+            relay, name, youtube=channel.publish_youtube
+        )
     return body
 
 
@@ -228,6 +253,10 @@ async def get_channel(name: str, request: Request, state: AppState = Authed) -> 
     # What was asked for, not what is measured: a stopped channel reports 0 fps.
     body["fps_requested"] = channel.fps
     body["rtmp_url"] = channel.env.rtmp_url
+    # Raw, so the form can tell "inherit the default" from a value that happens
+    # to equal it; the resolved pair is already in `local`.
+    body["local_height_requested"] = channel.env.local_height or 0
+    body["local_fps_requested"] = channel.env.local_fps or 0
     # Presence only. The key is a credential and is never echoed back.
     body["has_stream_key"] = bool(channel.env.stream_key.get_secret_value())
     body["hls_url"] = _direct_hls_url(state, name, request)
@@ -534,6 +563,25 @@ async def set_delivery(name: str, body: DeliveryBody, state: AppState = Authed) 
         values["CHANNEL_FPS"] = str(body.fps)
         changed.append("fps")
 
+    if body.youtube is not None:
+        values["CHANNEL_PUBLISH_YOUTUBE"] = "true" if body.youtube else "false"
+        changed.append("youtube")
+
+    # Cleared together: the two defaults move as a pair with `youtube`, and a
+    # half-cleared local rendition would keep an operator preview's 15 fps on a
+    # channel that just became its own product.
+    if body.clear_local:
+        values["CHANNEL_LOCAL_HEIGHT"] = ""
+        values["CHANNEL_LOCAL_FPS"] = ""
+        changed.append("local")
+    else:
+        if body.local_height is not None:
+            values["CHANNEL_LOCAL_HEIGHT"] = str(body.local_height)
+            changed.append("local_height")
+        if body.local_fps is not None:
+            values["CHANNEL_LOCAL_FPS"] = str(body.local_fps)
+            changed.append("local_fps")
+
     if not values:
         return {"accepted": False, "channel": name, "changed": [], "detail": "nothing to change"}
 
@@ -562,6 +610,11 @@ async def set_delivery(name: str, body: DeliveryBody, state: AppState = Authed) 
         "rtmp_url": updated.env.rtmp_url,
         "encoder": updated.encoder.value,
         "fps": updated.fps,
+        "youtube": updated.publish_youtube,
+        "local": f"{updated.local_width}x{updated.local_height}@{updated.local_fps}",
+        # Raw, so a form can tell an inherited default from an explicit value.
+        "local_height_requested": updated.env.local_height or 0,
+        "local_fps_requested": updated.env.local_fps or 0,
         "detail": "applies on the next start",
     }
 
@@ -627,6 +680,9 @@ def _write_channel_env(directory: Path, body: CreateChannel, mount: str, fallbac
         f"CHANNEL_MEMORY_LIMIT={body.memory_limit or ''}",
         f"CHANNEL_MOUNT={mount}",
         f"CHANNEL_FALLBACK_MOUNT={fallback}",
+        f"CHANNEL_PUBLISH_YOUTUBE={'true' if body.youtube else 'false'}",
+        "CHANNEL_LOCAL_HEIGHT=",
+        "CHANNEL_LOCAL_FPS=",
     ]
     path = directory / ".env"
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)

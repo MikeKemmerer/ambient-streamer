@@ -151,6 +151,15 @@ services:
       # interpolation default won unconditionally and every channel encoded at 30
       # no matter what CHANNEL_FPS said.
       FPS: "{{ fps }}"
+      # off: publish only the local rendition. The relay's program path never
+      # goes ready, so its YouTube hook cannot fire — the channel is incapable
+      # of leaving the network, rather than merely lacking a stream key.
+      PUBLISH_PROGRAM: "{{ publish_program }}"
+      # The local HLS rendition. Nothing set these before, so every channel was
+      # pinned to the entrypoint's 640x360@15 whatever it was configured for.
+      PREVIEW_WIDTH: "{{ preview_width }}"
+      PREVIEW_HEIGHT: "{{ preview_height }}"
+      PREVIEW_FPS: "{{ preview_fps }}"
       # ipc:// on tmpfs, not tcp://. A published ZMQ port is a remote kill surface.
       ZMQ_BIND_HOST: 127.0.0.1
       ZMQ_BIND_PORT: "5555"

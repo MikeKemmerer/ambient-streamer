@@ -605,6 +605,7 @@ const ENCODERS = ['libx264', 'h264_nvenc', 'h264_qsv'];
 
 const DELIVERY_INPUTS = [
   'delivery-key', 'delivery-rtmp', 'delivery-encoder', 'delivery-fps', 'delivery-fps-default',
+  'delivery-youtube', 'delivery-local', 'delivery-local-fps',
 ];
 
 /** rtmp_url, has_stream_key and fps_requested come from GET /api/channels/{name}. */
@@ -617,6 +618,12 @@ function deliveryOf(name) {
     // Not ch.fps: that is the measured rate, and a stopped channel reports 0.
     fps: Number(detail.fps_requested) || 0,
     hasKey: Boolean(detail.has_stream_key),
+    // Absent on a summary that has not loaded yet; default to the common case
+    // rather than showing every channel as internal for a moment.
+    youtube: detail.youtube !== false && ch.youtube !== false,
+    local: String(detail.local || ch.local || ''),
+    localHeight: Number(detail.local_height_requested) || 0,
+    localFps: Number(detail.local_fps_requested) || 0,
     editable: Boolean(name) && (ch.state === 'stopped' || ch.state === 'failed'),
   };
 }
@@ -645,6 +652,20 @@ function deliveryBody() {
   } else {
     const fps = Number($('delivery-fps').value);
     if (fps && fps !== base.fps) body.fps = fps;
+  }
+
+  const youtube = $('delivery-youtube').checked;
+  if (youtube !== base.youtube) body.youtube = youtube;
+
+  const height = Number($('delivery-local').value);
+  const localFps = Number($('delivery-local-fps').value);
+  if (!height && !localFps) {
+    // Both boxes empty means "take whatever this delivery mode defaults to",
+    // and the two defaults move together, so they are cleared together.
+    if (base.localHeight || base.localFps) body.clear_local = true;
+  } else {
+    if (height && height !== base.localHeight) body.local_height = height;
+    if (localFps && localFps !== base.localFps) body.local_fps = localFps;
   }
   return body;
 }
@@ -704,12 +725,27 @@ function syncDelivery() {
     setValue($('delivery-rtmp'), base.rtmpUrl);
     setValue($('delivery-encoder'), ENCODERS.includes(base.encoder) ? base.encoder : '');
     setValue($('delivery-fps'), base.fps ? String(base.fps) : '');
+    $('delivery-youtube').checked = base.youtube;
+    setValue($('delivery-local'), base.localHeight ? String(base.localHeight) : '');
+    setValue($('delivery-local-fps'), base.localFps ? String(base.localFps) : '');
     state.deliveryFor = base.encoder ? name : null;
   }
 
   const keyState = $('delivery-key-state');
   keyState.textContent = base.hasKey ? 'key set' : 'no key';
   keyState.dataset.tone = base.hasKey ? 'ok' : 'warn';
+
+  const reach = $('delivery-reach');
+  const wantsYouTube = $('delivery-youtube').checked;
+  reach.textContent = wantsYouTube ? 'public' : 'internal only';
+  reach.dataset.tone = wantsYouTube ? 'ok' : 'idle';
+  // A missing key is not a warning on a channel that cannot use one.
+  keyState.hidden = !wantsYouTube;
+
+  $('delivery-local-note').textContent = base.local
+    ? `In effect: ${base.local}. Leave both on default and an internal channel serves its own `
+      + 'full size, while a public one serves a 360p operator preview.'
+    : '';
 
   $('delivery-effective').textContent =
     `In effect: ${base.encoder || DASH} at ${base.fps || DASH} fps. "Use default" hands the setting `
@@ -720,6 +756,9 @@ function syncDelivery() {
   lock.textContent = name ? `stop ${name} to change where it publishes` : '';
   for (const id of DELIVERY_INPUTS) $(id).disabled = !base.editable;
   $('delivery-fps').disabled = !base.editable || $('delivery-fps-default').checked;
+  // Nothing to point a key or an ingest URL at when the YouTube leg is off.
+  $('delivery-key').disabled = !base.editable || !wantsYouTube;
+  $('delivery-rtmp').disabled = !base.editable || !wantsYouTube;
   $('btn-delivery-apply').disabled = !base.editable || !dirty;
 }
 
@@ -763,6 +802,10 @@ async function applyDelivery() {
       has_stream_key: result.has_stream_key,
       encoder_requested: result.encoder,
       fps_requested: result.fps,
+      youtube: result.youtube,
+      local: result.local,
+      local_height_requested: result.local_height_requested,
+      local_fps_requested: result.local_fps_requested,
     });
   }
   resetDeliveryForm();

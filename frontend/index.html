@@ -134,6 +134,18 @@
             </p>
 
             <div class="row">
+              <label class="inline"><input type="checkbox" id="delivery-youtube" checked> publish to YouTube</label>
+              <span class="chip" id="delivery-reach" data-tone="idle">&#8212;</span>
+            </div>
+            <p class="small muted" id="delivery-reach-note">
+              Off makes this an internal channel: it renders and serves HLS on your network and
+              never reaches YouTube. The compositor publishes only the local rendition, so the
+              relay path that carries the YouTube publisher never goes ready &#8212; it cannot get
+              out even with a key stored. It also encodes once instead of twice, so it costs less
+              than a public channel.
+            </p>
+
+            <div class="row">
               <label class="inline field">stream key
                 <input type="password" id="delivery-key" class="wide-input" placeholder="unchanged"
                        autocomplete="off" spellcheck="false" aria-describedby="delivery-key-note">
@@ -166,6 +178,24 @@
               </label>
               <label class="inline"><input type="checkbox" id="delivery-fps-default"> use default</label>
             </div>
+
+            <div class="row">
+              <label class="inline">local HLS
+                <select id="delivery-local">
+                  <option value="">default</option>
+                  <option value="360">360p</option>
+                  <option value="540">540p</option>
+                  <option value="720">720p</option>
+                  <option value="1080">1080p</option>
+                </select>
+              </label>
+              <label class="inline">fps
+                <input type="number" id="delivery-local-fps" class="num-input" min="1" max="60" step="1"
+                       placeholder="default">
+              </label>
+            </div>
+            <p class="small muted" id="delivery-local-note"></p>
+
             <p class="small muted" id="delivery-effective"></p>
 
             <div class="row">

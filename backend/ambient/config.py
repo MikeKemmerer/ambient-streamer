@@ -222,6 +222,10 @@ class ResolvedChannel:
     audio: SelectionResult
     images: SelectionResult
     bumpers: SelectionResult
+    publish_youtube: bool = True
+    local_width: int = 640
+    local_height: int = 360
+    local_fps: int = 15
     projected_cores: float = 0.0
     cores_breakdown: dict[str, float] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
@@ -241,6 +245,11 @@ class ResolvedChannel:
     @property
     def shuffle_images(self) -> bool:
         return self.config.images.order is ImageOrder.SHUFFLE
+
+    @property
+    def local_only(self) -> bool:
+        """Nothing leaves the network: the program path is never published."""
+        return not self.publish_youtube
 
     @property
     def color_mode(self) -> str:
@@ -308,8 +317,16 @@ def load_channel(
     width, height = geometry(resolution)
 
     warnings: list[str] = []
-    if not env.stream_key.get_secret_value():
+    if env.publish_youtube and not env.stream_key.get_secret_value():
         warnings.append(f"channel {name!r}: YOUTUBE_STREAM_KEY is empty; it cannot publish")
+
+    # A YouTube channel's second rendition is an operator preview and stays
+    # small. An internal channel has no second rendition — the local one *is*
+    # the stream — so it defaults to the channel's own size.
+    local_height = env.local_height or (360 if env.publish_youtube else height)
+    local_fps = env.local_fps or (15 if env.publish_youtube else fps)
+    # 16:9, and even: an odd dimension is not encodable as yuv420p.
+    local_width = (local_height * 16 // 9 + 1) // 2 * 2
 
     roots = MediaRoots.create(workspace.root, workspace.common_dir, directory)
     audio = SelectionResult()
@@ -393,6 +410,10 @@ def load_channel(
         audio=audio,
         images=images,
         bumpers=bumpers,
+        publish_youtube=env.publish_youtube,
+        local_width=local_width,
+        local_height=local_height,
+        local_fps=local_fps,
         projected_cores=check.projected_cores,
         cores_breakdown={
             "pipeline": round(check.pipeline_cores, 3),
