@@ -37,6 +37,9 @@ LOG = logging.getLogger("ambient.presets")
 
 EQ_TARGET = "eq@eq"
 HUE_TARGET = "hue@hue"
+# The visualization's own grade, upstream of the blend. The accent is baked into
+# the plugins at launch, so this can only ever be a rotation away from that.
+VIZ_TARGET = "hue@viz"
 
 # `eq` brightness is -1..1 but anything past a fifth of that is unwatchable.
 BRIGHTNESS_RANGE = 0.2
@@ -192,6 +195,23 @@ def _ramp(start: float, end: float, seconds: float, at: float) -> str:
     return f"{start:g}+({end - start:g})*min(max((t-{at:g})/{seconds:g},0),1)"
 
 
+def hue_degrees(color: str) -> float:
+    """True hue of a hex color, 0-360."""
+    red, green, blue = parse_hex(color)
+    hue, _lightness, _saturation = colorsys.rgb_to_hls(red, green, blue)
+    return hue * 360.0
+
+
+def viz_rotation(baked: str, wanted: str) -> float:
+    """Shortest rotation from the baked accent to the requested one.
+
+    `hue` rotates, it does not set, so an absolute target is only meaningful
+    relative to the color the plugins were built with.
+    """
+    delta = hue_degrees(wanted) - hue_degrees(baked)
+    return round((delta + 180.0) % 360.0 - 180.0, 2)
+
+
 def color_messages(
     accent: str,
     tint: str,
@@ -199,6 +219,7 @@ def color_messages(
     transition_seconds: float = 0.0,
     stream_time: float = 0.0,
     current: ColorTargets | None = None,
+    baked_accent: str = "",
 ) -> list[str]:
     """Validated `TARGET COMMAND ARG` messages for a color change.
 
@@ -207,11 +228,17 @@ def color_messages(
     """
     target = color_targets(accent, tint)
     start = current or NEUTRAL_TARGETS
-    pairs = (
-        (HUE_TARGET, "h", start.hue_degrees, target.hue_degrees),
+    pairs = [
         (EQ_TARGET, "saturation", start.saturation, target.saturation),
         (EQ_TARGET, "brightness", start.brightness, target.brightness),
-    )
+    ]
+    if baked_accent:
+        # The accent belongs to the visualization. Rotating the whole composite
+        # by it as well would turn those bars straight back off-target: measured
+        # green -> red on hue@viz, then hue@hue rotated the result to cyan.
+        pairs.append((VIZ_TARGET, "h", 0.0, viz_rotation(baked_accent, accent)))
+    else:
+        pairs.insert(0, (HUE_TARGET, "h", start.hue_degrees, target.hue_degrees))
     messages: list[str] = []
     for filter_target, param, begin, end in pairs:
         value = _ramp(begin, end, transition_seconds, stream_time)

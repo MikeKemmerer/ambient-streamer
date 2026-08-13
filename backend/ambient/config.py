@@ -252,7 +252,15 @@ class ResolvedChannel:
         """A filtergraph is fixed at launch, so a manual color starts baked in."""
         if self.config.color.mode is not ColorMode.MANUAL:
             return NEUTRAL_TARGETS
-        return color_targets(self.config.color.manual.accent, self.config.color.manual.tint)
+        targets = color_targets(self.config.color.manual.accent, self.config.color.manual.tint)
+        # Hue stays neutral on the composite: the accent is carried by the
+        # visualization, and rotating the finished frame by it as well would
+        # take those bars straight back off the requested color.
+        return ColorTargets(
+            hue_degrees=0.0,
+            saturation=targets.saturation,
+            brightness=targets.brightness,
+        )
 
     @property
     def media_roots_common(self) -> Path:

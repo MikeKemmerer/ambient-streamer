@@ -98,7 +98,10 @@ def test_manual_color_reaches_the_composer_with_its_initial_values(tmp_path: Pat
     assert context["color_accent"] == "#4FC3F7"
     assert context["color_tint"] == "#0B2A3A"
     assert context["color_transition_seconds"] == "4"
-    assert float(context["color_init_hue"]) == targets.hue_degrees
+    # The composite is never pre-rotated by the accent: the accent is the
+    # visualization's, and rotating the finished frame by it too would take the
+    # visualization straight back off the requested color.
+    assert float(context["color_init_hue"]) == 0.0
     assert float(context["color_init_saturation"]) == targets.saturation
     assert float(context["color_init_brightness"]) == targets.brightness
 

@@ -294,6 +294,10 @@ mkdir -p "$RUN_DIR"
   printf '%s' "[0:a]aresample=44100:async=1000:first_pts=0,loudnorm=I=-14:TP=-1:LRA=11,asplit=2[amain][apreview]"
 } > "$GRAPH_FILE"
 log "filtergraph -> $GRAPH_FILE ($(wc -c < "$GRAPH_FILE") bytes)"
+# The accent is baked into the plugins at launch, so a live change has to be a
+# rotation away from this value. Publishing it is what lets the backend compute
+# that delta without guessing what the graph was built with.
+printf '%s\n' "$ACCENT" > "${RUN_DIR}/viz-accent"
 ok "color: ${COLOR_MODE} (composite hue=${INIT_HUE} saturation=${INIT_SATURATION} brightness=${INIT_BRIGHTNESS} gamma=${INIT_GAMMA_R}/${INIT_GAMMA_G}/${INIT_GAMMA_B}; viz hue=${INIT_VIZ_HUE} saturation=${INIT_VIZ_SATURATION})"
 
 # -------------------------------------------------------------------- producer

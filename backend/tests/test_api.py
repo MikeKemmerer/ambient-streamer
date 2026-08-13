@@ -418,7 +418,7 @@ def test_setting_color_persists_and_emits_validated_commands(api, repo: Path) ->
     context = compose_context(state.workspace, state.channel("lofi", resolve_media=False))
     targets = color_targets("#4FC3F7", "#0B2A3A")
     assert context["color_mode"] == "manual"
-    assert float(context["color_init_hue"]) == targets.hue_degrees
+    assert float(context["color_init_hue"]) == 0.0
     assert float(context["color_init_saturation"]) == targets.saturation
     assert float(context["color_init_brightness"]) == targets.brightness
 

@@ -241,6 +241,7 @@ async def set_color(name: str, body: ColorBody, state: AppState = Authed) -> dic
             config.color.manual.tint,
             transition_seconds=config.color.transition_seconds,
             stream_time=await _stream_time(state, name),
+            baked_accent=_baked_accent(state, name),
         )
     elif was_manual:
         # The producer only re-colors on a slide change, which on a one-image
@@ -266,6 +267,19 @@ async def set_color(name: str, body: ColorBody, state: AppState = Authed) -> dic
         "commands": messages,
         "detail": detail,
     }
+
+
+def _baked_accent(state: AppState, name: str) -> str:
+    """The accent the compositor built its plugins with, published at launch.
+
+    `hue` rotates rather than sets, so a requested color is only reachable as a
+    rotation away from whatever the graph was actually built with.
+    """
+    try:
+        value = (state.workspace.run_dir / name / "viz-accent").read_text(encoding="utf-8")
+    except OSError:
+        return ""
+    return value.strip()
 
 
 def _publish_color_mode(state: AppState, name: str, mode: ColorMode) -> None:
