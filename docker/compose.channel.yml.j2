@@ -135,6 +135,12 @@ services:
       # WIDTH/HEIGHT, not RESOLUTION: the entrypoint sizes the graph from these.
       WIDTH: "{{ width }}"
       HEIGHT: "{{ height }}"
+      # Slideshow cost lives here. A crossfade decodes and blends two images at
+      # once, so hold and fade are the cheapest levers on a busy host.
+      HOLD_SECONDS: "{{ hold_seconds }}"
+      FADE_SECONDS: "{{ fade_seconds }}"
+      PRODUCER_FPS: "{{ producer_fps }}"
+      JPEG_QUALITY: "{{ jpeg_quality }}"
       RESOLUTION: ${RESOLUTION:-720p}
       FPS: ${FPS:-30}
       # ipc:// on tmpfs, not tcp://. A published ZMQ port is a remote kill surface.

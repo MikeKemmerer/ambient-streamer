@@ -120,6 +120,13 @@ def compose_context(workspace: Workspace, channel: ResolvedChannel) -> dict[str,
         "active_plugin": channel.active_plugin,
         "hot_set": ",".join(channel.hot_set),
         "run_dir": str(workspace.run_dir),
+        # The entrypoint reads these from the environment; without them the
+        # producer silently runs its own defaults and the channel's slideshow
+        # timing is inert.
+        "hold_seconds": f"{channel.hold_seconds:g}",
+        "fade_seconds": f"{channel.fade_seconds:g}",
+        "producer_fps": str(channel.producer_fps),
+        "jpeg_quality": str(channel.jpeg_quality),
         # The entrypoint sizes everything from WIDTH/HEIGHT; it never reads a
         # "720p" style name, so passing only the name pins every channel to the
         # 1280x720 default and the resolution setting does nothing.
