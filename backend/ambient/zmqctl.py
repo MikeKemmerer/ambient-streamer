@@ -57,6 +57,8 @@ _RANGES: dict[tuple[str, str], tuple[float, float]] = {
     ("drawbox", "replace"): (0.0, 1.0),
     ("streamselect", "map"): (0.0, 63.0),
     ("astreamselect", "map"): (0.0, 63.0),
+    # Timeline switch, not a level: anything but 0 or 1 is a typo.
+    ("overlay", "enable"): (0.0, 1.0),
 }
 
 _COLOR_PARAMS = frozenset({"color", "c", "colors", "rc", "gc", "bc"})
@@ -65,7 +67,9 @@ _COLOR_PARAMS = frozenset({"color", "c", "colors", "rc", "gc", "bc"})
 # value disables that instance permanently. Expressions are not accepted there.
 _NO_EXPRESSION = frozenset({"drawbox", "streamselect", "astreamselect"})
 
-_INTEGER_ONLY = frozenset({("streamselect", "map"), ("astreamselect", "map")})
+_INTEGER_ONLY = frozenset({
+    ("streamselect", "map"), ("astreamselect", "map"), ("overlay", "enable"),
+})
 
 
 class ZmqValidationError(ValueError):

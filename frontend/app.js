@@ -98,6 +98,8 @@ const state = {
   vizEnabledDraft: null,
   // Null means "no pending edit"; an array is a staged hot set awaiting Apply.
   hotSetDraft: null,
+  // Keyed by plugin name, so tuning one does not discard another's edits.
+  paramDraft: {},
   // The channel the delivery form is filled in for; null until its detail lands.
   deliveryFor: null,
   // Paths the Add all buttons would append: what is visible and not yet selected.
@@ -214,6 +216,8 @@ function normalizePlugin(entry) {
     cost: manifest.cost || entry.cost || null,
     available: entry.available !== false,
     preview_url: entry.preview_url || manifest.preview_url || '',
+    parameters: Array.isArray(manifest.parameters) ? manifest.parameters
+      : Array.isArray(entry.parameters) ? entry.parameters : [],
   };
 }
 
@@ -421,6 +425,7 @@ function selectChannel(name) {
   state.resolutionDraft = null;
   state.vizEnabledDraft = null;
   state.hotSetDraft = null;
+  state.paramDraft = {};
   resetDeliveryForm();
   renderDetail();
   loadChannelDetail(name);
@@ -1249,6 +1254,7 @@ function renderLookTab() {
         ]),
         plugin.description ? el('div', { class: 'pdesc', text: plugin.description }) : null,
         el('div', { class: 'pcost', text: where }),
+        pluginTuner(plugin),
       ]),
       el('div', { class: 'pactions' }, [
         // Hot set membership is the CPU budget, and switching a plugin in can only
@@ -1286,6 +1292,7 @@ function renderLookTab() {
   const color = cfg.color || {};
   const manual = color.manual || {};
   syncHotSet();
+  syncVizVisible();
   for (const radio of document.querySelectorAll('input[name="color-mode"]')) {
     radio.checked = radio.value === (color.mode || 'automatic');
   }
@@ -1388,6 +1395,100 @@ async function applyVizEnabled() {
   scheduleRefresh();
 }
 
+/**
+ * A plugin's own knobs. Substituted into its fragment at launch, so applying
+ * them rebuilds the graph — staged behind a button rather than fired per drag.
+ */
+function pluginTuner(plugin) {
+  const specs = Array.isArray(plugin.parameters) ? plugin.parameters : [];
+  if (!specs.length) return null;
+
+  const name = state.selected;
+  const saved = ((config(name).visualization || {}).parameters || {})[plugin.name] || {};
+  const draft = state.paramDraft[plugin.name] || {};
+  const valueOf = (spec) => (spec.name in draft ? draft[spec.name]
+    : spec.name in saved ? saved[spec.name] : spec.default);
+
+  const dirty = specs.some((spec) => {
+    const current = spec.name in saved ? saved[spec.name] : spec.default;
+    return spec.name in draft && String(draft[spec.name]) !== String(current);
+  });
+
+  const rows = specs.map((spec) => {
+    const value = valueOf(spec);
+    const set = (raw) => {
+      state.paramDraft[plugin.name] = { ...draft, [spec.name]: raw };
+      renderLookTab();
+    };
+
+    let input;
+    if (spec.type === 'bool') {
+      input = el('input', {
+        type: 'checkbox', checked: Boolean(value),
+        onchange: (e) => set(e.target.checked),
+      });
+    } else if (spec.type === 'enum') {
+      input = el('select', { onchange: (e) => set(e.target.value) },
+        (spec.choices || []).map((c) => el('option', {
+          value: c.value, text: c.label || c.value, selected: String(c.value) === String(value),
+        })));
+    } else {
+      input = el('input', {
+        type: 'range', min: spec.min, max: spec.max, step: spec.step, value: String(value),
+        oninput: (e) => set(Number(e.target.value)),
+      });
+    }
+
+    return el('label', { class: 'ptune-row', title: spec.description || '' }, [
+      el('span', { class: 'ptune-label', text: spec.label || spec.name }),
+      input,
+      spec.type === 'bool' || spec.type === 'enum'
+        ? null
+        : el('span', { class: 'ptune-value num', text: String(value) }),
+    ]);
+  });
+
+  return el('details', { class: 'ptune', open: dirty }, [
+    el('summary', { class: 'small', text: `Tune \u00B7 ${specs.length} settings` }),
+    ...rows,
+    el('div', { class: 'row' }, [
+      el('span', {
+        class: 'small muted',
+        text: dirty ? 'Applies by rebuilding the branch.' : '',
+      }),
+      el('span', { class: 'spacer' }),
+      el('button', {
+        type: 'button', disabled: !dirty, text: 'Reset',
+        onclick: () => { delete state.paramDraft[plugin.name]; renderLookTab(); },
+      }),
+      el('button', {
+        type: 'button', disabled: !dirty, text: 'Apply',
+        onclick: () => applyParameters(plugin, specs),
+      }),
+    ]),
+  ]);
+}
+
+async function applyParameters(plugin, specs) {
+  const name = state.selected;
+  const saved = ((config(name).visualization || {}).parameters || {})[plugin.name] || {};
+  const draft = state.paramDraft[plugin.name] || {};
+  const values = {};
+  for (const spec of specs) {
+    values[spec.name] = spec.name in draft ? draft[spec.name]
+      : spec.name in saved ? saved[spec.name] : spec.default;
+  }
+
+  const result = await guard(`tune ${plugin.name}`,
+    () => api.setPluginParameters(name, plugin.name, values), 'accepted');
+  if (result === undefined) return;
+
+  delete state.paramDraft[plugin.name];
+  toast('ok', plugin.display_name || plugin.name, result.detail || 'saved');
+  await loadChannelDetail(name);
+  scheduleRefresh();
+}
+
 /** Membership is a CPU budget, so it is staged and applied, never live per click. */
 function toggleHotSet(plugin, wanted) {
   const current = state.hotSetDraft || hotSet(state.selected);
@@ -1463,6 +1564,38 @@ async function applyHotSet() {
   toast('ok', 'hot set', result.detail || 'saved');
   await loadChannelDetail(name);
   scheduleRefresh();
+}
+
+/**
+ * Standby. The only visualization on/off that is live: it rides the overlay's
+ * timeline `enable`, so it costs one frame instead of a restart. The branches
+ * keep rendering, so this saves nothing — `enabled` is the one that does.
+ */
+function syncVizVisible() {
+  const name = state.selected;
+  const box = $('viz-visible');
+  const note = $('viz-visible-note');
+  const built = vizEnabled(name);
+  const visible = (config(name).visualization || {}).visible !== false;
+
+  $('viz-standby').hidden = !built;
+  if (document.activeElement !== box) box.checked = visible;
+  box.disabled = !built;
+  note.textContent = visible
+    ? ''
+    : 'On standby: the branches are still rendering and still costing cores.';
+}
+
+async function applyVizVisible(visible) {
+  const name = state.selected;
+  if (!name) return;
+  const result = await guard('visualization', () => api.setVisible(name, visible), 'accepted');
+  if (result === undefined) {
+    await loadChannelDetail(name);
+    return;
+  }
+  toast('ok', visible ? 'visualization showing' : 'visualization hidden', result.detail || '');
+  await loadChannelDetail(name);
 }
 
 async function switchVisualization(plugin, instant) {
@@ -2091,6 +2224,7 @@ function wire() {
   $('btn-preview-stop').addEventListener('click', () => preview.stop());
   $('btn-preview-copy').addEventListener('click', () => copyPreviewUrl());
   $('btn-hot-set-apply').addEventListener('click', () => applyHotSet());
+  $('viz-visible').addEventListener('change', (event) => applyVizVisible(event.target.checked));
   $('btn-hot-set-revert').addEventListener('click', () => {
     state.hotSetDraft = null;
     renderLookTab();

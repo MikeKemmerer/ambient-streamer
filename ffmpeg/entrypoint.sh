@@ -44,6 +44,12 @@ ACTIVE_PLUGIN="${ACTIVE_PLUGIN:-}"
 # silently blank a channel's look.
 VISUALIZATION="${VISUALIZATION:-on}"
 [[ "$VISUALIZATION" == "off" ]] || VISUALIZATION=on
+# Standby. Unlike VISUALIZATION this is only the overlay's timeline switch, so
+# the backend can flip it on the running graph; the branches render either way.
+VIZ_VISIBLE="${VIZ_VISIBLE:-on}"
+if [[ "$VIZ_VISIBLE" == "off" ]]; then VIZ_ENABLE=0; else VIZ_ENABLE=1; fi
+# Per-plugin knobs as JSON, keyed by plugin name. See plugin_params.py.
+PLUGIN_PARAMS="${PLUGIN_PARAMS:-{\}}"
 ACCENT="${ACCENT:-#4FC3F7}"
 VIZ_OPACITY="${VIZ_OPACITY:-0.65}"
 
@@ -107,6 +113,7 @@ FIFO="${RUN_DIR}/slides.pipe"
 
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 SLIDESHOW_BIN="${SLIDESHOW_BIN:-$(dirname "$0")/slideshow.py}"
+PLUGIN_PARAMS_BIN="${PLUGIN_PARAMS_BIN:-$(dirname "$0")/plugin_params.py}"
 FFMPEG_BIN="${FFMPEG_BIN:-ffmpeg}"
 FFMPEG_LOGLEVEL="${FFMPEG_LOGLEVEL:-level+warning}"
 
@@ -258,6 +265,18 @@ for i in "${!PLUGINS[@]}"; do
   body="${body//\$\{FPS\}/$FPS}"
   body="${body//\$\{ACCENT\}/$ACCENT_FF}"
   body="${body//\$\{OUT\}/viz$i}"
+
+  # Manifest-declared knobs. The resolver clamps and fills defaults, so every
+  # declared token has a value; an unsubstituted ${TOKEN} would reach FFmpeg as
+  # a literal and render the branch wrong at exit 0.
+  while IFS='=' read -r token value; do
+    [[ -n "$token" ]] || continue
+    body="${body//\$\{$token\}/$value}"
+  done < <("$PYTHON_BIN" "$PLUGIN_PARAMS_BIN" "$manifest" "$PLUGIN_PARAMS")
+
+  if grep -q '\${' <<<"$body"; then
+    die "plugin '$name' has unsubstituted tokens: $(grep -o '\${[A-Z_]*}' <<<"$body" | sort -u | tr '\n' ' ')"
+  fi
   VIZ_FRAGMENTS+="${body};"
   VIZ_LABELS+="[viz$i]"
 done
@@ -310,7 +329,10 @@ else
   # chroma offset cannot replace the chroma already there.
   printf '%s' "[vizm]format=gray,lut@vizop=y='val*${VIZ_OPACITY}'[vizalpha];"
   printf '%s' "[vizc][vizalpha]alphamerge[vizrgba];"
-  printf '%s' "[base][vizrgba]overlay=eof_action=pass:format=auto,"
+  # enable is timeline, so the backend can bypass the overlay on the running
+  # graph in one frame. Standby: the branches still render and still cost, but
+  # the visualization can be taken off and put back with no restart.
+  printf '%s' "[base][vizrgba]overlay@viz=eof_action=pass:format=auto:enable=${VIZ_ENABLE},"
 fi
   # eval=frame is not commandable, so it can only be set here.
   printf '%s' "eq@eq=eval=frame:contrast=1:brightness=${INIT_BRIGHTNESS}:saturation=${INIT_SATURATION}"

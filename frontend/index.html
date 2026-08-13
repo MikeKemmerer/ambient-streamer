@@ -360,6 +360,11 @@
               </p>
               <p class="small" id="viz-power-state"></p>
             </div>
+            <div class="row viz-standby" id="viz-standby">
+              <label class="inline"><input type="checkbox" id="viz-visible"> showing on air</label>
+              <span class="chip" data-tone="ok">live &mdash; one frame</span>
+              <span class="small muted" id="viz-visible-note"></span>
+            </div>
             <p class="small muted">
               A plugin can only be switched to instantly if it is already rendering. An FFmpeg
               filtergraph is fixed at launch, so every plugin in this channel's hot set draws frames

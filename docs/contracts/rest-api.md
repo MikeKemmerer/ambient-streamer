@@ -112,6 +112,40 @@ already be rendering. Callers that will not accept a restart pass
 
 A plugin that is not installed at all returns `404 unknown_plugin`.
 
+## Standby: taking the visualization off air without a restart
+
+`PUT /api/channels/{name}/visualization/visible` with `{"visible": false}`.
+
+This is the one visualization on/off that is live. It sends `overlay@viz enable 0`
+over zmq, riding the composite's timeline switch — measured landing in one frame
+on a running channel, with the composer's container start time unchanged either
+side, so nothing was replaced.
+
+It is refused with `409 visualization_not_built` when `visualization.enabled` is
+false: that graph has no composite to bypass. The two settings answer different
+questions, and only one of them saves anything:
+
+| | Branches render? | Cost | Change costs |
+|---|---|---|---|
+| `enabled: false` | no | the floor | a restart |
+| `enabled: true, visible: false` | yes | same as on | one frame |
+| `enabled: true, visible: true` | yes | same as on | — |
+
+## Tuning a plugin
+
+`PUT /api/channels/{name}/visualization/parameters` with
+`{"plugin": "showfreqs-bars", "values": {"detail": 2048}}`.
+
+Names and ranges are declared per plugin and reported by `GET /api/plugins`.
+Values outside a declared range are **clamped, not refused**, and the clamped
+value is what gets stored — because FFmpeg accepts an out-of-range filter option,
+ignores it, and renders the branch wrong at exit 0, so refusing would be the only
+way an operator learned about it and clamping is the safer failure. An
+*undeclared* name is refused, since it can only be a mistake.
+
+Substituted into the fragment at launch, so this restarts a channel that is
+actually drawing that plugin; tuning one nobody is looking at is just saved.
+
 ## Turning the visualization off
 
 `PATCH /api/channels/{name}` with `{"visualization": {"enabled": false}}`.

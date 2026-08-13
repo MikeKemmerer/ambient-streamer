@@ -143,6 +143,12 @@ export const api = {
 
   setHotSet: (name, body) =>
     request('PUT', `/api/channels/${enc(name)}/hot-set`, body),
+
+  setVisible: (name, visible) =>
+    request('PUT', `/api/channels/${enc(name)}/visualization/visible`, { visible }),
+
+  setPluginParameters: (name, plugin, values) =>
+    request('PUT', `/api/channels/${enc(name)}/visualization/parameters`, { plugin, values }),
   presets: () => request('GET', '/api/presets'),
   applyPreset: (name, preset) => request('POST', `/api/channels/${enc(name)}/preset`, { preset }),
   setColor: (name, color) => request('PUT', `/api/channels/${enc(name)}/color`, color),

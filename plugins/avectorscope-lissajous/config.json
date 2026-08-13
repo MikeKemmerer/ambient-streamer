@@ -19,5 +19,42 @@
     "cores_720p30": 0.34,
     "scale_1080p": 1.9
   },
+  "parameters": [
+    {
+      "name": "zoom",
+      "token": "SCOPE_ZOOM",
+      "label": "Zoom",
+      "description": "How much of the frame the figure fills.",
+      "type": "float",
+      "min": 0.5,
+      "max": 6,
+      "step": 0.1,
+      "default": 1.4
+    },
+    {
+      "name": "trail",
+      "token": "SCOPE_FADE",
+      "label": "Trail",
+      "description": "Fade per frame. Low values leave a long comet tail, high values snap.",
+      "type": "int",
+      "min": 1,
+      "max": 60,
+      "step": 1,
+      "default": 8
+    },
+    {
+      "name": "stroke",
+      "token": "SCOPE_DRAW",
+      "label": "Stroke",
+      "description": "Dots are sparse and sharp; anti-aliased lines join them up.",
+      "type": "enum",
+      "default": "aaline",
+      "choices": [
+        { "value": "dot", "label": "Dots" },
+        { "value": "line", "label": "Lines" },
+        { "value": "aaline", "label": "Smooth lines" }
+      ]
+    }
+  ],
   "requires_filters": ["avectorscope"]
 }

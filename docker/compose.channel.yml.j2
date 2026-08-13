@@ -110,6 +110,10 @@ services:
       # 0.415x with it on — by far
       # the largest lever a channel has.
       VISUALIZATION: "{{ visualization }}"
+      # Standby: the overlay's timeline switch, flipped live over zmq. Unlike
+      # VISUALIZATION the branches still render, so this costs what on costs.
+      VIZ_VISIBLE: "{{ viz_visible }}"
+      PLUGIN_PARAMS: '{{ plugin_parameters }}'
       # Without the mode the producer cannot tell a manual color from one it
       # derived, and overwrites the operator's choice at the next slide.
       # The hex values must stay quoted: bare `#4FC3F7` is a YAML comment.

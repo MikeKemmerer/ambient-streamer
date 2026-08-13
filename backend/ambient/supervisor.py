@@ -120,6 +120,11 @@ def compose_context(workspace: Workspace, channel: ResolvedChannel) -> dict[str,
         "active_plugin": channel.active_plugin,
         "hot_set": ",".join(channel.hot_set),
         "visualization": "on" if channel.visualization_enabled else "off",
+        "viz_visible": "on" if channel.config.visualization.visible else "off",
+        # Compact JSON on one line: it is a YAML scalar in the rendered compose file.
+        "plugin_parameters": json.dumps(
+            channel.config.visualization.parameters, separators=(",", ":"), sort_keys=True
+        ),
         "run_dir": str(workspace.run_dir),
         # The entrypoint reads these from the environment; without them the
         # producer silently runs its own defaults and the channel's slideshow

@@ -1,1 +1,1 @@
-[0:a]showspectrum@viz=s=${WIDTH}x${HEIGHT}:slide=scroll:mode=combined:color=intensity:scale=cbrt:fscale=log:saturation=5:win_func=hann:overlap=0.5:gain=2:fps=${FPS}:legend=0,fps=${FPS},format=yuv420p,setsar=1[${OUT}]
+[0:a]showspectrum@viz=s=${WIDTH}x${HEIGHT}:slide=scroll:mode=combined:color=intensity:scale=cbrt:fscale=log:saturation=${SPEC_SATURATION}:rotation=${SPEC_ROTATION}:win_func=hann:overlap=0.5:gain=${SPEC_GAIN}:fps=${FPS}:legend=0,fps=${FPS},format=yuv420p,setsar=1[${OUT}]

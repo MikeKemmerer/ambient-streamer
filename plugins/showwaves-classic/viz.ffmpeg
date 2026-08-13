@@ -1,1 +1,1 @@
-[0:a]showwaves@viz=s=${WIDTH}x${HEIGHT}:mode=line:rate=${FPS}:draw=scale:scale=sqrt:split_channels=0:colors=${ACCENT}|${ACCENT},fps=${FPS},format=yuv420p,setsar=1[${OUT}]
+[0:a]showwaves@viz=s=${WIDTH}x${HEIGHT}:mode=line:rate=${FPS}:draw=${WAVE_DRAW}:scale=${WAVE_SCALE}:split_channels=${WAVE_SPLIT}:colors=${ACCENT}|${ACCENT},fps=${FPS},format=yuv420p,setsar=1[${OUT}]

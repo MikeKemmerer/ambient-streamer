@@ -1,1 +1,1 @@
-[0:a]showfreqs@viz=s=${WIDTH}x${HEIGHT}:mode=bar:ascale=log:fscale=log:win_size=1024:averaging=2:colors=${ACCENT}|${ACCENT},fps=${FPS},format=yuv420p,setsar=1[${OUT}]
+[0:a]showfreqs@viz=s=${WIDTH}x${HEIGHT}:mode=${FREQ_MODE}:ascale=log:fscale=log:win_size=${WIN_SIZE}:averaging=${AVERAGING}:colors=${ACCENT}|${ACCENT},fps=${FPS},format=yuv420p,setsar=1[${OUT}]

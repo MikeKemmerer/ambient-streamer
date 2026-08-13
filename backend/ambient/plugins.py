@@ -65,6 +65,47 @@ class Commandable:
 
 
 @dataclass(frozen=True)
+class Parameter:
+    """One knob a plugin exposes, substituted into its fragment as ${token}."""
+
+    name: str
+    token: str
+    label: str = ""
+    description: str = ""
+    type: str = "float"  # float | int | bool | enum
+    minimum: float = 0.0
+    maximum: float = 1.0
+    step: float = 0.1
+    default: float | int | bool | str = 0
+    choices: tuple[tuple[str, str], ...] = ()  # (value, label)
+
+    def coerce(self, value: object) -> float | int | bool | str:
+        """Clamp rather than reject: a fragment must always be substitutable.
+
+        An out-of-range number in a filter argument does not fail loudly - FFmpeg
+        takes the option, ignores it, and the branch renders wrong with exit 0.
+        """
+        if self.type == "bool":
+            if isinstance(value, str):
+                return value.strip().lower() in {"1", "true", "yes", "on"}
+            return bool(value)
+        if self.type == "enum":
+            allowed = [choice for choice, _label in self.choices]
+            text = str(value)
+            if text not in allowed:
+                raise PluginError(
+                    f"{self.name}: {text!r} is not one of {', '.join(allowed)}"
+                )
+            return text
+        try:
+            number = float(value)  # type: ignore[arg-type]
+        except (TypeError, ValueError) as exc:
+            raise PluginError(f"{self.name}: {value!r} is not a number") from exc
+        number = max(self.minimum, min(self.maximum, number))
+        return int(round(number)) if self.type == "int" else number
+
+
+@dataclass(frozen=True)
 class PluginManifest:
     name: str
     directory: Path
@@ -77,10 +118,22 @@ class PluginManifest:
     scale_1080p: float = 1.9
     requires_filters: tuple[str, ...] = ()
     declared_size: str | None = None
+    parameters: tuple[Parameter, ...] = ()
 
     @property
     def fragment_path(self) -> Path:
         return self.directory / "viz.ffmpeg"
+
+    def resolve_parameters(self, chosen: dict[str, object] | None) -> dict[str, object]:
+        """Every declared token gets a value, so no ${token} can survive into the graph."""
+        chosen = chosen or {}
+        resolved: dict[str, object] = {}
+        for parameter in self.parameters:
+            if parameter.name in chosen:
+                resolved[parameter.name] = parameter.coerce(chosen[parameter.name])
+            else:
+                resolved[parameter.name] = parameter.default
+        return resolved
 
     def cost_cores(self, width: int, height: int, fps: int) -> float:
         """Declared cost, floored at the measured per-branch slope.
@@ -126,7 +179,40 @@ def load_manifest(directory: Path) -> PluginManifest:
         scale_1080p=float(cost.get("scale_1080p", 1.9)),
         requires_filters=tuple(str(f) for f in raw.get("requires_filters", [])),
         declared_size=raw.get("output_size"),
+        parameters=_load_parameters(manifest_path, raw.get("parameters", [])),
     )
+
+
+def _load_parameters(manifest_path: Path, raw: object) -> tuple[Parameter, ...]:
+    if not isinstance(raw, list):
+        raise PluginError(f"{manifest_path}: 'parameters' must be a list")
+    parameters: list[Parameter] = []
+    for item in raw:
+        if not isinstance(item, dict) or not item.get("name"):
+            raise PluginError(f"{manifest_path}: every parameter needs a 'name'")
+        kind = str(item.get("type", "float"))
+        if kind not in {"float", "int", "bool", "enum"}:
+            raise PluginError(f"{manifest_path}: unknown parameter type {kind!r}")
+        choices = tuple(
+            (str(c.get("value")), str(c.get("label", c.get("value"))))
+            for c in item.get("choices", [])
+            if isinstance(c, dict)
+        )
+        if kind == "enum" and not choices:
+            raise PluginError(f"{manifest_path}: enum parameter {item['name']!r} has no choices")
+        parameters.append(Parameter(
+            name=str(item["name"]),
+            token=str(item.get("token", str(item["name"]).upper())),
+            label=str(item.get("label", item["name"])),
+            description=str(item.get("description", "")),
+            type=kind,
+            minimum=float(item.get("min", 0)),
+            maximum=float(item.get("max", 1)),
+            step=float(item.get("step", 1 if kind == "int" else 0.1)),
+            default=item.get("default", choices[0][0] if choices else 0),
+            choices=choices,
+        ))
+    return tuple(parameters)
 
 
 def load_registry(plugins_dir: Path) -> dict[str, PluginManifest]:

@@ -25,7 +25,7 @@ from ..events import CHANNEL_VISUALIZATION
 from ..main import ApiError, AppState
 from ..models import ChannelConfig, ColorMode, ManualColor, StrictModel
 from ..watchdog import parse_progress
-from ..zmqctl import ZmqCommandError, ZmqValidationError, stream_select_message
+from ..zmqctl import ZmqCommandError, ZmqValidationError, build_message, stream_select_message
 from .deps import Authed, parse_now_json, recompile, run_action, save_channel_config
 
 LOG = logging.getLogger("ambient.api.looks")
@@ -33,6 +33,8 @@ LOG = logging.getLogger("ambient.api.looks")
 router = APIRouter(prefix="/api", tags=["looks"])
 
 STREAMSELECT_TARGET = "streamselect@sel"
+# Timeline `enable` on the composite, which is what makes standby one frame.
+OVERLAY_TARGET = "overlay@viz"
 
 
 class VisualizationBody(StrictModel):
@@ -43,6 +45,15 @@ class HotSetBody(StrictModel):
     hot_set: list[str] = Field(..., min_length=1)
     # Optional: only needed when the change drops the branch currently on air.
     active: str | None = None
+
+
+class VisibleBody(StrictModel):
+    visible: bool
+
+
+class ParametersBody(StrictModel):
+    plugin: str
+    values: dict[str, float | int | bool | str]
 
 
 class PresetBody(StrictModel):
@@ -76,6 +87,20 @@ async def list_plugins(state: AppState = Authed) -> dict[str, Any]:
                 },
                 "requires_filters": list(manifest.requires_filters),
                 "output_size": manifest.declared_size,
+                "parameters": [
+                    {
+                        "name": p.name,
+                        "label": p.label,
+                        "description": p.description,
+                        "type": p.type,
+                        "min": p.minimum,
+                        "max": p.maximum,
+                        "step": p.step,
+                        "default": p.default,
+                        "choices": [{"value": v, "label": lbl} for v, lbl in p.choices],
+                    }
+                    for p in manifest.parameters
+                ],
             }
             for manifest in registry.values()
         ]
@@ -280,6 +305,123 @@ async def set_hot_set(name: str, body: HotSetBody, state: AppState = Authed) -> 
             "branches; measured ~1s of RTMP gap and a new YouTube ingest session"
             if running and config.visualization.enabled
             else "applies on the next start"
+        ),
+    }
+
+
+@router.put("/channels/{name}/visualization/visible", status_code=202)
+async def set_visible(name: str, body: VisibleBody, state: AppState = Authed) -> dict[str, Any]:
+    """Standby: take the visualization off air and put it back with no restart.
+
+    This is the one on/off that is live. `visualization.enabled` decides whether
+    the branches exist at all and cannot change without rebuilding the graph;
+    this rides `overlay`'s timeline `enable`, which is one frame. The branches
+    keep rendering either way, so standby costs what on costs — that is the
+    price of being able to toggle at all.
+    """
+    channel = state.channel(name, resolve_media=False)
+    config = channel.config
+    if not config.visualization.enabled:
+        raise ApiError(
+            409, "visualization_not_built",
+            f"{name} has no visualization branches in its graph, so there is nothing to "
+            "reveal; set visualization.enabled and restart first",
+        )
+
+    if body.visible != config.visualization.visible:
+        data = config.model_dump(mode="json")
+        data["visualization"]["visible"] = body.visible
+        save_channel_config(channel.directory, ChannelConfig.model_validate(data))
+        recompile(state, name)
+
+    running = (await state.supervisor.containers(name)).composer.running
+    sent = False
+    if running:
+        try:
+            message = build_message(OVERLAY_TARGET, "enable", "1" if body.visible else "0")
+        except ZmqValidationError as exc:
+            raise ApiError(400, "invalid_command", str(exc)) from exc
+        await _send(state, name, [message])
+        sent = True
+
+    await state.events.publish(
+        CHANNEL_VISUALIZATION, {"visible": body.visible}, channel=name
+    )
+    return {
+        "accepted": True,
+        "channel": name,
+        "visible": body.visible,
+        "live": sent,
+        "detail": (
+            "switched on the running graph; one frame, no gap"
+            if sent
+            else "saved; it applies when the channel next starts"
+        ),
+    }
+
+
+@router.put("/channels/{name}/visualization/parameters", status_code=202)
+async def set_parameters(
+    name: str, body: ParametersBody, state: AppState = Authed
+) -> dict[str, Any]:
+    """Tune one plugin's knobs.
+
+    Substituted into the fragment at launch, so this restarts a channel that is
+    actually drawing the plugin. A plugin nobody is looking at is just saved.
+    """
+    channel = state.channel(name, resolve_media=False)
+    config = channel.config
+    registry = plugin_registry.load_registry(state.workspace.plugins_dir)
+    manifest = registry.get(body.plugin)
+    if registry and manifest is None:
+        raise ApiError(
+            404, "unknown_plugin", f"{body.plugin!r} is not installed; GET /api/plugins lists what is"
+        )
+
+    if manifest is not None:
+        declared = {p.name for p in manifest.parameters}
+        unknown = sorted(set(body.values) - declared)
+        if unknown:
+            raise ApiError(
+                400, "unknown_parameter",
+                f"{body.plugin} has no parameter(s) {', '.join(unknown)}; it declares "
+                f"{', '.join(sorted(declared)) or 'none'}",
+            )
+        try:
+            # Store the clamped values, so what the operator reads back is what
+            # the graph will actually be built with.
+            resolved = manifest.resolve_parameters({**body.values})
+        except plugin_registry.PluginError as exc:
+            raise ApiError(400, "invalid_parameter", str(exc)) from exc
+    else:
+        resolved = dict(body.values)
+
+    data = config.model_dump(mode="json")
+    parameters = dict(data["visualization"].get("parameters") or {})
+    parameters[body.plugin] = resolved
+    data["visualization"]["parameters"] = parameters
+    save_channel_config(channel.directory, ChannelConfig.model_validate(data))
+    recompile(state, name)
+
+    running = (await state.supervisor.containers(name)).composer.running
+    drawing = (
+        running
+        and config.visualization.enabled
+        and body.plugin in config.visualization.hot_set
+    )
+    if drawing:
+        asyncio.create_task(run_action(state, name, state.supervisor.restart(name), "parameters"))
+    return {
+        "accepted": True,
+        "channel": name,
+        "plugin": body.plugin,
+        "values": resolved,
+        "restarted": drawing,
+        "detail": (
+            "the compositor is being replaced to rebuild that branch; measured ~1s of "
+            "RTMP gap and a new YouTube ingest session"
+            if drawing
+            else "saved; it applies the next time that branch is built"
         ),
     }
 

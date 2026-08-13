@@ -9,5 +9,41 @@
     "cores_720p30": 0.26,
     "scale_1080p": 1.9
   },
+  "parameters": [
+    {
+      "name": "weight",
+      "token": "WAVE_DRAW",
+      "label": "Weight",
+      "description": "Scaled keeps a thin trace; full fills the whole envelope.",
+      "type": "enum",
+      "default": "scale",
+      "choices": [
+        { "value": "scale", "label": "Thin trace" },
+        { "value": "full", "label": "Filled" }
+      ]
+    },
+    {
+      "name": "response",
+      "token": "WAVE_SCALE",
+      "label": "Response",
+      "description": "Amplitude curve. Log and cbrt lift quiet passages.",
+      "type": "enum",
+      "default": "sqrt",
+      "choices": [
+        { "value": "lin", "label": "Linear" },
+        { "value": "sqrt", "label": "Square root" },
+        { "value": "cbrt", "label": "Cube root" },
+        { "value": "log", "label": "Logarithmic" }
+      ]
+    },
+    {
+      "name": "split_stereo",
+      "token": "WAVE_SPLIT",
+      "label": "Split stereo",
+      "description": "Draw left and right as separate traces.",
+      "type": "bool",
+      "default": false
+    }
+  ],
   "requires_filters": ["showwaves"]
 }

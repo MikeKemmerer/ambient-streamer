@@ -113,11 +113,23 @@ visualization:
   # `active` and `hot_set` are kept either way, so switching it back on restores
   # the same look. Applies on the next start.
   enabled: true
+  # Standby, and the only visualization on/off that is live. `enabled` decides
+  # whether the branches exist and needs the graph rebuilt; this rides the
+  # overlay's timeline `enable` and was measured landing in one frame on a
+  # running channel without replacing the composer. The branches keep rendering
+  # either way, so standby costs what on costs.
+  visible: true
   active: showfreqs-bars
   # Every plugin in hot_set is instantiated at launch and can be switched to
   # with no restart. Idle branches are NOT free — roughly 0.28 cores each
   # at 720p30. This list is a budget, not a wish list. See plugin.md.
   hot_set: [showfreqs-bars, showwaves-classic, avectorscope-lissajous]
+  # Per plugin, so each keeps its own look across a switch. Names and ranges come
+  # from the plugin's config.json; values outside a declared range are clamped
+  # rather than refused, because FFmpeg accepts an out-of-range filter option,
+  # ignores it, and renders the branch wrong at exit 0.
+  parameters:
+    showfreqs-bars: {detail: 2048, smoothing: 6, shape: line}
 
 color:
   mode: automatic            # automatic | manual

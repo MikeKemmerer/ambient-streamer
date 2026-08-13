@@ -27,6 +27,14 @@ const PLUGINS = [
     description: 'Frequency spectrum drawn as vertical bars.',
     cost: { cores_720p30: 0.24, scale_1080p: 1.9 },
     available: true,
+    parameters: [
+      { name: 'detail', label: 'Detail', type: 'int', min: 256, max: 8192, step: 256, default: 1024,
+        description: 'FFT window. Larger resolves more bars and reacts more slowly.' },
+      { name: 'smoothing', label: 'Smoothing', type: 'int', min: 1, max: 30, step: 1, default: 2,
+        description: 'Frames averaged together.' },
+      { name: 'shape', label: 'Shape', type: 'enum', default: 'bar',
+        choices: [{ value: 'bar', label: 'Bars' }, { value: 'line', label: 'Line' }, { value: 'dot', label: 'Dots' }] },
+    ],
   },
   {
     name: 'showwaves-classic',
@@ -34,6 +42,14 @@ const PLUGINS = [
     description: 'Scrolling waveform across the frame.',
     cost: { cores_720p30: 0.21, scale_1080p: 1.9 },
     available: true,
+    parameters: [
+      { name: 'weight', label: 'Weight', type: 'enum', default: 'scale',
+        choices: [{ value: 'scale', label: 'Thin trace' }, { value: 'full', label: 'Filled' }] },
+      { name: 'response', label: 'Response', type: 'enum', default: 'sqrt',
+        choices: [{ value: 'lin', label: 'Linear' }, { value: 'sqrt', label: 'Square root' },
+                  { value: 'cbrt', label: 'Cube root' }, { value: 'log', label: 'Logarithmic' }] },
+      { name: 'split_stereo', label: 'Split stereo', type: 'bool', default: false },
+    ],
   },
   {
     name: 'avectorscope-lissajous',
@@ -754,6 +770,53 @@ async function route(url, init) {
 
     emit('channel.visualization', { channel: name, visualization: active });
     return json({ visualization: active }, 202);
+  }
+
+  if (tail === 'visualization/visible') {
+    const viz = entry.config.visualization;
+    if (viz.enabled === false) {
+      return fail(409, 'visualization_not_built',
+        `${name} has no visualization branches in its graph.`);
+    }
+    viz.visible = Boolean(body && body.visible);
+    const running = entry.status.state !== 'stopped';
+    emit('channel.visualization', { channel: name, visible: viz.visible });
+    return json({
+      accepted: true, channel: name, visible: viz.visible, live: running,
+      detail: running ? 'switched on the running graph; one frame, no gap'
+                      : 'saved; it applies when the channel next starts',
+    }, 202);
+  }
+
+  if (tail === 'visualization/parameters') {
+    const plugin = body && body.plugin;
+    const spec = PLUGINS.find((p) => p.name === plugin);
+    if (!spec) return fail(404, 'unknown_plugin', `${plugin} is not installed.`);
+    const declared = new Set((spec.parameters || []).map((p) => p.name));
+    const unknown = Object.keys((body && body.values) || {}).filter((k) => !declared.has(k));
+    if (unknown.length) {
+      return fail(400, 'unknown_parameter', `${plugin} has no parameter(s) ${unknown.join(', ')}.`);
+    }
+    entry.config.visualization.parameters = entry.config.visualization.parameters || {};
+    entry.config.visualization.parameters[plugin] = { ...body.values };
+
+    const drawing = entry.status.state !== 'stopped'
+      && entry.config.visualization.enabled !== false
+      && entry.config.visualization.hot_set.includes(plugin);
+    if (drawing) {
+      entry.status.state = 'starting';
+      statusEvent(name);
+      setTimeout(() => {
+        entry.status.state = 'running';
+        entry.status.health = 'healthy';
+        statusEvent(name);
+      }, 2000);
+    }
+    return json({
+      accepted: true, channel: name, plugin, values: body.values, restarted: drawing,
+      detail: drawing ? 'the compositor is being replaced to rebuild that branch'
+                      : 'saved; it applies the next time that branch is built',
+    }, 202);
   }
 
   if (tail === 'hot-set') {

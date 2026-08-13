@@ -241,8 +241,16 @@ class Visualization(StrictModel):
     # either way so
     # turning it back on restores the same look.
     enabled: bool = True
+    # Standby. `enabled` decides whether the branches exist at all and needs a
+    # restart to change; this rides the overlay's timeline `enable` and is one
+    # frame. Off here still costs what on costs — the branches are still
+    # rendering — which is the price of being able to toggle at all.
+    visible: bool = True
     active: str
     hot_set: list[str] = Field(min_length=1)
+    # Per plugin, so each keeps its own look across a switch. Values are checked
+    # against the plugin manifest, not here: this model has no registry.
+    parameters: dict[str, dict[str, float | int | bool | str]] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def _active_is_hot(self) -> Visualization:
