@@ -123,6 +123,9 @@ services:
       # "Cannot load libnvidia-encode.so.1".
       NVIDIA_DRIVER_CAPABILITIES: compute,video,utility
       NVIDIA_VISIBLE_DEVICES: ${NVIDIA_DEVICE_ID:-all}
+      # Defaults to libx264: on consumer NVENC a second session costs a whole
+      # channel. Set it to h264_nvenc only on a card with no session cap.
+      PREVIEW_ENCODER: ${PREVIEW_ENCODER:-libx264}
 {%- endif %}
 {%- if color_mode == 'manual' %}
       # Plugins bake their accent at launch, so a manual channel would render a

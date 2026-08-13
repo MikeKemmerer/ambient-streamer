@@ -192,13 +192,21 @@ video_flags() {
 video_flags "$ENCODER" "$FPS" "$RATE" "$BUFSIZE" "$GOP"
 MAIN_VIDEO=("${VIDEO_FLAGS[@]}")
 
-# The preview is a 360p operator view, not a product. Consumer NVENC caps
-# concurrent sessions, so spending one here costs a whole channel; mixing
-# encoders in one FFmpeg process is legal, so it stays on libx264 regardless
-# of $ENCODER. Matches build_composer_command() in backend/ambient/ffmpeg_cmd.py.
-video_flags libx264 "$PREVIEW_FPS" "$P_RATE" "$P_BUFSIZE" "$P_GOP"
+# The preview is a 360p operator view, not a product, and it defaults to
+# libx264 because consumer NVENC caps concurrent sessions — spending one here
+# would cost a whole channel. Quadro and datacenter cards have no such cap, so a
+# host with one can set PREVIEW_ENCODER to move it to the GPU as well. Mixing
+# encoders in one FFmpeg process is legal either way.
+# Matches build_composer_command() in backend/ambient/ffmpeg_cmd.py.
+PREVIEW_ENCODER="${PREVIEW_ENCODER:-libx264}"
+case "$PREVIEW_ENCODER" in
+  libx264|h264_nvenc|h264_qsv) ;;
+  *) warn "PREVIEW_ENCODER '$PREVIEW_ENCODER' unrecognized; using libx264"
+     PREVIEW_ENCODER=libx264 ;;
+esac
+video_flags "$PREVIEW_ENCODER" "$PREVIEW_FPS" "$P_RATE" "$P_BUFSIZE" "$P_GOP"
 PREVIEW_VIDEO=("${VIDEO_FLAGS[@]}")
-ok "encoder: ${ENCODER} @ ${RATE} (preview libx264 @ ${P_RATE})"
+ok "encoder: ${ENCODER} @ ${RATE} (preview ${PREVIEW_ENCODER} @ ${P_RATE})"
 
 # --------------------------------------------------------------------- plugins
 # ffmpeg takes colors as 0xRRGGBB; '#' is a filtergraph escaping problem.
