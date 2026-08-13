@@ -358,11 +358,15 @@ export function onAirRow(entry, index, { playing, disabled, onPlay }) {
     ]),
     el('button', {
       class: 'tiny',
+      // Pushing the track that is already on air would restart it from the top,
+      // which is not what "on air" reads as.
+      disabled: disabled || playing,
       type: 'button',
-      disabled,
-      title: disabled
-        ? 'The channel is not running.'
-        : 'Interrupts the current track. Audio only — the video never restarts.',
+      title: playing
+        ? 'Already playing.'
+        : disabled
+          ? 'The channel is not running.'
+          : 'Interrupts the current track. Audio only — the video never restarts.',
       text: playing ? 'on air' : 'Play',
       onclick: () => onPlay(entry.path),
     }),

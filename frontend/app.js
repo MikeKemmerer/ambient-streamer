@@ -789,8 +789,13 @@ async function applyDelivery() {
   if (!changed.length) {
     toast('warn', `delivery ${name}`, result.detail || 'nothing to change');
   } else {
+    // Lead with where it publishes: that is the field an operator came here to
+    // change, and it is the one with consequences.
+    const reach = result.youtube === false
+      ? `internal only \u2014 local ${result.local}`
+      : `YouTube \u00B7 local ${result.local}`;
     toast('ok', `delivery ${name} \u2014 ${changed.join(', ')}`,
-      `now ${result.encoder} at ${result.fps} fps \u00B7 ${result.detail || 'applies on the next start'}`);
+      `${reach} \u00B7 ${result.encoder} at ${result.fps} fps \u00B7 ${result.detail || 'applies on the next start'}`);
   }
   // The response is the new baseline. Waiting for the refresh instead would leave
   // the form comparing against what it just replaced, i.e. dirty against itself.
