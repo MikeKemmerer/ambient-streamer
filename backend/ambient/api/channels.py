@@ -353,10 +353,13 @@ async def set_resolution(
 
 @router.get("/{name}/preview")
 async def preview_url(name: str, state: AppState = Authed) -> dict[str, Any]:
-    """Where the operator's player should point. The relay publishes no host port."""
+    """Where the operator's player should point.
+
+    Relative, and proxied by this process: the relay publishes no host port, and
+    its internal address resolves nowhere in a browser.
+    """
     state.channel(name, resolve_media=False)
-    base = state.workspace.ambient.relay.hls.rstrip("/")
-    return {"channel": name, "hls": f"{base}/{name}/preview/index.m3u8"}
+    return {"channel": name, "hls": f"/{name}/preview/index.m3u8"}
 
 
 # --------------------------------------------------------------------------
