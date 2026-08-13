@@ -107,9 +107,15 @@ images:
   fade_seconds: 2.0
 
 visualization:
+  # Off removes the plugin branches, the selector and the composite together. A
+  # live 1080p30 channel measured 0.999x realtime with it off and 0.415x with it
+  # on — it could not keep up at all. It is the largest lever a channel has.
+  # `active` and `hot_set` are kept either way, so switching it back on restores
+  # the same look. Applies on the next start.
+  enabled: true
   active: showfreqs-bars
   # Every plugin in hot_set is instantiated at launch and can be switched to
-  # with no restart. Idle branches are NOT free — roughly 0.2-0.25 cores each
+  # with no restart. Idle branches are NOT free — roughly 0.28 cores each
   # at 720p30. This list is a budget, not a wish list. See plugin.md.
   hot_set: [showfreqs-bars, showwaves-classic, avectorscope-lissajous]
 

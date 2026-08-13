@@ -248,6 +248,10 @@ class ResolvedChannel:
         return "manual" if self.config.color.mode is ColorMode.MANUAL else "auto"
 
     @property
+    def visualization_enabled(self) -> bool:
+        return self.config.visualization.enabled
+
+    @property
     def color_initial(self) -> ColorTargets:
         """A filtergraph is fixed at launch, so a manual color starts baked in."""
         if self.config.color.mode is not ColorMode.MANUAL:
@@ -336,7 +340,14 @@ def load_channel(
             )
 
     registry = plugin_registry.load_registry(workspace.plugins_dir)
-    check = plugin_registry.check_hot_set(config.visualization.hot_set, registry, width, height, fps)
+    check = plugin_registry.check_hot_set(
+        config.visualization.hot_set,
+        registry,
+        width,
+        height,
+        fps,
+        enabled=config.visualization.enabled,
+    )
     if check.errors:
         raise ConfigError(f"channel {name!r}: " + "; ".join(check.errors))
     warnings.extend(f"channel {name!r}: {w}" for w in check.warnings)

@@ -136,6 +136,10 @@ export const api = {
   plugins: () => request('GET', '/api/plugins'),
   setVisualization: (name, active) =>
     request('PUT', `/api/channels/${enc(name)}/visualization`, { active }),
+  // Not live: the filtergraph is fixed at launch, so this lands on the next start.
+  // `active` and `hot_set` are deliberately untouched, so the look comes back intact.
+  setVisualizationEnabled: (name, enabled) =>
+    request('PATCH', `/api/channels/${enc(name)}`, { visualization: { enabled } }),
   presets: () => request('GET', '/api/presets'),
   applyPreset: (name, preset) => request('POST', `/api/channels/${enc(name)}/preset`, { preset }),
   setColor: (name, color) => request('PUT', `/api/channels/${enc(name)}/color`, color),

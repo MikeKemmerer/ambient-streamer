@@ -105,6 +105,11 @@ services:
       # the channel's whole visualization selection is silently ignored.
       ACTIVE_PLUGIN: "{{ active_plugin }}"
       HOT_SET: "{{ hot_set }}"
+      # Off skips the plugin branches, the selector and the composite entirely.
+      # Measured on a live 1080p30 channel: 0.999x realtime with it off against
+      # 0.415x with it on — by far
+      # the largest lever a channel has.
+      VISUALIZATION: "{{ visualization }}"
       # Without the mode the producer cannot tell a manual color from one it
       # derived, and overwrites the operator's choice at the next slide.
       # The hex values must stay quoted: bare `#4FC3F7` is a YAML comment.

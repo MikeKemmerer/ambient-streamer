@@ -330,6 +330,30 @@
         <div class="look-grid">
           <div class="card-flat">
             <h3>Visualization</h3>
+            <div class="viz-power" id="viz-power">
+              <div class="row">
+                <label class="inline"><input type="checkbox" id="viz-enabled"> visualization on</label>
+                <span class="chip" data-tone="warn">applies on next start</span>
+                <span class="spacer"></span>
+                <span class="chip num" data-tone="info" id="viz-cores" hidden></span>
+                <button id="btn-viz-apply" type="button" disabled>Apply</button>
+              </div>
+              <p class="small muted">
+                By far the largest lever a channel has. Off removes the plugin branches, the
+                <span class="num">streamselect</span> selector and the alpha composite in one go and
+                the channel becomes a slideshow with audio. A live 1080p30 channel measured
+                <span class="num">0.999x</span> realtime with it off against
+                <span class="num">0.415x</span> with it on &mdash; it could not keep up at all. The
+                plugin choice is kept either way, so switching it back on restores exactly the same
+                look.
+              </p>
+              <p class="small muted">
+                Not a live change. The filtergraph is fixed at launch, so this reaches the compositor
+                on the channel&#8217;s next start; a running channel keeps drawing until it is
+                restarted.
+              </p>
+              <p class="small" id="viz-power-state"></p>
+            </div>
             <p class="small muted">
               A plugin can only be switched to instantly if it is already rendering. An FFmpeg
               filtergraph is fixed at launch, so every plugin in this channel's hot set draws frames

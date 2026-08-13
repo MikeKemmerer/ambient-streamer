@@ -197,8 +197,18 @@ def check_hot_set(
     width: int,
     height: int,
     fps: int,
+    *,
+    enabled: bool = True,
 ) -> HotSetCheck:
     check = HotSetCheck()
+    if not enabled:
+        # No branches are instantiated at all, so none of them cost anything and
+        # a missing manifest cannot matter. The pipeline still costs what it
+        # costs, so this is a floor rather than zero.
+        check.pipeline_cores = pipeline_cores(width, height, fps)
+        check.preview_cores = PREVIEW_CORES
+        check.projected_cores = check.pipeline_cores + check.preview_cores
+        return check
     if not registry:
         check.warnings.append(
             "no plugin manifests found; hot_set membership and output size are unverified"

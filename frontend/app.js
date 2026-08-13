@@ -94,6 +94,8 @@ const state = {
   slides: { saved: [], draft: [], watched: [] },
   // Held apart from the config so the 1 Hz progress render cannot reset the picker.
   resolutionDraft: null,
+  // Same, for the visualization on/off toggle: an unapplied tick must survive a refresh.
+  vizEnabledDraft: null,
   // The channel the delivery form is filled in for; null until its detail lands.
   deliveryFor: null,
   // Paths the Add all buttons would append: what is visible and not yet selected.
@@ -359,6 +361,12 @@ function hotSet(name) {
   return Array.isArray(viz && viz.hot_set) ? viz.hot_set : [];
 }
 
+/** Absent means on: an older config that predates the switch still draws. */
+function vizEnabled(name) {
+  const viz = config(name).visualization || {};
+  return viz.enabled !== false;
+}
+
 // --------------------------------------------------------------------------
 // Channel list
 // --------------------------------------------------------------------------
@@ -405,6 +413,7 @@ function selectChannel(name) {
   state.playlist = { saved: [], draft: [], watched: [] };
   state.slides = { saved: [], draft: [], watched: [] };
   state.resolutionDraft = null;
+  state.vizEnabledDraft = null;
   resetDeliveryForm();
   renderDetail();
   loadChannelDetail(name);
@@ -453,11 +462,13 @@ function renderDetail() {
 }
 
 function renderOverview(ch, cfg) {
+  // The status field reports the selected plugin whether or not it is being drawn.
+  const vizOff = state.selected && !vizEnabled(state.selected);
   renderKv($('onair-kv'), [
     ['track', ch.current_track ? basename(ch.current_track) : DASH],
     ['next', ch.next_track ? basename(ch.next_track) : DASH],
     ['slide', ch.current_slide ? basename(ch.current_slide) : DASH],
-    ['visualization', ch.visualization || DASH],
+    ['visualization', ch.visualization || DASH, vizOff ? '(off \u2014 selected, not rendering)' : ''],
     ['preset', cfg.preset || 'none'],
     ['color', cfg.color ? cfg.color.mode : DASH],
   ]);
@@ -1138,9 +1149,13 @@ function renderLookTab() {
   const active = (state.channels.get(name) || {}).visualization || (cfg.visualization || {}).active || '';
   const hot = hotSet(name);
   const live = (state.channels.get(name) || {}).state !== 'stopped';
+  const enabled = vizEnabled(name);
+
+  syncVizPower();
 
   const list = $('plugin-list');
   clear(list);
+  list.dataset.inert = String(!enabled);
 
   const known = new Set(state.plugins.map((p) => p.name));
   const rows = [...state.plugins];
@@ -1158,19 +1173,23 @@ function renderLookTab() {
       ? `${plugin.cost.cores_720p30.toFixed(2)} cores @720p30`
       : '';
 
-    const tag = missing
-      ? { tone: 'bad', text: 'not installed' }
-      : isHot
-        ? { tone: 'ok', text: 'instant' }
-        : { tone: 'warn', text: live ? '~1s gap' : 'on next start' };
+    const tag = !enabled
+      ? { tone: 'warn', text: 'not rendering' }
+      : missing
+        ? { tone: 'bad', text: 'not installed' }
+        : isHot
+          ? { tone: 'ok', text: 'instant' }
+          : { tone: 'warn', text: live ? '~1s gap' : 'on next start' };
 
-    const where = missing
-      ? 'in hot_set but not installed \u2014 this channel cannot build that branch'
-      : isHot
-        ? `hot set \u00B7 always rendering${cost ? ` \u00B7 ${cost}` : ''}`
-        : `installed, not instantiated${cost ? ` \u00B7 ${cost}` : ''}`;
+    const where = !enabled
+      ? (isHot ? 'in hot set \u2014 costs nothing while the visualization is off' : 'installed, not instantiated')
+      : missing
+        ? 'in hot_set but not installed \u2014 this channel cannot build that branch'
+        : isHot
+          ? `hot set \u00B7 always rendering${cost ? ` \u00B7 ${cost}` : ''}`
+          : `installed, not instantiated${cost ? ` \u00B7 ${cost}` : ''}`;
 
-    list.append(el('li', { class: 'plugin', dataset: { hot: String(isHot), active: String(isActive), missing: String(missing) } }, [
+    list.append(el('li', { class: 'plugin', dataset: { hot: String(isHot), active: String(isActive), missing: String(missing && enabled) } }, [
       el('div', { class: 'pmeta' }, [
         el('div', { class: 'pname' }, [
           plugin.display_name || plugin.name,
@@ -1182,10 +1201,11 @@ function renderLookTab() {
       el('div', { class: 'pactions' }, [
         el('span', { class: 'chip', dataset: { tone: tag.tone }, text: tag.text }),
         isActive
-          ? el('span', { class: 'chip', dataset: { tone: 'info' }, text: 'on air' })
+          ? el('span', { class: 'chip', dataset: { tone: 'info' }, text: enabled ? 'on air' : 'selected' })
           : el('button', {
               type: 'button',
-              disabled: missing,
+              disabled: missing || !enabled,
+              title: enabled ? '' : 'The visualization is off; switch it on to change what renders.',
               text: isHot || !live ? 'Switch' : 'Switch \u2014 restarts',
               onclick: () => switchVisualization(plugin.name, isHot || !live),
             }),
@@ -1223,6 +1243,77 @@ function setColorInput(colorId, hexId, value) {
 function showPresetDescription() {
   const preset = state.presets.find((p) => p.name === $('preset-select').value);
   $('preset-description').textContent = preset ? preset.description || '' : '';
+}
+
+/**
+ * The on/off switch above the plugin list. Off is the cheapest a channel can be —
+ * a live 1080p30 channel held 0.999x realtime without it and only 0.415x with it —
+ * and it is not a live change, so it follows the resolution card's dirty-then-Apply
+ * shape rather than firing on the tick.
+ */
+function syncVizPower() {
+  const name = state.selected;
+  const box = $('viz-enabled');
+  const apply = $('btn-viz-apply');
+  const chip = $('viz-cores');
+  const note = $('viz-power-state');
+  note.className = 'small vp-state';
+
+  if (!name) {
+    box.checked = true;
+    apply.disabled = true;
+    chip.hidden = true;
+    note.textContent = '';
+    return;
+  }
+
+  const saved = vizEnabled(name);
+  const shown = state.vizEnabledDraft === null ? saved : state.vizEnabledDraft;
+  if (document.activeElement !== box) box.checked = shown;
+  apply.disabled = shown === saved;
+  $('viz-power').dataset.enabled = String(shown);
+
+  const projected = (state.details.get(name) || {}).projected_cores;
+  chip.hidden = typeof projected !== 'number';
+  if (typeof projected === 'number') chip.textContent = `projects ${projected.toFixed(2)} cores`;
+
+  const active = (config(name).visualization || {}).active || '';
+  const running = (state.channels.get(name) || {}).state !== 'stopped';
+
+  if (shown !== saved) {
+    const when = running
+      ? 'the channel is running, so it takes effect when you restart it'
+      : 'it takes effect on the next start';
+    note.textContent = shown
+      ? `Not applied. Apply puts the branches back in the graph \u2014 ${when}.`
+      : `Not applied. Apply keeps ${active || 'the current plugin'} selected and stops rendering it `
+        + `\u2014 ${when}.`;
+    return;
+  }
+  if (!saved) {
+    note.textContent = `Off. The list below is what will come back, not what is on air — `
+      + `${active || 'the selected plugin'} is still chosen and returns unchanged when this is `
+      + 'switched on.';
+    return;
+  }
+  note.textContent = '';
+}
+
+async function applyVizEnabled() {
+  const name = state.selected;
+  if (!name || state.vizEnabledDraft === null) return;
+  const target = state.vizEnabledDraft;
+  if (target === vizEnabled(name)) return;
+
+  const running = (state.channels.get(name) || {}).state !== 'stopped';
+  const result = await guard(`visualization ${target ? 'on' : 'off'}`,
+    () => api.setVisualizationEnabled(name, target));
+  if (result === undefined) return;
+
+  toast('ok', `visualization ${target ? 'on' : 'off'}`,
+    running ? 'saved \u2014 restart the channel to put it on air' : 'saved \u2014 applies on the next start');
+  state.vizEnabledDraft = null;
+  await loadChannelDetail(name);
 }
 
 async function switchVisualization(plugin, instant) {
@@ -1829,6 +1920,11 @@ function wire() {
     syncResolution();
   });
   $('btn-resolution-apply').addEventListener('click', () => applyResolution());
+  $('viz-enabled').addEventListener('change', (event) => {
+    state.vizEnabledDraft = event.target.checked;
+    syncVizPower();
+  });
+  $('btn-viz-apply').addEventListener('click', () => applyVizEnabled());
 
   for (const id of DELIVERY_INPUTS) {
     $(id).addEventListener('input', () => syncDelivery());

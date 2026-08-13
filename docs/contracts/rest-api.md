@@ -111,6 +111,32 @@ already be rendering. Callers that will not accept a restart pass
 
 A plugin that is not installed at all returns `404 unknown_plugin`.
 
+## Turning the visualization off
+
+`PATCH /api/channels/{name}` with `{"visualization": {"enabled": false}}`.
+
+Not a live change — the filtergraph is fixed at launch, so it applies on the
+next start. `active` and `hot_set` are deliberately left alone, so switching it
+back on restores the same look.
+
+Off is the largest lever a channel has, because it removes the plugin branches,
+the selector and the alpha composite together. Measured on a live 1080p30
+channel on a 7-core host already running three channels:
+
+| | CPU | encode speed |
+|---|---|---|
+| visualization on | 0.97 cores, very erratic (sd 0.87) | **0.415x** — could not hold realtime |
+| visualization off | 0.77 cores, steady (sd 0.02) | **0.999x** |
+
+The two CPU figures look close only because the on case is starved rather than
+busy: it is doing 41 % of the work. Per second of finished stream it costs about
+2.3 cores against 0.77. `projected_cores` falls to the pipeline floor.
+
+`GET /api/channels/{name}` reports the **selected** plugin in `visualization`
+whether or not it is being drawn. `config.visualization.enabled` is the
+authoritative answer to "is anything being rendered"; the status field alone
+cannot tell you.
+
 ## Media upload
 
 | Method | Path | Purpose |

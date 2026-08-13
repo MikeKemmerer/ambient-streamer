@@ -119,6 +119,7 @@ def compose_context(workspace: Workspace, channel: ResolvedChannel) -> dict[str,
         # channel's whole visualization selection is silently ignored.
         "active_plugin": channel.active_plugin,
         "hot_set": ",".join(channel.hot_set),
+        "visualization": "on" if channel.visualization_enabled else "off",
         "run_dir": str(workspace.run_dir),
         # The entrypoint reads these from the environment; without them the
         # producer silently runs its own defaults and the channel's slideshow

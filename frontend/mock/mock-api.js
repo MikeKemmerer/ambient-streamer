@@ -153,7 +153,7 @@ const db = new Map([
     resolution: '720p',
     audio: { tracks: [], shuffle: false, crossfade_seconds: 5.0 },
     images: { slides: [], order: 'sequential', hold_seconds: 20.0, fade_seconds: 2.0 },
-    visualization: { active: 'showfreqs-bars', hot_set: ['showfreqs-bars', 'showwaves-classic'] },
+    visualization: { enabled: true, active: 'showfreqs-bars', hot_set: ['showfreqs-bars', 'showwaves-classic'] },
     color: { mode: 'automatic', manual: { accent: '#4FC3F7', tint: '#101820' }, transition_seconds: 2.0 },
     preset: null,
     bumpers: { enabled: false, mode: 'tracks', every_tracks: 4, every_minutes: 20, sources: [] },
@@ -192,7 +192,7 @@ const db = new Map([
     resolution: '1080p',
     audio: { tracks: [], shuffle: false, crossfade_seconds: 2.0 },
     images: { slides: [], order: 'sequential', hold_seconds: 45.0, fade_seconds: 3.0 },
-    visualization: { active: 'showwaves-classic', hot_set: ['showwaves-classic'] },
+    visualization: { enabled: true, active: 'showwaves-classic', hot_set: ['showwaves-classic'] },
     color: { mode: 'manual', manual: { accent: '#D4AF37', tint: '#2A0E0E' }, transition_seconds: 4.0 },
     preset: 'orthodox-chant',
     bumpers: { enabled: false, mode: 'tracks', every_tracks: 4, every_minutes: 20, sources: [] },
@@ -226,7 +226,7 @@ const db = new Map([
     audio: { tracks: [], shuffle: true, crossfade_seconds: 8.0 },
     images: { slides: [], order: 'shuffle', hold_seconds: 60.0, fade_seconds: 6.0 },
     // starfield-particles is deliberately not in PLUGINS: the one genuine error state.
-    visualization: { active: 'avectorscope-lissajous', hot_set: ['avectorscope-lissajous', 'showfreqs-bars', 'starfield-particles'] },
+    visualization: { enabled: true, active: 'avectorscope-lissajous', hot_set: ['avectorscope-lissajous', 'showfreqs-bars', 'starfield-particles'] },
     color: { mode: 'manual', manual: { accent: '#7A5CFF', tint: '#05060B' }, transition_seconds: 6.0 },
     preset: 'deep-space',
     bumpers: { enabled: false, mode: 'tracks', every_tracks: 4, every_minutes: 20, sources: [] },
@@ -248,6 +248,27 @@ for (const entry of db.values()) entry.delivery.encoder = entry.status.encoder_r
 db.get('lofi').delivery.stream_key = 'seeded-key-lofi';
 db.get('chant').delivery.stream_key = 'seeded-key-chant';
 db.get('chant').delivery.fps = 30;
+
+// Capacity model, following backend/ambient/plugins.py: pipeline + preview + one
+// cost per instantiated branch. Off, no branch is instantiated at all, so the
+// channel falls to the pipeline floor.
+const PIPELINE_CORES_720P30 = 1.02;
+const PREVIEW_CORES = 0.2;
+const IDLE_BRANCH_CORES_720P30 = 0.28;
+const RES_SCALE = { '480p': 0.6, '720p': 1.0, '1080p': 1.9, '1440p': 3.4, '2160p': 7.6 };
+
+function projectedCores(entry) {
+  const viz = entry.config.visualization || {};
+  const scale = RES_SCALE[entry.config.resolution] || 1.0;
+  let cores = PIPELINE_CORES_720P30 * scale + PREVIEW_CORES;
+  if (viz.enabled !== false) {
+    for (const name of viz.hot_set || []) {
+      const plugin = PLUGINS.find((p) => p.name === name);
+      cores += (plugin ? plugin.cost.cores_720p30 : IDLE_BRANCH_CORES_720P30) * scale;
+    }
+  }
+  return Number(cores.toFixed(3));
+}
 
 // --------------------------------------------------------------------------
 // Event bus
@@ -509,7 +530,8 @@ async function route(url, init) {
 
   if (path === '/api/capacity') {
     const measured = [...db.values()].reduce((sum, e) => sum + (e.status.cpu_cores || 0), 0);
-    const projected = [...db.values()].reduce((sum, e) => sum + (e.status.state === 'stopped' ? 0 : 1.5), 0);
+    const projected = [...db.values()].reduce(
+      (sum, e) => sum + (e.status.state === 'stopped' ? 0 : projectedCores(e)), 0);
     return json({
       cores: 12,
       reserved_cores: 1.0,
@@ -519,7 +541,7 @@ async function route(url, init) {
       headroom_cores: Number((11.0 - projected).toFixed(3)),
       channels: [...db.values()].map((e) => ({
         channel: e.name,
-        projected_cores: 1.5,
+        projected_cores: projectedCores(e),
         measured_cores: e.status.cpu_cores || 0,
         state: e.status.state,
       })),
@@ -593,7 +615,7 @@ async function route(url, init) {
       resolution: body.resolution || '720p',
       audio: { tracks: [], shuffle: false, crossfade_seconds: 5.0 },
       images: { slides: [], order: 'sequential', hold_seconds: 20.0, fade_seconds: 2.0 },
-      visualization: body.visualization || { active: 'showfreqs-bars', hot_set: ['showfreqs-bars'] },
+      visualization: body.visualization || { enabled: true, active: 'showfreqs-bars', hot_set: ['showfreqs-bars'] },
       color: { mode: 'automatic', manual: { accent: '#4FC3F7', tint: '#101820' }, transition_seconds: 2.0 },
       preset: null,
       bumpers: { enabled: false, mode: 'tracks', every_tracks: 4, every_minutes: 20, sources: [] },
@@ -620,6 +642,8 @@ async function route(url, init) {
       ...extra,
       warnings: entry.warnings || [],
       config: entry.config,
+      resolution: entry.config.resolution,
+      projected_cores: projectedCores(entry),
       // What was asked for, not what is measured: a stopped channel reports 0 fps.
       fps_requested: entry.delivery.fps || DEFAULT_FPS,
       rtmp_url: entry.delivery.rtmp_url,

@@ -442,7 +442,21 @@ main {
 
 /* ---------- plugins ---------- */
 
+.viz-power {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg-raise);
+  padding: 7px 9px;
+  margin-bottom: 10px;
+}
+.viz-power[data-enabled="false"] { border-color: #6d5119; background: var(--warn-bg); }
+.viz-power p { margin: 6px 0 0; }
+.viz-power .vp-state { color: var(--fg-dim); }
+.viz-power[data-enabled="false"] .vp-state { color: #f0c674; }
+
 .plugin-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 5px; }
+/* Off: the branches are not in the graph, so the list is a plan, not a control. */
+.plugin-list[data-inert="true"] { opacity: 0.5; filter: saturate(0.35); }
 .plugin {
   display: flex; align-items: flex-start; gap: 8px;
   padding: 6px 8px;

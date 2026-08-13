@@ -235,6 +235,12 @@ class ImageSelection(StrictModel):
 
 
 class Visualization(StrictModel):
+    # Off is by far the cheapest a channel can be. Measured on a live 1080p30
+    # channel: 0.77 cores holding 0.999x with it off, against 0.415x — it could
+    # not hold realtime at all — with it on. `active` and `hot_set` are kept
+    # either way so
+    # turning it back on restores the same look.
+    enabled: bool = True
     active: str
     hot_set: list[str] = Field(min_length=1)
 

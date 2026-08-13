@@ -39,6 +39,11 @@ PREVIEW_FPS="${PREVIEW_FPS:-15}"
 PLUGIN_DIR="${PLUGIN_DIR:-/plugins}"
 HOT_SET="${HOT_SET:-showfreqs-bars}"
 ACTIVE_PLUGIN="${ACTIVE_PLUGIN:-}"
+# `off` skips the plugin branches, the selector and the composite. Anything
+# other than exactly "off" leaves the visualization on, so a typo cannot
+# silently blank a channel's look.
+VISUALIZATION="${VISUALIZATION:-on}"
+[[ "$VISUALIZATION" == "off" ]] || VISUALIZATION=on
 ACCENT="${ACCENT:-#4FC3F7}"
 VIZ_OPACITY="${VIZ_OPACITY:-0.65}"
 
@@ -212,14 +217,20 @@ ok "encoder: ${ENCODER} @ ${RATE} (preview ${PREVIEW_ENCODER} @ ${P_RATE})"
 # ffmpeg takes colors as 0xRRGGBB; '#' is a filtergraph escaping problem.
 ACCENT_FF="0x${ACCENT#\#}"
 
+PLUGINS=()
+ACTIVE_INDEX=0
+VIZ_FRAGMENTS=""
+VIZ_LABELS=""
+
+if [[ "$VISUALIZATION" == "off" ]]; then
+  ok "visualization: off (no plugin branches instantiated)"
+else
+
 IFS=',' read -r -a PLUGINS <<<"$HOT_SET"
 (( ${#PLUGINS[@]} > 0 )) || die "HOT_SET is empty"
 
 AVAILABLE_FILTERS="$("$FFMPEG_BIN" -hide_banner -loglevel error -filters </dev/null | awk '{print $2}')"
 
-ACTIVE_INDEX=0
-VIZ_FRAGMENTS=""
-VIZ_LABELS=""
 for i in "${!PLUGINS[@]}"; do
   name="${PLUGINS[$i]}"
   frag="${PLUGIN_DIR}/${name}/viz.ffmpeg"
@@ -252,6 +263,8 @@ for i in "${!PLUGINS[@]}"; do
 done
 ok "plugins: ${HOT_SET} (active index ${ACTIVE_INDEX}, ${#PLUGINS[@]} hot branches)"
 
+fi
+
 # ----------------------------------------------------------------- filtergraph
 # Written to a file so neither bash nor the filtergraph tokenizer has to survive
 # the zmq bind_address escaping, which needs two levels.
@@ -273,6 +286,12 @@ mkdir -p "$RUN_DIR"
   printf '%s' "[1:v]fps=${FPS}:start_time=0,realtime,"
   printf '%s' "zmq@ctl=bind_address=tcp\\\\://${ZMQ_BIND_HOST}\\\\:${ZMQ_BIND_PORT},"
   printf '%s' "format=yuv420p,setsar=1[base];"
+if [[ "$VISUALIZATION" == "off" ]]; then
+  # Nothing is instantiated: no plugin branches, no selector, no composite.
+  # A live 1080p30 channel measured 0.999x realtime without it and 0.415x with
+  # it, so this is not a small saving.
+  printf '%s' "[base]"
+else
   printf '%s' "$VIZ_FRAGMENTS"
   # streamselect rejects inputs=1 (range is 2..INT_MAX), so a single hot plugin
   # has no selector — there is nothing to switch to. See the report to the lead.
@@ -292,6 +311,7 @@ mkdir -p "$RUN_DIR"
   printf '%s' "[vizm]format=gray,lut@vizop=y='val*${VIZ_OPACITY}'[vizalpha];"
   printf '%s' "[vizc][vizalpha]alphamerge[vizrgba];"
   printf '%s' "[base][vizrgba]overlay=eof_action=pass:format=auto,"
+fi
   # eval=frame is not commandable, so it can only be set here.
   printf '%s' "eq@eq=eval=frame:contrast=1:brightness=${INIT_BRIGHTNESS}:saturation=${INIT_SATURATION}"
   printf '%s' ":gamma_r=${INIT_GAMMA_R}:gamma_g=${INIT_GAMMA_G}:gamma_b=${INIT_GAMMA_B},"
@@ -315,7 +335,7 @@ ok "color: ${COLOR_MODE} (composite hue=${INIT_HUE} saturation=${INIT_SATURATION
 CHANNEL_NAME="$CHANNEL_NAME" \
 RUN_DIR="$RUN_DIR" \
 NOW_FILE="$NOW_FILE" \
-ACTIVE_PLUGIN="${PLUGINS[$ACTIVE_INDEX]}" \
+ACTIVE_PLUGIN="${PLUGINS[$ACTIVE_INDEX]:-none}" \
 COMPOSER_STARTED_AT="$STARTED_AT" \
 LIQ_TELNET_HOST="$LIQ_TELNET_HOST" \
 LIQ_TELNET_PORT="$LIQ_TELNET_PORT" \
