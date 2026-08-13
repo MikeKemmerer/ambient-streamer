@@ -158,6 +158,31 @@ class AppState:
             self.relay_blocked_until = loop.time() + RELAY_BACKOFF
             return None
 
+    async def relay_paths(self) -> dict[str, dict[str, Any]] | None:
+        """Every relay path in one call, so listing N channels is not 2N calls.
+
+        `None` means the relay could not be asked, which is not the same as a
+        path being absent — the caller must report that difference rather than
+        claiming everything is down.
+        """
+        loop = asyncio.get_running_loop()
+        if loop.time() < self.relay_blocked_until:
+            return None
+        future = _in_daemon_thread(_fetch_json, f"{self.relay_api}/v3/paths/list")
+        try:
+            payload = await asyncio.wait_for(asyncio.wrap_future(future), RELAY_TIMEOUT)
+        except (asyncio.TimeoutError, asyncio.CancelledError, OSError):
+            self.relay_blocked_until = loop.time() + RELAY_BACKOFF
+            return None
+        items = (payload or {}).get("items")
+        if not isinstance(items, list):
+            return None
+        return {
+            item["name"]: item
+            for item in items
+            if isinstance(item, dict) and isinstance(item.get("name"), str)
+        }
+
     async def refresh_cpu(self) -> None:
         containers: list[str] = []
         for name in self.names():

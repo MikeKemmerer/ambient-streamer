@@ -99,8 +99,23 @@ async def _relay_state(state: AppState, name: str) -> tuple[str, str]:
     return rtmp, hls
 
 
+def _relay_state_from(paths: dict[str, Any] | None, name: str) -> tuple[str, str]:
+    """Same reading, from a path list fetched once for the whole channel list."""
+    if paths is None:
+        return "unknown", "unknown"
+    program = paths.get(name)
+    preview = paths.get(f"{name}/preview")
+    rtmp = "connected" if (program or {}).get("ready") else "disconnected"
+    hls = "ok" if (preview or {}).get("ready") else "down"
+    return rtmp, hls
+
+
 async def channel_status(
-    state: AppState, channel: ResolvedChannel, *, detail: bool = True
+    state: AppState,
+    channel: ResolvedChannel,
+    *,
+    detail: bool = True,
+    relay: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     name = channel.name
     containers = await state.supervisor.containers(name)
@@ -140,8 +155,10 @@ async def channel_status(
         "bitrate_kbps": round(sample.bitrate_kbps) if sample else 0,
         "cpu_cores": state.channel_cores(name),
         "liquidsoap_buffer": "ok" if containers.liquidsoap.running else "down",
-        "rtmp": "disconnected",
-        "hls": "down",
+        # Never a bare default: claiming "disconnected" for a channel nobody
+        # asked the relay about reads as the YouTube leg being down.
+        "rtmp": "unknown",
+        "hls": "unknown",
         "health": health.value,
     }
     if detail:
@@ -149,6 +166,8 @@ async def channel_status(
         body["warnings"] = channel.warnings
         body["fault"] = verdict.fault if verdict else None
         body["fault_detail"] = verdict.detail if verdict else ""
+    elif relay is not None:
+        body["rtmp"], body["hls"] = _relay_state_from(relay, name)
     return body
 
 
@@ -161,13 +180,16 @@ async def channel_status(
 async def list_channels(state: AppState = Authed) -> dict[str, Any]:
     summaries: list[dict[str, Any]] = []
     errors: list[dict[str, str]] = []
+    # One relay call for the whole list, so an unselected channel reports the
+    # same relay state as a selected one.
+    relay = await state.relay_paths()
     for name in state.names():
         try:
             channel = state.channel(name)
         except ApiError as exc:
             errors.append({"channel": name, "detail": str(exc.detail)})
             continue
-        summaries.append(await channel_status(state, channel, detail=False))
+        summaries.append(await channel_status(state, channel, detail=False, relay=relay))
     return {
         "channels": summaries,
         "errors": errors,
