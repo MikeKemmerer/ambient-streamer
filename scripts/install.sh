@@ -436,6 +436,25 @@ if command -v nvidia-smi >/dev/null 2>&1; then
        NVENC will be advertised by ffmpeg and fail at runtime."
 	fi
 	probe h264_nvenc "needs a working driver plus nvidia-container-toolkit" --gpus all
+	# The driver being fine is the common case; the toolkit is what is usually
+	# missing, and "unavailable" on its own sends people looking at the GPU.
+	if ! printf '%s\n' "${USABLE[@]}" | grep -qx h264_nvenc; then
+		if ! docker info 2>/dev/null | grep -q nvidia; then
+			note_warning "the NVIDIA runtime is not registered with Docker. The driver can be
+       perfectly healthy and NVENC will still fail with:
+         could not select device driver \"\" with capabilities: [[gpu]]
+       Install the toolkit and restart Docker:
+         curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey \\
+           | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+         curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list \\
+           | sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' \\
+           | sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
+         sudo apt-get update && sudo apt-get install -y nvidia-container-toolkit
+         sudo nvidia-ctk runtime configure --runtime=docker
+         sudo systemctl restart docker
+       Then re-run this script."
+		fi
+	fi
 else
 	log "h264_nvenc unavailable — no nvidia-smi on this host"
 fi

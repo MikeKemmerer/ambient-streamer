@@ -117,6 +117,13 @@ services:
       COLOR_INIT_HUE: "{{ color_init_hue }}"
       COLOR_INIT_SATURATION: "{{ color_init_saturation }}"
       COLOR_INIT_BRIGHTNESS: "{{ color_init_brightness }}"
+{%- if encoder == 'h264_nvenc' %}
+      # `video` is the one that matters and is NOT granted by default: without
+      # it the GPU appears, libcuda loads, and NVENC still fails with
+      # "Cannot load libnvidia-encode.so.1".
+      NVIDIA_DRIVER_CAPABILITIES: compute,video,utility
+      NVIDIA_VISIBLE_DEVICES: ${NVIDIA_DEVICE_ID:-all}
+{%- endif %}
 {%- if color_mode == 'manual' %}
       # Plugins bake their accent at launch, so a manual channel would render a
       # correctly tinted image behind default-blue bars without this.
