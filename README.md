@@ -135,6 +135,21 @@ A channel delivers to any combination of three targets, set with
 The operator preview at `/<ch>/preview/index.m3u8` is always published and is
 not a target. The UI lists the URL of every feed a channel actually publishes.
 
+### Finding the stations
+
+`http://<host>:8888/` is a directory of every internal feed currently on air —
+station name, genre, and a URL to paste into VLC. Point a listener at it and
+they can find everything without an operator.
+
+That port is a small nginx front door: `/` comes from the control plane, and
+every other path is proxied straight to MediaMTX. Media never passes through the
+Python process — on a 7-core host, a multi-megabit copy loop in the control
+plane is how you get a stream outage.
+
+The directory lists only what the relay says is publishing, never the YouTube
+program feed, and never the operator preview. It needs no token, exactly as the
+HLS port never did.
+
 A channel without `youtube` **cannot** reach YouTube even with a stream key
 stored: the compositor never publishes that relay path, so the publisher hook —
 the only thing that talks to YouTube — has nothing to fire on. Verified with a

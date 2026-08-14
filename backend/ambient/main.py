@@ -316,7 +316,7 @@ def mount_frontend(app: FastAPI, directory: Path) -> bool:
 
 
 def create_app(root: Path | str | None = None) -> FastAPI:
-    from .api import bumpers, channels, looks, media, preview, system
+    from .api import bumpers, channels, directory, looks, media, preview, system
 
     resolved_root = repo_root(root)
 
@@ -410,6 +410,8 @@ def create_app(root: Path | str | None = None) -> FastAPI:
     app.include_router(media.router)
     app.include_router(looks.router)
     app.include_router(bumpers.router)
+    # Tokenless, and mapped onto the public root by the LAN front door.
+    app.include_router(directory.router)
     # After the /api routers and before the mount: it claims /<channel>/preview/*.
     app.include_router(preview.router)
     # Last, so every route above wins the match before the catch-all mount.

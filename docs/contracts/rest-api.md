@@ -388,6 +388,34 @@ wildcard there matches any three-segment URL and was measured swallowing
 Measured on a live internal channel at 480p30: the HLS master reported
 `RESOLUTION=854x480, FRAME-RATE=30.000` at 1.77 Mbps, holding 1.0x realtime.
 
+### The public station directory
+
+`GET /directory` (HTML) and `GET /directory.json` are the **only two tokenless
+endpoints besides `/api/health`**. They list the internal feeds that are
+currently on air, so a listener on the LAN can find them without an operator.
+
+They are unauthenticated because they sit on the HLS port, which MediaMTX
+already served without a token. Nothing on them is a control surface, and the
+constraints are deliberate:
+
+- **`active` comes from the relay**, not from configuration. A station that is
+  configured but not publishing is not listed; a directory that lists a station
+  you cannot tune to is worse than an empty one.
+- **The program path is never listed.** It is the YouTube feed and the one path
+  the publisher hook reads.
+- **`preview` is never listed.** It is the operator's 360p feed — this is a
+  directory of stations, not of tooling.
+- **No `docker exec`, no config secrets.** The page is built from one relay
+  listing plus channel names and genres, because an anonymous caller must not be
+  able to amplify a page load into work on the host.
+- Every value is HTML-escaped.
+
+A relay that cannot be reached yields an empty directory rather than a claim
+that everything is down.
+
+The URLs are absolute and built from the `Host` header the listener used: the
+relay's internal hostname resolves nowhere on their machine.
+
 ## Bumpers
 
 | Method | Path | Purpose |

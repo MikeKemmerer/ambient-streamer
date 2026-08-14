@@ -100,12 +100,51 @@ services:
     networks: [ambient]
     # RTMP 1935 and the API 9997 are never published: 1935 would let anyone on
     # the network publish to a path, and 9997 can reconfigure the relay.
-    # Only HLS is exposed, and only to the address you name. The default is
-    # loopback, so it is reachable from the host (or an SSH tunnel) but not the
-    # LAN; set AMBIENT_HLS_BIND=0.0.0.0 to open it to players like VLC. It is
-    # unauthenticated — anyone who can reach it can watch any channel.
+    # HLS 8888 is not published either — the `directory` service in front of it
+    # owns that port, because MediaMTX answers 404 at `/` and cannot serve the
+    # station list that makes the feeds discoverable.
+
+  # ---------------------------------------------------------------------------
+  # LAN front door on the HLS port: a station directory at `/`, and every other
+  # path proxied straight to MediaMTX.
+  #
+  # nginx rather than the backend because this carries the media. Routing 24/7
+  # HLS through the Python control plane would put a multi-megabit copy loop on
+  # a host where CPU contention was measured causing a 27 s YouTube outage; here
+  # only the few-KB directory page comes from the backend.
+  #
+  # Unauthenticated, exactly as MediaMTX was when it held this port directly.
+  # The default bind is loopback; set AMBIENT_HLS_BIND=0.0.0.0 to open it to
+  # players on the LAN. The backend API is deliberately NOT proxied.
+  directory:
+    image: nginx:1.27-alpine
+    container_name: ambient-directory
+    restart: unless-stopped
+    environment:
+      # Substituted into the template by the image's entrypoint, so changing the
+      # backend port does not need this config edited by hand.
+      AMBIENT_BACKEND_HOST: backend
+      AMBIENT_BACKEND_PORT: ${AMBIENT_BACKEND_PORT:-8090}
+      AMBIENT_RELAY_HOST: mediamtx
+      NGINX_ENVSUBST_OUTPUT_DIR: /etc/nginx/conf.d
+    tmpfs:
+      - /var/cache/nginx
+    volumes:
+      - ./docker/directory-nginx.conf.template:/etc/nginx/templates/default.conf.template:ro
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    networks: [ambient]
     ports:
       - "${AMBIENT_HLS_BIND:-127.0.0.1}:${AMBIENT_HLS_PUBLISH:-8888}:8888"
+    depends_on: [mediamtx]
+    deploy:
+      resources:
+        limits:
+          cpus: "${DIRECTORY_CPU_LIMIT:-0.5}"
+          memory: ${DIRECTORY_MEMORY_LIMIT:-64m}
 
   # ---------------------------------------------------------------------------
   # Backend control plane — FastAPI: REST, SSE, static operator UI, supervisor,
