@@ -502,7 +502,7 @@ async def set_resolution(    name: str, body: ResolutionBody, state: AppState = 
         "mode": "make-before-break" if running else "applied-on-next-start",
         "detail": (
             "the filtergraph is fixed at launch, so the compositor is being replaced; "
-            "measured ~1s of RTMP gap and a new YouTube ingest session"
+            "measured ~1.4s of RTMP gap and a new YouTube ingest session"
             if running
             else "the channel is stopped; the new resolution applies on the next start"
         ),

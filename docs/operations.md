@@ -322,10 +322,39 @@ rule. Nothing records video: MediaMTX has `record: no` and HLS segments are held
 | Restart Liquidsoap | `docker restart <ch>-liquidsoap` | **0 s** on the stream — Icecast's fallback absorbs it |
 | Add a channel to Icecast | `mounts.list` + `SIGHUP` | none |
 | Fill in a stream key | edit `channels/<ch>/.env` | none — the relay reads it at path-ready time |
-| Change `hot_set`, resolution, fps, encoder | `POST .../restart` | **seconds** on the YouTube leg, and a new ingest session; see on-disk.md |
+| Change `hot_set`, resolution, fps, encoder | `POST .../restart` | **~1.4 s** on the YouTube leg, and a new ingest session; see on-disk.md |
 | Blunt restart | `scripts/channel.sh restart <ch>` | **~13.7 s**, and a new ingest session |
 
 Only the last two rows touch the YouTube broadcast. Prefer everything above them.
+
+### Do not build images on a host that is streaming
+
+`docker build` is not nice'd and will take every core it can. Measured on the 7-core host: a
+backend image build starved the live composer badly enough that `out_time` froze for 16 s, the
+watchdog called it stalled, and the channel was restarted — 27 s of YouTube dead air for what
+should have been a no-op. The same build pinned with `--cpuset-cpus 5,6` left the composer
+untouched at 1.0x with no restart.
+
+```bash
+docker build --cpuset-cpus 5,6 -f docker/Dockerfile.backend -t ambient-backend:dev .
+```
+
+Better still, build somewhere else and push. The rule generalises: any heavy, unpinned work on
+the streaming host is a stream outage waiting to happen.
+
+### The watchdog stands down during a restart
+
+Make-before-break runs **two** composers at once, so for the length of the handover the host is
+oversubscribed and `speed` drops below `min_speed`. That looks exactly like starvation. Before
+this was handled, one operator restart produced **18** YouTube ingest sessions: each takeover
+tripped the watchdog, which restarted the channel, which tripped it again.
+
+The watchdog now skips any channel whose supervisor lock is held — that lock covers the whole of
+a start, stop or restart including the takeover wait — and grants a settle window afterwards so
+the replacement is not judged while it is still spinning up.
+
+If you are sizing a host, note the implication: a channel needs headroom for **two** composers
+during a restart, not one.
 
 ### Scheduled changes
 

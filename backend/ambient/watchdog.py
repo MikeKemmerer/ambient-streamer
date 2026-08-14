@@ -222,6 +222,8 @@ class ChannelRuntime(Protocol):
 
     async def start(self, name: str): ...
 
+    def lock(self, name: str): ...
+
 
 @dataclass
 class ChannelWatch:
@@ -329,6 +331,15 @@ class Watchdog:
         """Restart a faulty channel when its backoff has elapsed."""
         watch = self._watch(name)
 
+        # A make-before-break restart runs two composers at once, so the host is
+        # briefly oversubscribed and speed dips below min_speed. Judging that as
+        # starvation turns one restart into a storm - measured, one operator
+        # restart produced 18 ingest sessions before this check existed.
+        if self._busy(name):
+            watch.health.reset()
+            watch.settle_until = now + SETTLE_SECONDS
+            return False
+
         if not verdict.faulty:
             watch.consecutive_healthy += 1
             # Reset the ladder only once a channel has genuinely held up.
@@ -386,6 +397,20 @@ class Watchdog:
         for stale in set(self.channels) - set(names):
             self.forget(stale)
         return verdicts
+
+    def _busy(self, name: str) -> bool:
+        """Is the supervisor already mid-operation on this channel?
+
+        The per-channel lock is the only honest signal: it is held for the whole
+        of a start, stop or restart, including the takeover wait.
+        """
+        lock = getattr(self.supervisor, "lock", None)
+        if lock is None:
+            return False
+        try:
+            return bool(lock(name).locked())
+        except Exception:
+            return False
 
     async def _emit(self, name: str, event: str, **data: object) -> None:
         LOG.info("channel %s: watchdog %s %s", name, event, data)

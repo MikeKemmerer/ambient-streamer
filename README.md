@@ -171,7 +171,7 @@ docker compose --project-name ambient-lofi \
 | Restart Liquidsoap | Icecast fallback mount absorbs it | 0 s, 0.00 % silence |
 | Add a channel to Icecast | `mounts.list` + `docker kill -s HUP ambient-icecast` | no restart |
 | Fill in a stream key | the relay reads it when the path goes ready | no relay restart |
-| Restart the composer, make-before-break | `POST /api/channels/<ch>/restart` | **seconds** on the YouTube leg (see docs/contracts/on-disk.md) |
+| Restart the composer, make-before-break | `POST /api/channels/<ch>/restart` | **~1.4 s** on the YouTube leg, and a new ingest session |
 | Restart the composer, blunt | `scripts/channel.sh restart <ch>` | **13.7 s**, and a new ingest session |
 
 Globs and empty selection lists are watched, so dropping a file into a watched folder updates

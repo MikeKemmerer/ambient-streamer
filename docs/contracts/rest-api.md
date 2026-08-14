@@ -264,6 +264,17 @@ temp then `rename()`) so a directory-watched folder never sees a partial file.
 Returns `202`. Resolution changes the filtergraph, so this is **not** a live
 change — the channel performs a make-before-break restart.
 
+A make-before-break restart costs **~1.4 s** on the YouTube leg and a new ingest
+session, measured on a live channel across 18 consecutive takeovers (1.32–1.59 s,
+worst 1.59 s). That is down from 3.22–6.44 s before the Icecast burst and
+`-fflags nobuffer` changes.
+
+The handover runs two composers at once, so the host needs headroom for **two**
+during a restart. On a host that does not have it, `speed` dips below
+`min_speed` for the length of the takeover; the watchdog treats a channel whose
+supervisor lock is held as off-limits so that dip cannot cascade into another
+restart.
+
 ## Ingest settings
 
 | Method | Path | Purpose |
