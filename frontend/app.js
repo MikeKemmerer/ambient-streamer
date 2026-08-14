@@ -20,6 +20,7 @@ import {
   $,
   availableRow,
   onAirRow,
+  feedRow,
   basename,
   buildCard,
   channelTone,
@@ -602,16 +603,23 @@ async function applyResolution() {
 // --------------------------------------------------------------------------
 
 const ENCODERS = ['libx264', 'h264_nvenc', 'h264_qsv'];
+const TARGETS = ['youtube', 'video', 'audio'];
 
 const DELIVERY_INPUTS = [
   'delivery-key', 'delivery-rtmp', 'delivery-encoder', 'delivery-fps', 'delivery-fps-default',
-  'delivery-youtube', 'delivery-local', 'delivery-local-fps',
+  'target-youtube', 'target-video', 'target-audio', 'delivery-local', 'delivery-local-fps',
 ];
+
+/** The targets ticked in the form, in the order the API reports them. */
+function chosenTargets() {
+  return TARGETS.filter((target) => $(`target-${target}`).checked);
+}
 
 /** rtmp_url, has_stream_key and fps_requested come from GET /api/channels/{name}. */
 function deliveryOf(name) {
   const detail = name ? state.details.get(name) || {} : {};
   const ch = (name && state.channels.get(name)) || {};
+  const reported = detail.delivery || ch.delivery;
   return {
     rtmpUrl: String(detail.rtmp_url || ''),
     encoder: String(detail.encoder_requested || ch.encoder_requested || ''),
@@ -620,7 +628,7 @@ function deliveryOf(name) {
     hasKey: Boolean(detail.has_stream_key),
     // Absent on a summary that has not loaded yet; default to the common case
     // rather than showing every channel as internal for a moment.
-    youtube: detail.youtube !== false && ch.youtube !== false,
+    targets: Array.isArray(reported) && reported.length ? reported.map(String) : ['youtube'],
     local: String(detail.local || ch.local || ''),
     localHeight: Number(detail.local_height_requested) || 0,
     localFps: Number(detail.local_fps_requested) || 0,
@@ -654,8 +662,10 @@ function deliveryBody() {
     if (fps && fps !== base.fps) body.fps = fps;
   }
 
-  const youtube = $('delivery-youtube').checked;
-  if (youtube !== base.youtube) body.youtube = youtube;
+  const targets = chosenTargets();
+  // Sent whole, and only when it actually differs: the endpoint replaces the
+  // set, so an accidental submit of the same list is still a config rewrite.
+  if (targets.length && targets.join(',') !== base.targets.join(',')) body.targets = targets;
 
   const height = Number($('delivery-local').value);
   const localFps = Number($('delivery-local-fps').value);
@@ -671,53 +681,60 @@ function deliveryBody() {
 }
 
 /**
- * The relay's own HLS URL, shown under the preview for VLC and friends. The
- * in-page player goes through the authenticated proxy instead; an external
- * player cannot send the bearer token, so it needs the published relay port.
+ * Every HLS feed this channel actually publishes, with its address. The in-page
+ * player goes through the authenticated proxy instead; an external player
+ * cannot send the bearer token, so it needs the published relay port.
  */
 function syncPreviewLink() {
-  const row = $('preview-link-row');
+  const list = $('feed-list');
   const note = $('preview-link-note');
   const detail = state.details.get(state.selected) || {};
-  const url = detail.hls_url;
+  const feeds = Array.isArray(detail.feeds) ? detail.feeds : [];
+  const reachable = feeds.filter((feed) => feed.url);
 
-  if (!url) {
-    row.hidden = true;
+  if (!reachable.length) {
+    list.hidden = true;
     note.hidden = false;
-    note.textContent = 'The relay\u2019s HLS port is not published, so there is no address an '
-      + 'external player could reach. Set AMBIENT_HLS_PUBLISH to expose one.';
+    note.textContent = feeds.length
+      ? 'The relay\u2019s HLS port is not published, so there is no address an external player '
+        + 'could reach. Set AMBIENT_HLS_PUBLISH to expose one.'
+      : '';
     return;
   }
 
   note.hidden = true;
-  row.hidden = false;
-  $('preview-url').textContent = url;
+  list.hidden = false;
+  const rows = $('feed-rows');
+  clear(rows);
+  for (const feed of reachable) {
+    rows.append(feedRow(feed, (url) => copyFeedUrl(url)));
+  }
 }
 
-async function copyPreviewUrl() {
-  const url = $('preview-url').textContent;
+async function copyFeedUrl(url) {
   if (!url) return;
   try {
     await navigator.clipboard.writeText(url);
     toast('ok', 'copied', 'paste it into VLC with Media \u203A Open Network Stream');
   } catch {
     // Clipboard access is refused on insecure origins, which is exactly where
-    // this UI usually runs, so fall back to selecting the text.
-    const range = document.createRange();
-    range.selectNodeContents($('preview-url'));
-    const selection = window.getSelection();
-    selection.removeAllRanges();
-    selection.addRange(range);
-    toast('warn', 'copy', 'the browser refused clipboard access \u2014 the URL is selected, press Ctrl+C');
+    // this UI usually runs, so say so rather than failing silently.
+    toast('warn', 'copy', `the browser refused clipboard access \u2014 the URL is ${url}`);
   }
 }
 
 function syncDelivery() {
   const name = state.selected;
   const base = deliveryOf(name);
+  // An empty target set sends no `targets` key, so it would not register as a
+  // change and the repopulate below would silently re-tick the boxes the
+  // operator just cleared. Compare the selection itself instead.
+  const retargeted = state.deliveryFor === name
+    && chosenTargets().join(',') !== base.targets.join(',');
   // Before the detail load lands there is no baseline to compare against, so the
   // form is not "dirty" — it is simply not filled in yet.
-  const dirty = state.deliveryFor === name && Object.keys(deliveryBody()).length > 0;
+  const dirty = state.deliveryFor === name
+    && (retargeted || Object.keys(deliveryBody()).length > 0);
 
   // Repopulating a dirty form would throw away what the operator is typing, and
   // the 1 Hz progress render calls through here.
@@ -725,7 +742,7 @@ function syncDelivery() {
     setValue($('delivery-rtmp'), base.rtmpUrl);
     setValue($('delivery-encoder'), ENCODERS.includes(base.encoder) ? base.encoder : '');
     setValue($('delivery-fps'), base.fps ? String(base.fps) : '');
-    $('delivery-youtube').checked = base.youtube;
+    for (const target of TARGETS) $(`target-${target}`).checked = base.targets.includes(target);
     setValue($('delivery-local'), base.localHeight ? String(base.localHeight) : '');
     setValue($('delivery-local-fps'), base.localFps ? String(base.localFps) : '');
     state.deliveryFor = base.encoder ? name : null;
@@ -735,17 +752,20 @@ function syncDelivery() {
   keyState.textContent = base.hasKey ? 'key set' : 'no key';
   keyState.dataset.tone = base.hasKey ? 'ok' : 'warn';
 
-  const reach = $('delivery-reach');
-  const wantsYouTube = $('delivery-youtube').checked;
-  reach.textContent = wantsYouTube ? 'public' : 'internal only';
-  reach.dataset.tone = wantsYouTube ? 'ok' : 'idle';
+  const chosen = chosenTargets();
+  const wantsYouTube = chosen.includes('youtube');
   // A missing key is not a warning on a channel that cannot use one.
   keyState.hidden = !wantsYouTube;
 
-  $('delivery-local-note').textContent = base.local
-    ? `In effect: ${base.local}. Leave both on default and an internal channel serves its own `
-      + 'full size, while a public one serves a 360p operator preview.'
-    : '';
+  $('delivery-local-note').textContent = chosen.includes('video')
+    ? `Internal video: ${base.local}. Leave both on default and it follows the channel's own `
+      + 'resolution and fps; the operator preview stays 640x360@15 either way.'
+    : 'The internal video feed is off, so these only take effect if you turn it on.';
+
+  $('delivery-reach-note').textContent = chosen.length
+    ? 'Pick one or more. Anything without YouTube cannot reach it even with a key stored: the '
+      + 'compositor never publishes that relay path, so the publisher hook has nothing to fire on.'
+    : 'Pick at least one. A channel that delivers nowhere would render and encode into nothing.';
 
   $('delivery-effective').textContent =
     `In effect: ${base.encoder || DASH} at ${base.fps || DASH} fps. "Use default" hands the setting `
@@ -759,7 +779,9 @@ function syncDelivery() {
   // Nothing to point a key or an ingest URL at when the YouTube leg is off.
   $('delivery-key').disabled = !base.editable || !wantsYouTube;
   $('delivery-rtmp').disabled = !base.editable || !wantsYouTube;
-  $('btn-delivery-apply').disabled = !base.editable || !dirty;
+  // A channel that delivers nowhere cannot be applied; the API refuses it too.
+  $('btn-delivery-apply').disabled = !base.editable || !dirty || chosen.length === 0;
+  $('delivery-targets').dataset.empty = chosen.length === 0 ? 'true' : 'false';
 }
 
 /** Assigning an identical value can still move the caret in a focused field. */
@@ -791,11 +813,9 @@ async function applyDelivery() {
   } else {
     // Lead with where it publishes: that is the field an operator came here to
     // change, and it is the one with consequences.
-    const reach = result.youtube === false
-      ? `internal only \u2014 local ${result.local}`
-      : `YouTube \u00B7 local ${result.local}`;
+    const targets = Array.isArray(result.delivery) ? result.delivery.join(' + ') : DASH;
     toast('ok', `delivery ${name} \u2014 ${changed.join(', ')}`,
-      `${reach} \u00B7 ${result.encoder} at ${result.fps} fps \u00B7 ${result.detail || 'applies on the next start'}`);
+      `${targets} \u00B7 ${result.encoder} at ${result.fps} fps \u00B7 ${result.detail || 'applies on the next start'}`);
   }
   // The response is the new baseline. Waiting for the refresh instead would leave
   // the form comparing against what it just replaced, i.e. dirty against itself.
@@ -807,15 +827,18 @@ async function applyDelivery() {
       has_stream_key: result.has_stream_key,
       encoder_requested: result.encoder,
       fps_requested: result.fps,
+      delivery: result.delivery,
       youtube: result.youtube,
       local: result.local,
       local_height_requested: result.local_height_requested,
       local_fps_requested: result.local_fps_requested,
+      feeds: result.feeds,
     });
   }
   resetDeliveryForm();
   scheduleRefresh(200);
   syncDelivery();
+  syncPreviewLink();
 }
 
 function syncDeleteButton() {
@@ -2331,7 +2354,6 @@ function wire() {
     if (state.selected) preview.start(state.selected);
   });
   $('btn-preview-stop').addEventListener('click', () => preview.stop());
-  $('btn-preview-copy').addEventListener('click', () => copyPreviewUrl());
   $('btn-hot-set-apply').addEventListener('click', () => applyHotSet());
   $('viz-visible').addEventListener('change', (event) => applyVizVisible(event.target.checked));
   $('btn-hot-set-revert').addEventListener('click', () => {

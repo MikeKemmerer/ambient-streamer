@@ -151,15 +151,21 @@ services:
       # interpolation default won unconditionally and every channel encoded at 30
       # no matter what CHANNEL_FPS said.
       FPS: "{{ fps }}"
-      # off: publish only the local rendition. The relay's program path never
-      # goes ready, so its YouTube hook cannot fire — the channel is incapable
-      # of leaving the network, rather than merely lacking a stream key.
+      # Each `off` is a relay path the composer never publishes, so that path
+      # never goes ready. mediamtx hangs the YouTube hook on the program path
+      # alone, which is what makes "cannot reach YouTube" structural rather
+      # than a matter of leaving the stream key blank.
       PUBLISH_PROGRAM: "{{ publish_program }}"
-      # The local HLS rendition. Nothing set these before, so every channel was
-      # pinned to the entrypoint's 640x360@15 whatever it was configured for.
+      PUBLISH_VIDEO: "{{ publish_video }}"
+      PUBLISH_AUDIO: "{{ publish_audio }}"
+      # The operator preview at <channel>/preview, always published.
       PREVIEW_WIDTH: "{{ preview_width }}"
       PREVIEW_HEIGHT: "{{ preview_height }}"
       PREVIEW_FPS: "{{ preview_fps }}"
+      # The internal video feed at <channel>/video.
+      LOCAL_WIDTH: "{{ local_width }}"
+      LOCAL_HEIGHT: "{{ local_height }}"
+      LOCAL_FPS: "{{ local_fps }}"
       # ipc:// on tmpfs, not tcp://. A published ZMQ port is a remote kill surface.
       ZMQ_BIND_HOST: 127.0.0.1
       ZMQ_BIND_PORT: "5555"

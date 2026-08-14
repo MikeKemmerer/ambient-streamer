@@ -142,7 +142,7 @@ function channel(name, status, config, playlist, images) {
     // Stands in for the channel .env. null means "inherit the global default".
     delivery: {
       stream_key: '', rtmp_url: DEFAULT_RTMP_URL, encoder: null, fps: null,
-      youtube: true, local_height: null, local_fps: null,
+      targets: ['youtube'], local_height: null, local_fps: null,
     },
   };
 }
@@ -273,10 +273,30 @@ db.get('chant').delivery.fps = 30;
  * own full size, because for it the local rendition is the whole product.
  */
 function localRendition(entry) {
-  const youtube = entry.delivery.youtube;
-  const height = entry.delivery.local_height || (youtube ? 360 : 720);
-  const fps = entry.delivery.local_fps || (youtube ? 15 : entry.delivery.fps || DEFAULT_FPS);
+  const height = entry.delivery.local_height || 720;
+  const fps = entry.delivery.local_fps || entry.delivery.fps || DEFAULT_FPS;
   return `${Math.round(height * 16 / 9 / 2) * 2}x${height}@${fps}`;
+}
+
+/** Only the feeds a channel actually publishes, matching the real endpoint. */
+function feedsOf(entry, name) {
+  const url = (rendition) => `http://${location.hostname}:8888/${name}/${rendition}/index.m3u8`;
+  const feeds = [
+    { rendition: 'preview', label: 'operator preview', detail: '640x360@15', url: url('preview') },
+  ];
+  if (entry.delivery.targets.includes('video')) {
+    feeds.push({
+      rendition: 'video', label: 'internal video',
+      detail: localRendition(entry), url: url('video'),
+    });
+  }
+  if (entry.delivery.targets.includes('audio')) {
+    feeds.push({
+      rendition: 'audio', label: 'internal audio only',
+      detail: 'aac 44.1 kHz', url: url('audio'),
+    });
+  }
+  return feeds;
 }
 
 // Capacity model, following backend/ambient/plugins.py: pipeline + preview + one
@@ -454,9 +474,15 @@ function eventStream(signal) {
 function summary(entry) {
   // Derived from the config the way the backend derives it, so the fixtures
   // cannot drift out of step with the switch.
+  const targets = entry.delivery.targets;
   return {
     ...entry.status,
     visualization_enabled: (entry.config.visualization || {}).enabled !== false,
+    delivery: targets,
+    youtube: targets.includes('youtube'),
+    // An internal channel has no YouTube leg, so "disconnected" would read as
+    // a fault rather than as the configuration.
+    rtmp: targets.includes('youtube') ? entry.status.rtmp : 'local-only',
   };
 }
 
@@ -682,13 +708,15 @@ async function route(url, init) {
       // What was asked for, not what is measured: a stopped channel reports 0 fps.
       fps_requested: entry.delivery.fps || DEFAULT_FPS,
       rtmp_url: entry.delivery.rtmp_url,
-      youtube: entry.delivery.youtube,
+      delivery: entry.delivery.targets,
+      youtube: entry.delivery.targets.includes('youtube'),
       local: localRendition(entry),
       local_height_requested: entry.delivery.local_height || 0,
       local_fps_requested: entry.delivery.local_fps || 0,
       // Presence only. The key is a credential and is never echoed back.
       has_stream_key: Boolean(entry.delivery.stream_key),
       hls_url: `http://${location.hostname}:8888/${name}/preview/index.m3u8`,
+      feeds: feedsOf(entry, name),
     });
   }
 
@@ -966,9 +994,14 @@ async function route(url, init) {
       changed.push('fps');
     }
 
-    if (b.youtube !== undefined && b.youtube !== null) {
-      entry.delivery.youtube = Boolean(b.youtube);
-      changed.push('youtube');
+    if (b.targets !== undefined && b.targets !== null) {
+      const order = ['youtube', 'video', 'audio'];
+      const chosen = order.filter((t) => b.targets.includes(t));
+      if (!chosen.length) {
+        return fail(400, 'invalid_targets', 'targets must name at least one delivery target.');
+      }
+      entry.delivery.targets = chosen;
+      changed.push('delivery');
     }
 
     if (b.clear_local) {
@@ -995,10 +1028,12 @@ async function route(url, init) {
       rtmp_url: entry.delivery.rtmp_url,
       encoder: entry.delivery.encoder || DEFAULT_ENCODER,
       fps: entry.delivery.fps || DEFAULT_FPS,
-      youtube: entry.delivery.youtube,
+      delivery: entry.delivery.targets,
+      youtube: entry.delivery.targets.includes('youtube'),
       local: localRendition(entry),
       local_height_requested: entry.delivery.local_height || 0,
       local_fps_requested: entry.delivery.local_fps || 0,
+      feeds: feedsOf(entry, name),
       detail: 'applies on the next start',
     });
   }

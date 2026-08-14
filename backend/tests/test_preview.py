@@ -60,6 +60,36 @@ def test_an_unknown_channel_never_reaches_the_relay(api, upstream):
     assert upstream == []
 
 
+def test_the_internal_renditions_are_served_from_their_own_relay_paths(api, upstream):
+    client, _state = api
+    assert client.get("/lofi/video/index.m3u8", headers=AUTH).status_code == 200
+    assert client.get("/lofi/audio/index.m3u8", headers=AUTH).status_code == 200
+    assert upstream == [
+        "http://mediamtx:8888/lofi/video/index.m3u8",
+        "http://mediamtx:8888/lofi/audio/index.m3u8",
+    ]
+
+
+def test_the_program_feed_is_not_proxied(api, upstream):
+    """It is the one relay path the YouTube publisher reads."""
+    client, _state = api
+    assert client.get("/lofi/index.m3u8", headers=AUTH).status_code == 404
+    assert upstream == []
+
+
+def test_the_rendition_routes_do_not_shadow_the_api(api, upstream):
+    """A `{rendition}` wildcard matches ANY three-segment URL.
+
+    Measured: it swallowed `/api/channels/<x>` as channel `api`, rendition
+    `channels`, so the rest of the API answered 404 through the proxy.
+    """
+    client, _state = api
+    body = client.get("/api/channels/lofi", headers=AUTH)
+    assert body.status_code == 200
+    assert body.json()["name"] == "lofi"
+    assert upstream == [], "an API call must never reach the relay"
+
+
 @pytest.mark.parametrize(
     "path",
     [

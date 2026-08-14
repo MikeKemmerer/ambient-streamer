@@ -355,6 +355,33 @@ main {
 .preview-controls { margin-top: 8px; }
 
 .stream-link { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+
+/* ---------- publishable feeds ---------- */
+
+.feeds { margin-top: 8px; }
+.feed-rows { list-style: none; margin: 4px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.feed-row { display: flex; align-items: center; gap: 8px; }
+.feed-label { flex: none; width: 116px; display: flex; flex-direction: column; }
+.feed-name { font-size: 12px; }
+.feed-detail { font-family: var(--mono); font-size: 10px; color: var(--fg-mute); }
+
+/* ---------- delivery targets ---------- */
+
+.targets { display: flex; flex-direction: column; gap: 3px; margin-bottom: 6px; }
+.target {
+  display: flex; align-items: flex-start; gap: 8px;
+  padding: 6px 8px; border: 1px solid transparent; border-radius: var(--radius);
+  background: var(--bg-raise); cursor: pointer;
+}
+.target:hover { border-color: var(--line); }
+.target:has(input:checked) { border-color: var(--accent); background: var(--info-bg); }
+.target-body { display: flex; flex-direction: column; gap: 1px; }
+.target-name { font-size: 12px; color: var(--fg-mute); }
+.target:has(input:checked) .target-name { color: var(--fg); }
+.target-note { font-size: 11px; color: var(--fg-mute); }
+/* A channel that delivers nowhere cannot be applied; say so before the submit. */
+.targets[data-empty="true"] { outline: 1px solid var(--warn); outline-offset: 2px; border-radius: var(--radius); }
+
 /* Wraps rather than scrolls: the whole URL has to be readable to be retyped,
    and a scrollbar on a one-line element is taller than the line itself. */
 .stream-url {

@@ -306,43 +306,87 @@ logged, and never placed in argv. `GET /api/channels/{name}` reports only
 `fps_requested` is what was configured; the `fps` field is what is measured and
 reads `0` on a stopped channel.
 
-## Internal channels
+## Delivery targets
 
-`{"youtube": false}` makes a channel **internal**: it renders and serves HLS on
-the local network and never reaches YouTube.
+A channel delivers to one or more of three targets, set as a whole:
 
-This is structural, not "leave the stream key blank". The composer publishes
-only the local rendition, so the relay's *program* path never goes ready — and
-`runOnReady` in `docker/mediamtx.yml`, the only thing in the system that ever
-talks to YouTube, hangs on that path alone. Verified on a live channel with a
-**valid stream key still present in its `.env`**: no publisher process, no
-publisher log line, and no program path on the relay.
+```json
+{"targets": ["youtube", "video", "audio"]}
+```
 
-An internal channel is also **cheaper** than a public one, not more expensive:
-there is no second rendition to preview, so it encodes once instead of twice.
-It uses the channel's own encoder for that one encode rather than the preview's
-libx264, because there is no second encode to keep off the GPU.
-
-| | `youtube: true` | `youtube: false` |
+| Target | Relay path | What it is |
 |---|---|---|
-| Relay paths published | `<ch>` and `<ch>/preview` | `<ch>/preview` only |
-| Encodes | 2 | 1 |
-| Local rendition default | 360p @ 15 (operator preview) | the channel's own resolution and fps |
-| Local encoder | `libx264` | the channel's encoder |
-| `rtmp` in status | `connected` / `disconnected` | `local-only` |
-| Stream key needed | yes | no, and one present is inert |
+| `youtube` | `<ch>` | the public broadcast; the only path with a publisher hook |
+| `video` | `<ch>/video` | internal HLS, full size, LAN only |
+| `audio` | `<ch>/audio` | internal HLS, audio only — no video encode at all |
 
-`local_height` and `local_fps` override the local rendition in either mode; the
-width follows at 16:9, rounded to an even number because yuv420p cannot encode
-an odd dimension. `clear_local` returns both to the default for the current
-mode — they are cleared as a pair, because the pair moves with `youtube`.
+At least one is required; an empty list is `400`. The list is stored
+deduplicated and in that order, so the rendered `.env` does not churn because a
+UI sent the set in a different order.
+
+The **operator preview** at `<ch>/preview` is not a target. It is always
+published, always 640x360@15, and exists for the control plane's own player.
+
+**A channel without `youtube` cannot reach YouTube.** This is structural, not
+"leave the stream key blank": the composer never publishes the program path, so
+that path never goes ready, and `runOnReady` in `docker/mediamtx.yml` — the only
+thing in the system that ever talks to YouTube — hangs on that path alone.
+Verified on a live channel with a **valid stream key still present in its
+`.env`**: no publisher process, no publisher log line, no program path on the
+relay.
+
+Each target is a separate encode, and each one omitted is a scale and an encode
+the composer never runs. `audio` adds no video branch at all, which is what
+makes it the cheapest feed.
+
+| | `rtmp` in status | Stream key |
+|---|---|---|
+| with `youtube` | `connected` / `disconnected` | required |
+| without | `local-only` | not needed; one present is inert |
+
+`local_height` and `local_fps` size the `video` feed; the width follows at 16:9,
+rounded to an even number because yuv420p cannot encode an odd dimension. Both
+default to the channel's own resolution and fps, because that feed is the
+product rather than a preview. `clear_local` returns both to those defaults —
+as a pair, since a half-cleared rendition leaves a stale fps on a feed that just
+changed size.
+
+### Migrating from `CHANNEL_PUBLISH_YOUTUBE`
+
+`CHANNEL_DELIVERY` supersedes the old boolean. When it is absent:
+
+- `CHANNEL_PUBLISH_YOUTUBE=false` resolves to `["video"]`, **not** to the
+  default. A channel deliberately taken off YouTube must not be put back on air
+  by an upgrade.
+- anything else resolves to `["youtube"]`.
+
+Setting `targets` writes `CHANNEL_DELIVERY` and clears the old key, so a stale
+`false` cannot contradict an explicit list.
+
+### Feed URLs
+
+`GET /api/channels/{name}` returns a `feeds` array — only the renditions the
+channel actually publishes, because a URL for a feed nobody started is a support
+call rather than a convenience:
+
+```json
+{"rendition": "video", "label": "internal video", "detail": "1280x720@30",
+ "url": "http://<host>:<AMBIENT_HLS_PUBLISH>/<channel>/video/index.m3u8"}
+```
+
+All three share the preview's shape,
+`http://<host>:<port>/<channel>/<preview|video|audio>/index.m3u8`. `url` is
+`null` when `AMBIENT_HLS_PUBLISH` is unset: an external player has no route to
+the compose network, and offering an address that cannot resolve is worse than
+offering none.
+
+The backend also proxies all three behind its own token for the in-page player.
+Those are **three literal routes**, not one with a `{rendition}` parameter — a
+wildcard there matches any three-segment URL and was measured swallowing
+`/api/channels/<x>` as channel `api`, rendition `channels`.
 
 Measured on a live internal channel at 480p30: the HLS master reported
 `RESOLUTION=854x480, FRAME-RATE=30.000` at 1.77 Mbps, holding 1.0x realtime.
-
-The URL is the same one the operator preview uses,
-`/{name}/preview/index.m3u8` — proxied by the backend for the in-page player,
-or straight off the relay when `AMBIENT_HLS_PUBLISH` publishes its port.
 
 ## Bumpers
 

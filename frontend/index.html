@@ -94,10 +94,9 @@
               <label class="inline"><input type="checkbox" id="preview-audio"> audio</label>
               <span class="muted small" id="preview-engine"></span>
             </div>
-            <div class="stream-link" id="preview-link-row" hidden>
+            <div class="feeds" id="feed-list" hidden>
               <span class="small muted">Open in VLC</span>
-              <code class="stream-url" id="preview-url"></code>
-              <button id="btn-preview-copy" type="button" class="small">Copy</button>
+              <ul class="feed-rows" id="feed-rows"></ul>
             </div>
             <p class="small muted" id="preview-link-note" hidden></p>
           </div>
@@ -133,16 +132,33 @@
               already on air — every change applies on the next start.
             </p>
 
-            <div class="row">
-              <label class="inline"><input type="checkbox" id="delivery-youtube" checked> publish to YouTube</label>
-              <span class="chip" id="delivery-reach" data-tone="idle">&#8212;</span>
+            <div class="targets" id="delivery-targets">
+              <label class="target">
+                <input type="checkbox" id="target-youtube" value="youtube" checked>
+                <span class="target-body">
+                  <span class="target-name">YouTube</span>
+                  <span class="target-note">Public broadcast. Needs a stream key.</span>
+                </span>
+              </label>
+              <label class="target">
+                <input type="checkbox" id="target-video" value="video">
+                <span class="target-body">
+                  <span class="target-name">Internal HLS &#8212; video</span>
+                  <span class="target-note">Full size on your network. Never reaches YouTube.</span>
+                </span>
+              </label>
+              <label class="target">
+                <input type="checkbox" id="target-audio" value="audio">
+                <span class="target-body">
+                  <span class="target-name">Internal HLS &#8212; audio only</span>
+                  <span class="target-note">No video encode at all. The cheapest feed.</span>
+                </span>
+              </label>
             </div>
             <p class="small muted" id="delivery-reach-note">
-              Off makes this an internal channel: it renders and serves HLS on your network and
-              never reaches YouTube. The compositor publishes only the local rendition, so the
-              relay path that carries the YouTube publisher never goes ready &#8212; it cannot get
-              out even with a key stored. It also encodes once instead of twice, so it costs less
-              than a public channel.
+              Pick one or more. Anything without YouTube cannot reach it even with a key stored:
+              the compositor never publishes that relay path, so the publisher hook has nothing
+              to fire on.
             </p>
 
             <div class="row">

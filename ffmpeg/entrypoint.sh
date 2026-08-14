@@ -32,14 +32,30 @@ CHANNEL_MOUNT="${CHANNEL_MOUNT:-/${CHANNEL_NAME}}"
 AUDIO_URL="${AUDIO_URL:-http://${ICECAST_HOST}:${ICECAST_PORT}${CHANNEL_MOUNT}}"
 
 RELAY_RTMP="${RELAY_RTMP:-rtmp://mediamtx:1935}"
+# The operator preview at <channel>/preview. Always published; the control
+# plane's player and the channel card both read it.
 PREVIEW_WIDTH="${PREVIEW_WIDTH:-640}"
 PREVIEW_HEIGHT="${PREVIEW_HEIGHT:-360}"
 PREVIEW_FPS="${PREVIEW_FPS:-15}"
-# `off` publishes only the local rendition. The relay's program path never goes
-# ready, so its YouTube hook never runs — an internal channel is structurally
-# unable to leave the network, not merely missing a stream key. Anything other
-# than exactly "off" publishes, so a typo cannot silently take a channel off air.
+# The internal video feed at <channel>/video, when PUBLISH_VIDEO is on.
+LOCAL_WIDTH="${LOCAL_WIDTH:-$WIDTH}"
+LOCAL_HEIGHT="${LOCAL_HEIGHT:-$HEIGHT}"
+LOCAL_FPS="${LOCAL_FPS:-$FPS}"
+# Each `off` is a relay path this composer never publishes, so that path never
+# goes ready. mediamtx hangs the YouTube hook on the program path alone, so
+# PUBLISH_PROGRAM=off makes reaching YouTube impossible rather than unlikely.
+# Anything other than exactly "off" publishes, so a typo cannot silently take a
+# channel off air.
 PUBLISH_PROGRAM="${PUBLISH_PROGRAM:-on}"
+PUBLISH_VIDEO="${PUBLISH_VIDEO:-}"
+PUBLISH_AUDIO="${PUBLISH_AUDIO:-off}"
+# A compose file written before delivery targets existed carries PUBLISH_PROGRAM
+# but neither of the others, and that combination would otherwise mean "deliver
+# nowhere" and refuse to start. Mirror the backend's migration instead: an
+# old-style internal channel is a video channel.
+if [[ -z "$PUBLISH_VIDEO" ]]; then
+  if [[ "$PUBLISH_PROGRAM" == "off" ]]; then PUBLISH_VIDEO=on; else PUBLISH_VIDEO=off; fi
+fi
 
 PLUGIN_DIR="${PLUGIN_DIR:-/plugins}"
 HOT_SET="${HOT_SET:-showfreqs-bars}"
@@ -169,8 +185,10 @@ ladder() {
 
 read -r RATE BUFSIZE AUDIO_BR <<<"$(ladder "$HEIGHT")"
 read -r P_RATE P_BUFSIZE P_AUDIO_BR <<<"$(ladder "$PREVIEW_HEIGHT")"
+read -r L_RATE L_BUFSIZE L_AUDIO_BR <<<"$(ladder "$LOCAL_HEIGHT")"
 GOP=$(( FPS * 2 ))
 P_GOP=$(( PREVIEW_FPS * 2 ))
+L_GOP=$(( LOCAL_FPS * 2 ))
 
 # ------------------------------------------------------------- encoder profile
 # youtube-ingest skill. The rate-control intent is the same for all three — CBR
@@ -214,16 +232,8 @@ MAIN_VIDEO=("${VIDEO_FLAGS[@]}")
 # would cost a whole channel. Quadro and datacenter cards have no such cap, so a
 # host with one can set PREVIEW_ENCODER to move it to the GPU as well. Mixing
 # encoders in one FFmpeg process is legal either way.
-#
-# An internal channel is the exception: its local rendition IS the product and
-# there is no second encode to share the host with, so it uses the channel's own
-# encoder.
 # Matches build_composer_command() in backend/ambient/ffmpeg_cmd.py.
-if [[ "$PUBLISH_PROGRAM" == "off" ]]; then
-  PREVIEW_ENCODER="${PREVIEW_ENCODER:-$ENCODER}"
-else
-  PREVIEW_ENCODER="${PREVIEW_ENCODER:-libx264}"
-fi
+PREVIEW_ENCODER="${PREVIEW_ENCODER:-libx264}"
 case "$PREVIEW_ENCODER" in
   libx264|h264_nvenc|h264_qsv) ;;
   *) warn "PREVIEW_ENCODER '$PREVIEW_ENCODER' unrecognized; using libx264"
@@ -231,11 +241,19 @@ case "$PREVIEW_ENCODER" in
 esac
 video_flags "$PREVIEW_ENCODER" "$PREVIEW_FPS" "$P_RATE" "$P_BUFSIZE" "$P_GOP"
 PREVIEW_VIDEO=("${VIDEO_FLAGS[@]}")
-if [[ "$PUBLISH_PROGRAM" == "off" ]]; then
-  ok "encoder: ${PREVIEW_ENCODER} @ ${P_RATE} (local only, ${PREVIEW_WIDTH}x${PREVIEW_HEIGHT}@${PREVIEW_FPS})"
-else
-  ok "encoder: ${ENCODER} @ ${RATE} (preview ${PREVIEW_ENCODER} @ ${P_RATE})"
-fi
+
+# The internal video feed is a product, not a preview, so it uses the channel's
+# own encoder.
+LOCAL_ENCODER="${LOCAL_ENCODER:-$ENCODER}"
+video_flags "$LOCAL_ENCODER" "$LOCAL_FPS" "$L_RATE" "$L_BUFSIZE" "$L_GOP"
+LOCAL_VIDEO=("${VIDEO_FLAGS[@]}")
+
+DELIVERS=()
+[[ "$PUBLISH_PROGRAM" != "off" ]] && DELIVERS+=("youtube ${ENCODER}@${RATE}")
+[[ "$PUBLISH_VIDEO"   == "on"  ]] && DELIVERS+=("video ${LOCAL_ENCODER}@${L_RATE} ${LOCAL_WIDTH}x${LOCAL_HEIGHT}@${LOCAL_FPS}")
+[[ "$PUBLISH_AUDIO"   == "on"  ]] && DELIVERS+=("audio ${AUDIO_BR}")
+(( ${#DELIVERS[@]} )) || die "no delivery target: set at least one of PUBLISH_PROGRAM, PUBLISH_VIDEO, PUBLISH_AUDIO"
+ok "delivery: ${DELIVERS[*]} (+ preview ${PREVIEW_ENCODER}@${P_RATE})"
 
 # --------------------------------------------------------------------- plugins
 # ffmpeg takes colors as 0xRRGGBB; '#' is a filtergraph escaping problem.
@@ -301,6 +319,20 @@ ok "plugins: ${HOT_SET} (active index ${ACTIVE_INDEX}, ${#PLUGINS[@]} hot branch
 
 fi
 
+# ------------------------------------------------------------- delivery fan-out
+# The tap lists drive both the filtergraph's split/asplit and the output list,
+# so the two can never disagree about how many branches exist. The operator
+# preview is always present; the rest follow PUBLISH_*.
+VIDEO_TAPS=()
+AUDIO_TAPS=()
+[[ "$PUBLISH_PROGRAM" != "off" ]] && { VIDEO_TAPS+=("vmain"); AUDIO_TAPS+=("amain"); }
+VIDEO_TAPS+=("vpre"); AUDIO_TAPS+=("apreview")
+[[ "$PUBLISH_VIDEO" == "on" ]] && { VIDEO_TAPS+=("vloc"); AUDIO_TAPS+=("alocal"); }
+# Audio-only needs no video branch at all: that is the whole point of it.
+[[ "$PUBLISH_AUDIO" == "on" ]] && AUDIO_TAPS+=("aonly")
+VIDEO_BRANCHES=${#VIDEO_TAPS[@]}
+AUDIO_BRANCHES=${#AUDIO_TAPS[@]}
+
 # ----------------------------------------------------------------- filtergraph
 # Written to a file so neither bash nor the filtergraph tokenizer has to survive
 # the zmq bind_address escaping, which needs two levels.
@@ -355,20 +387,22 @@ fi
   printf '%s' "eq@eq=eval=frame:contrast=1:brightness=${INIT_BRIGHTNESS}:saturation=${INIT_SATURATION}"
   printf '%s' ":gamma_r=${INIT_GAMMA_R}:gamma_g=${INIT_GAMMA_G}:gamma_b=${INIT_GAMMA_B},"
   printf '%s' "hue@hue=h=${INIT_HUE},format=yuv420p,setsar=1[vfull];"
-if [[ "$PUBLISH_PROGRAM" == "off" ]]; then
-  # One encode, one output. Splitting for a preview nobody watches would double
-  # the encode cost of a channel whose only consumer is the local HLS.
-  if [[ "$PREVIEW_WIDTH" == "$WIDTH" && "$PREVIEW_HEIGHT" == "$HEIGHT" ]]; then
-    printf '%s' "[vfull]fps=${PREVIEW_FPS}[vpreview];"
-  else
-    printf '%s' "[vfull]scale=${PREVIEW_WIDTH}:${PREVIEW_HEIGHT}:flags=fast_bilinear,fps=${PREVIEW_FPS}[vpreview];"
-  fi
-  printf '%s' "[0:a]aresample=44100:async=1000:first_pts=0,loudnorm=I=-14:TP=-1:LRA=11[apreview]"
-else
-  printf '%s' "[vfull]split=2[vmain][vpre];"
+  # Fan out to exactly the branches that have an output. An unused branch is a
+  # whole extra scale+encode, which on a busy host is a channel's worth of CPU.
+  printf '%s' "[vfull]split=${VIDEO_BRANCHES}"
+  for label in "${VIDEO_TAPS[@]}"; do printf '[%s]' "$label"; done
+  printf '%s' ";"
   printf '%s' "[vpre]scale=${PREVIEW_WIDTH}:${PREVIEW_HEIGHT}:flags=fast_bilinear,fps=${PREVIEW_FPS}[vpreview];"
-  printf '%s' "[0:a]aresample=44100:async=1000:first_pts=0,loudnorm=I=-14:TP=-1:LRA=11,asplit=2[amain][apreview]"
-fi
+  if [[ "$PUBLISH_VIDEO" == "on" ]]; then
+    if [[ "$LOCAL_WIDTH" == "$WIDTH" && "$LOCAL_HEIGHT" == "$HEIGHT" ]]; then
+      printf '%s' "[vloc]fps=${LOCAL_FPS}[vlocal];"
+    else
+      printf '%s' "[vloc]scale=${LOCAL_WIDTH}:${LOCAL_HEIGHT}:flags=fast_bilinear,fps=${LOCAL_FPS}[vlocal];"
+    fi
+  fi
+  printf '%s' "[0:a]aresample=44100:async=1000:first_pts=0,loudnorm=I=-14:TP=-1:LRA=11"
+  printf '%s' ",asplit=${AUDIO_BRANCHES}"
+  for label in "${AUDIO_TAPS[@]}"; do printf '[%s]' "$label"; done
 } > "$GRAPH_FILE"
 log "filtergraph -> $GRAPH_FILE ($(wc -c < "$GRAPH_FILE") bytes)"
 # The accent is baked into the plugins at launch, so a live change has to be a
@@ -409,22 +443,44 @@ log "now.json -> $NOW_FILE (liquidsoap ${LIQ_TELNET_HOST}:${LIQ_TELNET_PORT})"
 # that the wait was for audio to arrive at all, not for FFmpeg to buffer it.
 # stdin is the producer FIFO, never a terminal, so </dev/null is not used here.
 # The relay path a channel publishes to decides whether it can reach YouTube:
-# mediamtx.yml hangs the publisher hook on the program path only, and documents
-# the preview path as one that must never get there.
-OUTPUTS=(
+# mediamtx.yml hangs the publisher hook on the program path only, and the
+# preview/video/audio paths are documented as ones that must never get there.
+OUTPUTS=()
+PUBLISHED=()
+if [[ "$PUBLISH_PROGRAM" != "off" ]]; then
+  OUTPUTS+=(
+    -map '[vmain]' -map '[amain]'
+      "${MAIN_VIDEO[@]}"
+      -c:a aac -b:a "$AUDIO_BR" -ar 44100
+      -f flv "${RELAY_RTMP}/${CHANNEL_NAME}"
+  )
+  PUBLISHED+=("${CHANNEL_NAME}")
+fi
+OUTPUTS+=(
   -map '[vpreview]' -map '[apreview]'
     "${PREVIEW_VIDEO[@]}"
     -c:a aac -b:a "$P_AUDIO_BR" -ar 44100
     -f flv "${RELAY_RTMP}/${CHANNEL_NAME}/preview"
 )
-if [[ "$PUBLISH_PROGRAM" != "off" ]]; then
-  OUTPUTS=(
-    -map '[vmain]' -map '[amain]'
-      "${MAIN_VIDEO[@]}"
-      -c:a aac -b:a "$AUDIO_BR" -ar 44100
-      -f flv "${RELAY_RTMP}/${CHANNEL_NAME}"
-    "${OUTPUTS[@]}"
+PUBLISHED+=("${CHANNEL_NAME}/preview")
+if [[ "$PUBLISH_VIDEO" == "on" ]]; then
+  OUTPUTS+=(
+    -map '[vlocal]' -map '[alocal]'
+      "${LOCAL_VIDEO[@]}"
+      -c:a aac -b:a "$L_AUDIO_BR" -ar 44100
+      -f flv "${RELAY_RTMP}/${CHANNEL_NAME}/video"
   )
+  PUBLISHED+=("${CHANNEL_NAME}/video")
+fi
+if [[ "$PUBLISH_AUDIO" == "on" ]]; then
+  # No -map for video at all. FLV carries an audio-only stream, and the relay
+  # serves it as an audio-only HLS rendition.
+  OUTPUTS+=(
+    -map '[aonly]'
+      -c:a aac -b:a "$AUDIO_BR" -ar 44100
+      -f flv "${RELAY_RTMP}/${CHANNEL_NAME}/audio"
+  )
+  PUBLISHED+=("${CHANNEL_NAME}/audio")
 fi
 
 "$FFMPEG_BIN" -nostdin -hide_banner -loglevel "$FFMPEG_LOGLEVEL" \
@@ -438,11 +494,7 @@ fi
   "${OUTPUTS[@]}" \
   < "$FIFO" &
 FFMPEG_PID=$!
-if [[ "$PUBLISH_PROGRAM" == "off" ]]; then
-  ok "ffmpeg pid $FFMPEG_PID -> ${RELAY_RTMP}/${CHANNEL_NAME}/preview (local only, no YouTube leg)"
-else
-  ok "ffmpeg pid $FFMPEG_PID -> ${RELAY_RTMP}/${CHANNEL_NAME} (+ /preview)"
-fi
+ok "ffmpeg pid $FFMPEG_PID -> ${PUBLISHED[*]}"
 
 # Producer death closes the FIFO, so waiting on FFmpeg covers both halves of
 # the supervised unit. Any exit is a fault; the supervisor decides what next.

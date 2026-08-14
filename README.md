@@ -121,19 +121,27 @@ curl -sS -X POST -H "Authorization: Bearer $TOKEN" \
 MediaMTX spawns the YouTube publisher when the channel's program path goes ready — measured at
 207 ms. A channel whose stream key is still empty runs normally and stays off YouTube.
 
-### Internal channels
+### Delivery targets
 
-Set `CHANNEL_PUBLISH_YOUTUBE=false` (or `PUT /api/channels/<ch>/delivery {"youtube": false}`) and
-the channel renders and serves HLS on your network without ever reaching YouTube. Play it at
-`/<ch>/preview/index.m3u8`.
+A channel delivers to any combination of three targets, set with
+`CHANNEL_DELIVERY` or `PUT /api/channels/<ch>/delivery {"targets": [...]}`:
 
-This is structural rather than a blank stream key: the compositor publishes only the local
-rendition, so the relay's program path never goes ready and the publisher hook — the only thing
-that talks to YouTube — has nothing to fire on. Verified with a valid stream key still sitting in
-the channel's `.env`.
+| Target | Served at | What it is |
+|--------|-----------|------------|
+| `youtube` | — | the public broadcast |
+| `video` | `/<ch>/video/index.m3u8` | internal HLS, full size, LAN only |
+| `audio` | `/<ch>/audio/index.m3u8` | internal HLS, audio only, no video encode |
 
-It also costs less than a public channel, because there is no second rendition to preview: one
-encode instead of two, at the channel's own resolution rather than a 360p operator view.
+The operator preview at `/<ch>/preview/index.m3u8` is always published and is
+not a target. The UI lists the URL of every feed a channel actually publishes.
+
+A channel without `youtube` **cannot** reach YouTube even with a stream key
+stored: the compositor never publishes that relay path, so the publisher hook —
+the only thing that talks to YouTube — has nothing to fire on. Verified with a
+valid key still sitting in the channel's `.env`.
+
+Each target is a separate encode, and each one omitted is a scale and an encode
+that never runs. `audio` adds no video branch at all.
 
 Full walkthrough, including verification and the current gaps:
 [docs/quickstart.md](docs/quickstart.md).

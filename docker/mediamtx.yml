@@ -101,5 +101,8 @@ paths:
     runOnReady: /usr/local/bin/publish-youtube.sh
     runOnReadyRestart: yes
   # <channel>/preview — low-resolution operator feed
-  "~^[a-z0-9][a-z0-9-]{0,30}/preview$":
-    # No publisher here. The preview exists for operators and must never reach YouTube.
+  "~^[a-z0-9][a-z0-9-]{0,30}/(preview|video|audio)$":
+    # No publisher hook on any of these. `preview` is the operator feed, `video`
+    # and `audio` are the internal LAN feeds; none of them must ever reach
+    # YouTube, and the only thing that talks to YouTube is runOnReady on the
+    # program path above. Omitting the hook here is what makes that structural.

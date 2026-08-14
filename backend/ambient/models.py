@@ -46,6 +46,18 @@ class Encoder(str, Enum):
     QSV = "h264_qsv"
 
 
+class DeliveryTarget(str, Enum):
+    """Where a channel's output goes. Any combination, at least one.
+
+    The value is also the relay path suffix for the two internal ones, so
+    `video` is served at `<channel>/video/index.m3u8`.
+    """
+
+    YOUTUBE = "youtube"
+    VIDEO = "video"
+    AUDIO = "audio"
+
+
 class ImageOrder(str, Enum):
     SEQUENTIAL = "sequential"
     SHUFFLE = "shuffle"
@@ -385,14 +397,16 @@ class ChannelEnv(EnvModel):
     mount: str = Field(..., alias="CHANNEL_MOUNT", pattern=MOUNT)
     fallback_mount: str = Field(..., alias="CHANNEL_FALLBACK_MOUNT", pattern=MOUNT)
 
-    # An internal channel publishes only its local HLS rendition. The relay's
-    # program path never goes ready, so the YouTube hook cannot fire — that is
-    # structural, not "the stream key happens to be blank", which a paste into
-    # the wrong channel would undo.
-    publish_youtube: bool = Field(True, alias="CHANNEL_PUBLISH_YOUTUBE")
-    # The local HLS rendition. Defaults differ by delivery: a YouTube channel
-    # gets an operator-sized preview, an internal channel gets its full size,
-    # because for it this is the only output there is.
+    # Comma-separated subset of youtube,video,audio. Each one the composer is
+    # not told to publish is a relay path that never goes ready, which is what
+    # makes "this channel cannot reach YouTube" structural rather than a blank
+    # stream key.
+    delivery: str = Field("", alias="CHANNEL_DELIVERY")
+    # Superseded by `delivery`. None means unset, which is not the same as
+    # False: a channel deliberately taken off YouTube must stay off it.
+    publish_youtube: bool | None = Field(None, alias="CHANNEL_PUBLISH_YOUTUBE")
+    # The internal video rendition. Defaults to the channel's own size, because
+    # for a channel delivering internally that feed is the product.
     local_height: int | None = Field(None, alias="CHANNEL_LOCAL_HEIGHT", ge=144, le=2160)
     local_fps: int | None = Field(None, alias="CHANNEL_LOCAL_FPS", ge=1, le=60)
 

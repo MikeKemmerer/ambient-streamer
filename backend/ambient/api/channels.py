@@ -31,6 +31,7 @@ from ..models import (
     MOUNT,
     ChannelConfig,
     ChannelState,
+    DeliveryTarget,
     Encoder,
     Health,
     Resolution,
@@ -59,9 +60,10 @@ class CreateChannel(StrictModel):
     rtmp_url: str = "rtmp://a.rtmp.youtube.com/live2"
     # Write-only. It is never echoed back and never logged.
     stream_key: str = ""
-    # False makes the channel internal: local HLS only, no YouTube leg and no
-    # stream key needed.
-    youtube: bool = True
+    # Where the channel delivers. Anything without `youtube` needs no key.
+    targets: list[DeliveryTarget] = Field(
+        default_factory=lambda: [DeliveryTarget.YOUTUBE], min_length=1
+    )
     visualization: Visualization | None = None
 
 
@@ -94,9 +96,9 @@ class DeliveryBody(StrictModel):
     rtmp_url: str | None = None
     encoder: Encoder | None = None
     fps: int | None = Field(None, ge=1, le=60)
-    # Off makes the channel internal: it publishes only its local HLS rendition
-    # and the relay's YouTube hook has no path to fire on.
-    youtube: bool | None = None
+    # The whole set, replaced at once. At least one target: a channel that
+    # delivers nowhere is a mistake, not a configuration.
+    targets: list[DeliveryTarget] | None = Field(None, min_length=1)
     local_height: int | None = Field(None, ge=144, le=2160)
     local_fps: int | None = Field(None, ge=1, le=60)
     clear_encoder: bool = False
@@ -195,6 +197,7 @@ async def channel_status(
         "liquidsoap_buffer": "ok" if containers.liquidsoap.running else "down",
         # An internal channel has no YouTube leg at all, so "rtmp: disconnected"
         # would read as a fault rather than as the configuration.
+        "delivery": [t.value for t in channel.delivery],
         "youtube": channel.publish_youtube,
         "local": f"{channel.local_width}x{channel.local_height}@{channel.local_fps}",
         # Never a bare default: claiming "disconnected" for a channel nobody
@@ -260,6 +263,7 @@ async def get_channel(name: str, request: Request, state: AppState = Authed) -> 
     # Presence only. The key is a credential and is never echoed back.
     body["has_stream_key"] = bool(channel.env.stream_key.get_secret_value())
     body["hls_url"] = _direct_hls_url(state, name, request)
+    body["feeds"] = _feeds(state, channel, request)
     return body
 
 
@@ -270,13 +274,52 @@ def _direct_hls_url(state: AppState, name: str, request: Request) -> str | None:
     to the compose network, and offering a URL that cannot resolve is worse
     than offering none.
     """
+    return _feed_url(state, name, "preview", request)
+
+
+def _feed_url(state: AppState, name: str, rendition: str, request: Request) -> str | None:
     port = state.workspace.env.hls_publish
     if not port:
         return None
     # The operator's own hostname, not the relay's: it is reachable by definition,
     # because it is what they used to load this page.
     host = request.url.hostname or "127.0.0.1"
-    return f"http://{host}:{port}/{name}/preview/index.m3u8"
+    return f"http://{host}:{port}/{name}/{rendition}/index.m3u8"
+
+
+def _feeds(state: AppState, channel, request: Request) -> list[dict[str, Any]]:
+    """Every HLS rendition this channel actually publishes, with its address.
+
+    Only the ones being published: a URL for a feed that was never started is a
+    support call, not a convenience.
+    """
+    feeds = [
+        {
+            "rendition": "preview",
+            "label": "operator preview",
+            "detail": "640x360@15",
+            "url": _feed_url(state, channel.name, "preview", request),
+        }
+    ]
+    if channel.publish_video:
+        feeds.append(
+            {
+                "rendition": "video",
+                "label": "internal video",
+                "detail": f"{channel.local_width}x{channel.local_height}@{channel.local_fps}",
+                "url": _feed_url(state, channel.name, "video", request),
+            }
+        )
+    if channel.publish_audio:
+        feeds.append(
+            {
+                "rendition": "audio",
+                "label": "internal audio only",
+                "detail": "aac 44.1 kHz",
+                "url": _feed_url(state, channel.name, "audio", request),
+            }
+        )
+    return feeds
 
 
 @router.post("", status_code=201)
@@ -515,7 +558,9 @@ _RTMP_URL = re.compile(r"^rtmps?://[A-Za-z0-9.-]+(?::\d{1,5})?(?:/[A-Za-z0-9._~/
 
 
 @router.put("/{name}/delivery")
-async def set_delivery(name: str, body: DeliveryBody, state: AppState = Authed) -> dict[str, Any]:
+async def set_delivery(
+    name: str, body: DeliveryBody, request: Request, state: AppState = Authed
+) -> dict[str, Any]:
     """Change the ingest settings that only a new container can pick up.
 
     Refused while the channel is running rather than restarting it: these are
@@ -563,13 +608,17 @@ async def set_delivery(name: str, body: DeliveryBody, state: AppState = Authed) 
         values["CHANNEL_FPS"] = str(body.fps)
         changed.append("fps")
 
-    if body.youtube is not None:
-        values["CHANNEL_PUBLISH_YOUTUBE"] = "true" if body.youtube else "false"
-        changed.append("youtube")
+    if body.targets is not None:
+        # Deduplicated in enum order so the file reads the same however the UI
+        # sent it, and the old boolean is cleared so it cannot contradict this.
+        chosen = [t for t in DeliveryTarget if t in set(body.targets)]
+        values["CHANNEL_DELIVERY"] = ",".join(t.value for t in chosen)
+        values["CHANNEL_PUBLISH_YOUTUBE"] = ""
+        changed.append("delivery")
 
-    # Cleared together: the two defaults move as a pair with `youtube`, and a
-    # half-cleared local rendition would keep an operator preview's 15 fps on a
-    # channel that just became its own product.
+    # Cleared together: both default from the channel's own resolution, and a
+    # half-cleared rendition would leave a stale fps on a feed that just
+    # changed size.
     if body.clear_local:
         values["CHANNEL_LOCAL_HEIGHT"] = ""
         values["CHANNEL_LOCAL_FPS"] = ""
@@ -610,11 +659,13 @@ async def set_delivery(name: str, body: DeliveryBody, state: AppState = Authed) 
         "rtmp_url": updated.env.rtmp_url,
         "encoder": updated.encoder.value,
         "fps": updated.fps,
+        "delivery": [t.value for t in updated.delivery],
         "youtube": updated.publish_youtube,
         "local": f"{updated.local_width}x{updated.local_height}@{updated.local_fps}",
         # Raw, so a form can tell an inherited default from an explicit value.
         "local_height_requested": updated.env.local_height or 0,
         "local_fps_requested": updated.env.local_fps or 0,
+        "feeds": _feeds(state, updated, request),
         "detail": "applies on the next start",
     }
 
@@ -680,7 +731,7 @@ def _write_channel_env(directory: Path, body: CreateChannel, mount: str, fallbac
         f"CHANNEL_MEMORY_LIMIT={body.memory_limit or ''}",
         f"CHANNEL_MOUNT={mount}",
         f"CHANNEL_FALLBACK_MOUNT={fallback}",
-        f"CHANNEL_PUBLISH_YOUTUBE={'true' if body.youtube else 'false'}",
+        f"CHANNEL_DELIVERY={','.join(t.value for t in body.targets)}",
         "CHANNEL_LOCAL_HEIGHT=",
         "CHANNEL_LOCAL_FPS=",
     ]

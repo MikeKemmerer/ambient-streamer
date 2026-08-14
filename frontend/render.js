@@ -343,6 +343,24 @@ export function availableRow(path, tree, used, onAdd) {
   ]);
 }
 
+/** One publishable HLS feed and its address, for an external player. */
+export function feedRow(feed, onCopy) {
+  return el('li', { class: 'feed-row' }, [
+    el('span', { class: 'feed-label' }, [
+      el('span', { class: 'feed-name', text: feed.label || feed.rendition }),
+      feed.detail ? el('span', { class: 'feed-detail', text: feed.detail }) : null,
+    ]),
+    el('code', { class: 'stream-url', text: feed.url }),
+    el('button', {
+      class: 'small',
+      type: 'button',
+      text: 'Copy',
+      title: `Copy the ${feed.rendition} URL`,
+      onclick: () => onCopy(feed.url),
+    }),
+  ]);
+}
+
 /**
  * One resolved track, playable. Separate from `pickRow` because this list is
  * not an editor: it is the live playlist as Liquidsoap sees it, and the only

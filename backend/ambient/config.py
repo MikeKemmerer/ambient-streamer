@@ -23,6 +23,7 @@ from .models import (
     ChannelConfig,
     ChannelEnv,
     ColorMode,
+    DeliveryTarget,
     Encoder,
     GlobalEnv,
     ImageOrder,
@@ -33,6 +34,41 @@ from .presets import NEUTRAL_TARGETS, ColorTargets, color_targets
 
 class ConfigError(ValueError):
     """Configuration is invalid; the channel must not start."""
+
+
+def parse_delivery(raw: str) -> list[DeliveryTarget]:
+    """Parse `CHANNEL_DELIVERY`, in a stable order and without duplicates."""
+    seen: list[DeliveryTarget] = []
+    for token in raw.replace(";", ",").split(","):
+        name = token.strip().lower()
+        if not name:
+            continue
+        try:
+            target = DeliveryTarget(name)
+        except ValueError as exc:
+            allowed = ", ".join(t.value for t in DeliveryTarget)
+            raise ConfigError(
+                f"CHANNEL_DELIVERY: {token.strip()!r} is not a delivery target; "
+                f"expected any of {allowed}"
+            ) from exc
+        if target not in seen:
+            seen.append(target)
+    return [t for t in DeliveryTarget if t in seen]
+
+
+def resolve_delivery(env: ChannelEnv) -> list[DeliveryTarget]:
+    """`CHANNEL_DELIVERY` wins; the old boolean is honoured when it is absent.
+
+    A channel deliberately taken off YouTube must not be put back on it by an
+    upgrade, so an explicit `CHANNEL_PUBLISH_YOUTUBE=false` maps to the internal
+    video feed rather than to the default.
+    """
+    targets = parse_delivery(env.delivery)
+    if targets:
+        return targets
+    if env.publish_youtube is False:
+        return [DeliveryTarget.VIDEO]
+    return [DeliveryTarget.YOUTUBE]
 
 
 def parse_env_file(path: Path) -> dict[str, str]:
@@ -222,10 +258,10 @@ class ResolvedChannel:
     audio: SelectionResult
     images: SelectionResult
     bumpers: SelectionResult
-    publish_youtube: bool = True
-    local_width: int = 640
-    local_height: int = 360
-    local_fps: int = 15
+    delivery: list[DeliveryTarget] = field(default_factory=lambda: [DeliveryTarget.YOUTUBE])
+    local_width: int = 1280
+    local_height: int = 720
+    local_fps: int = 30
     projected_cores: float = 0.0
     cores_breakdown: dict[str, float] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
@@ -245,6 +281,18 @@ class ResolvedChannel:
     @property
     def shuffle_images(self) -> bool:
         return self.config.images.order is ImageOrder.SHUFFLE
+
+    @property
+    def publish_youtube(self) -> bool:
+        return DeliveryTarget.YOUTUBE in self.delivery
+
+    @property
+    def publish_video(self) -> bool:
+        return DeliveryTarget.VIDEO in self.delivery
+
+    @property
+    def publish_audio(self) -> bool:
+        return DeliveryTarget.AUDIO in self.delivery
 
     @property
     def local_only(self) -> bool:
@@ -317,14 +365,18 @@ def load_channel(
     width, height = geometry(resolution)
 
     warnings: list[str] = []
-    if env.publish_youtube and not env.stream_key.get_secret_value():
+    try:
+        delivery = resolve_delivery(env)
+    except ConfigError as exc:
+        raise ConfigError(f"channel {name!r}: {exc}") from exc
+    if DeliveryTarget.YOUTUBE in delivery and not env.stream_key.get_secret_value():
         warnings.append(f"channel {name!r}: YOUTUBE_STREAM_KEY is empty; it cannot publish")
 
-    # A YouTube channel's second rendition is an operator preview and stays
-    # small. An internal channel has no second rendition — the local one *is*
-    # the stream — so it defaults to the channel's own size.
-    local_height = env.local_height or (360 if env.publish_youtube else height)
-    local_fps = env.local_fps or (15 if env.publish_youtube else fps)
+    # The internal video feed is the product for a channel delivering on the
+    # network, so it defaults to the channel's own size rather than to an
+    # operator-sized preview.
+    local_height = env.local_height or height
+    local_fps = env.local_fps or fps
     # 16:9, and even: an odd dimension is not encodable as yuv420p.
     local_width = (local_height * 16 // 9 + 1) // 2 * 2
 
@@ -410,7 +462,7 @@ def load_channel(
         audio=audio,
         images=images,
         bumpers=bumpers,
-        publish_youtube=env.publish_youtube,
+        delivery=delivery,
         local_width=local_width,
         local_height=local_height,
         local_fps=local_fps,

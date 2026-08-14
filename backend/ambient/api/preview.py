@@ -37,6 +37,12 @@ _SEGMENT = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 # `..%2f..%2fetc%2fpasswd` arrives as ordinary path components.
 _RESERVED = {".", ".."}
 
+# The relay paths that carry no YouTube publisher hook, and so are safe to
+# proxy. The channel's own program path is deliberately absent: proxying it
+# would hand out the broadcast feed, and it is the one path mediamtx attaches
+# the publisher to. Each gets its own literal route below.
+RENDITIONS = ("preview", "video", "audio")
+
 _CONTENT_TYPES = {
     ".m3u8": "application/vnd.apple.mpegurl",
     ".mp4": "video/mp4",
@@ -73,7 +79,28 @@ def _fetch(url: str) -> tuple[int, bytes, str]:
 
 @router.get("/{channel}/preview/{path:path}")
 async def preview_asset(channel: str, path: str, state: AppState = Authed) -> Response:
-    """Serve one playlist or segment of a channel's preview rendition."""
+    """The operator preview, present on every channel."""
+    return await _serve(state, channel, "preview", path)
+
+
+@router.get("/{channel}/video/{path:path}")
+async def video_asset(channel: str, path: str, state: AppState = Authed) -> Response:
+    return await _serve(state, channel, "video", path)
+
+
+@router.get("/{channel}/audio/{path:path}")
+async def audio_asset(channel: str, path: str, state: AppState = Authed) -> Response:
+    return await _serve(state, channel, "audio", path)
+
+
+async def _serve(state: AppState, channel: str, rendition: str, path: str) -> Response:
+    """Serve one playlist or segment of a channel's preview or internal feed.
+
+    The rendition is a literal in each route rather than a path parameter: a
+    `{rendition}` wildcard here matches any three-segment URL and shadows the
+    rest of the API, which was measured turning `/api/channels/<x>` into a
+    request for channel `api`.
+    """
     # Resolving the channel is the authorization check: an unknown name is a 404
     # before any outbound request is made.
     state.channel(channel, resolve_media=False)
@@ -85,7 +112,7 @@ async def preview_asset(channel: str, path: str, state: AppState = Authed) -> Re
         raise ApiError(400, "invalid_preview_path", f"{path!r} is not a preview asset")
 
     base = state.workspace.ambient.relay.hls.rstrip("/")
-    url = f"{base}/{urllib.parse.quote(channel)}/preview/" + "/".join(
+    url = f"{base}/{urllib.parse.quote(channel)}/{rendition}/" + "/".join(
         urllib.parse.quote(part) for part in parts
     )
 

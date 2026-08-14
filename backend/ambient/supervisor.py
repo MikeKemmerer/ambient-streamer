@@ -148,14 +148,19 @@ def compose_context(workspace: Workspace, channel: ResolvedChannel) -> dict[str,
         "width": str(channel.width),
         "height": str(channel.height),
         "fps": str(channel.fps),
-        # Off means the composer publishes only the local rendition, so the
-        # relay's program path never goes ready and its YouTube hook never runs.
+        # Each `off` is a relay path the composer never publishes, so that path
+        # never goes ready. The YouTube hook hangs on the program path alone.
         "publish_program": "on" if channel.publish_youtube else "off",
-        # Nothing set these before, so every channel's local rendition was
-        # pinned to the entrypoint's 640x360@15 whatever the config said.
-        "preview_width": str(channel.local_width),
-        "preview_height": str(channel.local_height),
-        "preview_fps": str(channel.local_fps),
+        "publish_video": "on" if channel.publish_video else "off",
+        "publish_audio": "on" if channel.publish_audio else "off",
+        # The operator preview, always published and deliberately small.
+        "preview_width": "640",
+        "preview_height": "360",
+        "preview_fps": "15",
+        # The internal video feed, which is a product rather than a preview.
+        "local_width": str(channel.local_width),
+        "local_height": str(channel.local_height),
+        "local_fps": str(channel.local_fps),
         # Without the mode the producer cannot tell a manual color from a
         # derived one and overwrites an operator's color at the next slide.
         "color_mode": channel.color_mode,
