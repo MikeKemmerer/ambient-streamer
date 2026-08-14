@@ -327,6 +327,23 @@ rule. Nothing records video: MediaMTX has `record: no` and HLS segments are held
 
 Only the last two rows touch the YouTube broadcast. Prefer everything above them.
 
+### `compose up -d <service>` also reconciles its dependencies
+
+Naming one service does not scope the change to it. Compose brings that
+service's `depends_on` into line with the file too, so an unrelated edit
+elsewhere in `docker-compose.yml` gets applied at the same time.
+
+This has already cost an outage: moving the `8888` mapping off `mediamtx` and
+then running `compose up -d backend` recreated `mediamtx` **without** its
+published port. Nothing was listening on the LAN, and the only symptom was a
+phone that could not connect.
+
+```bash
+docker compose -p ambient up -d --no-deps <service>
+docker port ambient-<service>      # after any ports: edit
+ss -ltn | grep <port>
+```
+
 ### Do not build images on a host that is streaming
 
 `docker build` is not nice'd and will take every core it can. Measured on the 7-core host: a
