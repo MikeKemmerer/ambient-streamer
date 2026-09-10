@@ -15,7 +15,7 @@
 # Pin BASE by digest in production. `python:3.12-slim-bookworm` is a moving tag.
 #   docker build --build-arg BASE=python:3.12-slim-bookworm@sha256:<digest> ...
 ARG BASE=python:3.12-slim-bookworm
-ARG DOCKER_CLI_IMAGE=docker:28.1.1-cli
+ARG DOCKER_CLI_IMAGE=docker:29.8.0-cli
 
 FROM ${DOCKER_CLI_IMAGE} AS dockercli
 
@@ -41,14 +41,10 @@ RUN set -eux; \
     docker --version; \
     docker compose version --short
 
-# Dependencies first so a backend source edit does not re-resolve the wheel set.
-COPY backend/pyproject.toml /tmp/backend/pyproject.toml
-RUN set -eux; \
-    python -c "import tomllib,pathlib,sys; \
-d=tomllib.loads(pathlib.Path('/tmp/backend/pyproject.toml').read_text()); \
-sys.stdout.write('\n'.join(d['project']['dependencies']))" > /tmp/requirements.txt; \
-    cat /tmp/requirements.txt; \
-    pip install --no-cache-dir -r /tmp/requirements.txt
+# Dependencies first so a backend source edit does not reinstall the wheel set.
+COPY backend/pyproject.toml backend/requirements.lock /tmp/backend/
+RUN pip install --no-cache-dir --require-hashes \
+        -r /tmp/backend/requirements.lock
 
 # No pyzmq. Runtime ZMQ commands are delivered by `docker exec` into the
 # composer, which ships python3-zmq; zmqctl imports it lazily and the message
@@ -56,8 +52,8 @@ sys.stdout.write('\n'.join(d['project']['dependencies']))" > /tmp/requirements.t
 COPY backend/pyproject.toml /src/backend/pyproject.toml
 COPY backend/ambient /src/backend/ambient
 RUN set -eux; \
-    pip install --no-cache-dir --no-deps /src/backend; \
-    rm -rf /src /tmp/backend /tmp/requirements.txt; \
+    pip install --no-cache-dir --no-build-isolation --no-deps /src/backend; \
+    rm -rf /src /tmp/backend; \
     python -c "import ambient.main, ambient.supervisor, ambient.watchdog, ambient.scheduler"
 
 # Baked, not bind-mounted: a release artifact should serve its own UI. The repo
