@@ -139,7 +139,7 @@ stop the run.
 ### Without the API
 
 There is **no CLI for extraction** — `ambient.compile` does not extract profiles, and no script
-wraps it. Use the module directly, in the virtualenv where `pip install -e backend` was run:
+wraps it. Use the module directly in the virtualenv where the backend package is installed:
 
 ```bash
 python - <<'PY'

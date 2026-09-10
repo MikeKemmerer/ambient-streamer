@@ -158,9 +158,9 @@ stay editable on the host. Icecast runs as `PUID:PGID` from the start.
 |-------|--------|---------|
 | `libretime/icecast:2.4.4` | pulled | tag-pinned |
 | `ambient-mediamtx:dev` | built `FROM bluenviron/mediamtx:1.9.3-ffmpeg` | **version-pinned and load-bearing** |
-| `ambient-backend:dev` | built `FROM python:3.12-slim-bookworm`, Docker CLI copied from `docker:28.1.1-cli` | pin base by digest in production |
+| `ambient-backend:dev` | built `FROM python:3.12-slim-bookworm`, Docker CLI copied from `docker:29.8.0-cli` | pin base by digest in production |
 | `ambient-composer:dev` | built `FROM ubuntu:24.04` | pin by digest in production |
-| `ambient-liquidsoap:dev` | built | pin by digest in production |
+| `ambient-liquidsoap:dev` | built `FROM savonet/liquidsoap:v2.4.5` | revalidate S1 failover before deploying |
 
 **MediaMTX refuses to start on an unknown config key**, so bumping the relay image without
 re-reading its release notes turns a routine upgrade into an outage. 1.9.3 is what
@@ -181,6 +181,32 @@ docker build --build-arg BASE=ubuntu:24.04@sha256:<digest> \
 
 Override the image names with `AMBIENT_MEDIAMTX_IMAGE`, `AMBIENT_BACKEND_IMAGE`, or per-channel
 via the template's `image_tag`.
+
+### Pending relay migrations
+
+MediaMTX 1.21.0 and Icecast 2.5.0 are intentionally not routine dependency bumps. Replacing
+either global relay disconnects active clients, and the current measurements belong to
+MediaMTX 1.9.3 and Icecast 2.4.4.
+
+Before moving MediaMTX to 1.21.0:
+
+- migrate `hlsAllowOrigin` to `hlsAllowOrigins` and `runOnReady*` to `runOnAvailable*`;
+- make backend status handling accept `online`/`available` without depending on deprecated
+  `ready` fields, and update restart-gap log parsing;
+- validate the checked-in config with the target image, then exercise RTMP publishing, HLS
+  playback, the YouTube publisher hook, API status, and publisher override;
+- prove whether replacing the relay leaves every composer FFmpeg PID running, and measure the
+  resulting YouTube ingest-session gap before production deployment.
+
+Before moving Icecast to `libretime/icecast:2.5.0-debian`:
+
+- remove the rejected `icecast -n` option and replace numeric `fallback-override` with `all`;
+- smoke-test the rendered config, arbitrary PUID/PGID startup, source authentication, fallback
+  MP3 format, and SIGHUP mount reload against the target image;
+- repeat the S1 source-stop/restart test under representative channel load and require 0 s
+  compositor-output interruption, 0.00% captured silence, and unchanged compositor PIDs;
+- measure the separate outage caused by replacing the single global Icecast container. The
+  current topology cannot describe that image cutover itself as zero-gap.
 
 ---
 
@@ -412,13 +438,14 @@ Supported, and useful for development:
 
 ```bash
 python3 -m venv .venv && . .venv/bin/activate
-pip install -e backend
+pip install --require-hashes -r backend/requirements.lock
+pip install --no-build-isolation --no-deps -e backend
 export AMBIENT_API_TOKEN=<from .env>
 ambient-backend --repo-root /srv/ambient
 ```
 
 The same requirement applies: the `docker` CLI with the Compose v2 plugin must be on its
-`PATH`. `pip install -e backend` also provides `ambient-compile`.
+`PATH`. Installing the local package also provides `ambient-compile`.
 
 A systemd unit, which this repository does not ship:
 

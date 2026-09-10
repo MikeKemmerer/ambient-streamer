@@ -2,8 +2,8 @@
 #
 # Pinned deliberately. Liquidsoap's script language changes between minor
 # versions and a 24/7 service that silently picks up a new interpreter is a
-# liability. v2.4.2 is the build spike S1 measured against.
-FROM savonet/liquidsoap:v2.4.2
+# liability. S1 measured v2.4.2; revalidate its failover result before deploying.
+FROM savonet/liquidsoap:v2.4.5
 
 USER root
 

@@ -285,8 +285,9 @@ curl -sS -X POST -H "Authorization: Bearer $TOKEN" \
   http://127.0.0.1:8090/api/channels/lofi/start
 ```
 
-To run the compiler on the host instead, `pip install -e backend` in a virtualenv gives you
-`ambient-compile` and `python -m ambient.compile`.
+To run the compiler on the host instead, install `backend/requirements.lock` with
+`--require-hashes`, then install `backend` with `--no-build-isolation --no-deps -e`. This gives
+you `ambient-compile` and `python -m ambient.compile` without resolving a new dependency set.
 
 `compile` writes three files into `channels/lofi/`:
 

@@ -55,7 +55,7 @@ test: ## Run the backend test suite
 
 lint: ## ruff on backend, bash -n and shellcheck on every script
 	@if command -v ruff >/dev/null 2>&1; then \
-		ruff check --target-version py310 backend; \
+		ruff check --target-version py310 --select E4,E7,E9,F backend; \
 	else \
 		echo "ruff not installed — skipped here, CI still runs it"; \
 	fi
