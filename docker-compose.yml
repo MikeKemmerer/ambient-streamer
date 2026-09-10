@@ -7,9 +7,9 @@
 #   scripts/install.sh            <- first, once. Writes .env and its secrets.
 #   docker compose -p ambient up -d
 #
-# Nothing here is published to the LAN except the backend. MediaMTX (RTMP + HLS)
-# and Icecast stay on the internal network; the backend proxies the HLS preview.
-# Keeping the relay and the ZMQ control sockets off the LAN is the point.
+# The backend and HLS directory publish to loopback by default. MediaMTX RTMP,
+# its control API, and Icecast stay on the internal network. Keeping the relay
+# publishing surface and the ZMQ control sockets off the LAN is the point.
 
 name: ambient
 
