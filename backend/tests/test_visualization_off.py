@@ -8,8 +8,6 @@ way so switching it back on restores the same look.
 
 from __future__ import annotations
 
-import pytest
-
 from ambient import plugins as plugin_registry
 from ambient.models import ChannelConfig
 from ambient.supervisor import compose_context
