@@ -173,6 +173,38 @@ class ColorTargets:
     brightness: float
 
 
+@dataclass(frozen=True)
+class ColorRamp:
+    """A backend-issued transition, retained so a later change can interrupt smoothly."""
+
+    start: ColorTargets
+    target: ColorTargets
+    start_rotation: float
+    target_rotation: float
+    started_at: float
+    seconds: float
+    created_at: float
+
+    def sample(self, stream_time: float) -> tuple[ColorTargets, float]:
+        progress = (
+            1.0
+            if self.seconds <= 0.0
+            else max(0.0, min(1.0, (stream_time - self.started_at) / self.seconds))
+        )
+
+        def between(start: float, target: float) -> float:
+            return start + (target - start) * progress
+
+        return (
+            ColorTargets(
+                hue_degrees=between(self.start.hue_degrees, self.target.hue_degrees),
+                saturation=between(self.start.saturation, self.target.saturation),
+                brightness=between(self.start.brightness, self.target.brightness),
+            ),
+            between(self.start_rotation, self.target_rotation),
+        )
+
+
 # What an untouched filtergraph renders at, and where a ramp starts from.
 NEUTRAL_TARGETS = ColorTargets(hue_degrees=0.0, saturation=1.0, brightness=0.0)
 
@@ -188,9 +220,9 @@ def color_targets(accent: str, tint: str) -> ColorTargets:
     )
 
 
-def _ramp(start: float, end: float, seconds: float, at: float) -> str:
+def _ramp(start: float, end: float, seconds: float, at: float | None) -> str:
     """One self-animating expression: `t` is stream time, `at` is now."""
-    if seconds <= 0 or abs(end - start) < 1e-6:
+    if seconds <= 0 or at is None or abs(end - start) < 1e-6:
         return f"{end:g}"
     return f"{start:g}+({end - start:g})*min(max((t-{at:g})/{seconds:g},0),1)"
 
@@ -200,6 +232,15 @@ def hue_degrees(color: str) -> float:
     red, green, blue = parse_hex(color)
     hue, _lightness, _saturation = colorsys.rgb_to_hls(red, green, blue)
     return hue * 360.0
+
+
+def automatic_color_targets(accent: str, brightness: float, warmth: float) -> ColorTargets:
+    """Map a slide profile to the filter values used by automatic mode."""
+    return ColorTargets(
+        hue_degrees=round(hue_degrees(accent) - 180.0, 2),
+        saturation=round(max(0.0, min(3.0, 1.0 + 0.25 * warmth)), 3),
+        brightness=round(max(-1.0, min(1.0, (brightness - 0.5) * 0.4)), 3),
+    )
 
 
 def viz_rotation(baked: str, wanted: str) -> float:
@@ -212,21 +253,37 @@ def viz_rotation(baked: str, wanted: str) -> float:
     return round((delta + 180.0) % 360.0 - 180.0, 2)
 
 
+def nearest_rotation(start: float, target: float) -> float:
+    """Equivalent hue target that takes the shortest path from `start`."""
+    start = canonical_rotation(start)
+    target = canonical_rotation(target)
+    delta = (target - start + 180.0) % 360.0 - 180.0
+    return start + delta
+
+
+def canonical_rotation(value: float) -> float:
+    """The visually equivalent hue rotation in the graph's central range."""
+    return (value + 180.0) % 360.0 - 180.0
+
+
 def color_messages(
     accent: str,
     tint: str,
     *,
     transition_seconds: float = 0.0,
-    stream_time: float = 0.0,
+    stream_time: float | None = None,
     current: ColorTargets | None = None,
+    current_accent: str = "",
+    current_viz_rotation: float | None = None,
     baked_accent: str = "",
+    target: ColorTargets | None = None,
 ) -> list[str]:
     """Validated `TARGET COMMAND ARG` messages for a color change.
 
     Every message goes through `zmqctl.build_message`: a malformed one aborts
     FFmpeg with SIGABRT.
     """
-    target = color_targets(accent, tint)
+    target = target or color_targets(accent, tint)
     start = current or NEUTRAL_TARGETS
     pairs = [
         (EQ_TARGET, "saturation", start.saturation, target.saturation),
@@ -236,7 +293,17 @@ def color_messages(
         # The accent belongs to the visualization. Rotating the whole composite
         # by it as well would turn those bars straight back off-target: measured
         # green -> red on hue@viz, then hue@hue rotated the result to cyan.
-        pairs.append((VIZ_TARGET, "h", 0.0, viz_rotation(baked_accent, accent)))
+        start_rotation = current_viz_rotation
+        if start_rotation is None:
+            start_rotation = (
+                viz_rotation(baked_accent, current_accent) if current_accent else 0.0
+            )
+        target_rotation = nearest_rotation(
+            start_rotation, viz_rotation(baked_accent, accent)
+        )
+        pairs.append(
+            (VIZ_TARGET, "h", start_rotation, target_rotation)
+        )
     else:
         pairs.insert(0, (HUE_TARGET, "h", start.hue_degrees, target.hue_degrees))
     messages: list[str] = []
@@ -277,7 +344,14 @@ class PresetApplication:
 
 
 def apply_preset(
-    preset: Preset, config: ChannelConfig, *, stream_time: float = 0.0
+    preset: Preset,
+    config: ChannelConfig,
+    *,
+    stream_time: float | None = None,
+    current: ColorTargets | None = None,
+    current_accent: str = "",
+    current_viz_rotation: float | None = None,
+    baked_accent: str = "",
 ) -> PresetApplication:
     """Merge a preset over a channel config. The preset wins where it sets."""
     data = config.model_dump()
@@ -314,6 +388,9 @@ def apply_preset(
         application.changed.append("audio.crossfade_seconds")
 
     color = Color.model_validate(data["color"])
+    if current is None and color.mode is ColorMode.MANUAL:
+        current = color_targets(color.manual.accent, color.manual.tint)
+        current_accent = color.manual.accent
     if preset.color is not None:
         merged = color.model_dump()
         if preset.color.mode is not None:
@@ -333,6 +410,10 @@ def apply_preset(
                 color.manual.tint,
                 transition_seconds=color.transition_seconds,
                 stream_time=stream_time,
+                current=current,
+                current_accent=current_accent,
+                current_viz_rotation=current_viz_rotation,
+                baked_accent=baked_accent,
             )
         )
     application.messages.extend(effect_messages(preset.effects))
@@ -345,15 +426,19 @@ def apply_preset(
 __all__ = [
     "HEX_COLOR",
     "ColorTargets",
+    "ColorRamp",
     "NotInHotSet",
     "Preset",
     "PresetApplication",
     "PresetError",
     "apply_preset",
+    "automatic_color_targets",
+    "canonical_rotation",
     "color_messages",
     "color_targets",
     "effect_messages",
     "get_preset",
     "load_preset",
     "load_registry",
+    "nearest_rotation",
 ]

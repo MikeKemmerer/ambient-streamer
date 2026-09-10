@@ -109,6 +109,79 @@ def test_an_unwritable_position_never_stops_the_broadcast(slideshow, tmp_path) -
     slideshow.write_position("", "/media/a.jpg")
 
 
+def test_automatic_colors_fade_from_the_previous_slide(slideshow) -> None:
+    sender = slideshow.ColorSender.__new__(slideshow.ColorSender)
+    sender.transition = 2.0
+    sender.enabled = True
+    sender.baked_accent = "#4FC3F7"
+    sender.brightness = 0.0
+    sender.saturation = 1.0
+    sender.viz_hue = 0.0
+    sender.ramp_start = 0.0
+    sender.start_brightness = 0.0
+    sender.start_saturation = 1.0
+    sender.start_viz_hue = 0.0
+    sender.queue = slideshow.queue.Queue(maxsize=1)
+
+    sender.apply({"accent": "#FF8800", "brightness": 0.75, "warmth": 0.4}, 10.0)
+    first = sender.queue.get_nowait()
+    sender.apply({"accent": "#00FF66", "brightness": 0.25, "warmth": -0.4}, 20.0)
+    second = sender.queue.get_nowait()
+    sender.apply({"accent": "#FF00AA", "brightness": 1.0, "warmth": 0.0}, 21.0)
+    interrupted = sender.queue.get_nowait()
+
+    assert any("eq@eq brightness (0.0000+(0.1000)" in message for message in first)
+    assert any("hue@viz h (0.0000+(" in message for message in first)
+    assert all("hue@hue" not in message for message in first + second)
+    assert any("eq@eq brightness (0.1000+(-0.2000)" in message for message in second)
+    assert any("eq@eq saturation (1.1000+(-0.2000)" in message for message in second)
+    assert any("hue@viz h" in message and "(t-20.000)" in message for message in second)
+    assert any("eq@eq brightness (0.0000+(0.2000)" in message for message in interrupted)
+    assert any("eq@eq saturation (1.0000+(0.0000)" in message for message in interrupted)
+    assert any("hue@viz h" in message and "(t-21.000)" in message for message in interrupted)
+
+
+def test_adopting_a_backend_color_queues_no_duplicate_command(slideshow) -> None:
+    sender = slideshow.ColorSender.__new__(slideshow.ColorSender)
+    sender.baked_accent = "#4FC3F7"
+    sender.brightness = 0.0
+    sender.saturation = 1.0
+    sender.viz_hue = 0.0
+    sender.ramp_start = 0.0
+    sender.start_brightness = 0.0
+    sender.start_saturation = 1.0
+    sender.start_viz_hue = 0.0
+    sender.queue = slideshow.queue.Queue(maxsize=1)
+
+    sender.adopt({"accent": "#FF8800", "brightness": 0.75, "warmth": 0.4})
+
+    assert sender.queue.empty()
+    assert sender.brightness == pytest.approx(0.1)
+    assert sender.saturation == pytest.approx(1.1)
+    assert sender.viz_hue != 0.0
+
+
+def test_automatic_color_skips_viz_hue_when_the_branch_is_absent(slideshow) -> None:
+    sender = slideshow.ColorSender.__new__(slideshow.ColorSender)
+    sender.transition = 2.0
+    sender.enabled = True
+    sender.baked_accent = ""
+    sender.brightness = 0.0
+    sender.saturation = 1.0
+    sender.viz_hue = 0.0
+    sender.ramp_start = 0.0
+    sender.start_brightness = 0.0
+    sender.start_saturation = 1.0
+    sender.start_viz_hue = 0.0
+    sender.queue = slideshow.queue.Queue(maxsize=1)
+
+    sender.apply({"accent": "#FF8800", "brightness": 0.75, "warmth": 0.4}, 10.0)
+
+    messages = sender.queue.get_nowait()
+    assert len(messages) == 2
+    assert all(message.startswith("eq@eq ") for message in messages)
+
+
 def test_it_resumes_within_a_shuffled_order_too(slideshow, tmp_path) -> None:
     position = tmp_path / "slide-position"
     position.write_text("/media/c.jpg", encoding="utf-8")

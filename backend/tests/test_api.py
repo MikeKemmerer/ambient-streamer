@@ -423,9 +423,81 @@ def test_setting_color_persists_and_emits_validated_commands(api, repo: Path) ->
     assert float(context["color_init_brightness"]) == targets.brightness
 
 
-def test_switching_back_to_automatic_reapplies_the_current_slide(api, repo: Path) -> None:
-    """A one-image channel may never see another slide change."""
+def test_a_second_manual_color_fades_from_the_first(api, monkeypatch) -> None:
+    from ambient.api import looks
+
     client, state = api
+    events = []
+
+    async def send(_state, _name, _messages):
+        events.append("send")
+        return True
+
+    monkeypatch.setattr(looks, "_baked_accent", lambda _state, _name: "#4FC3F7")
+    monkeypatch.setattr(looks, "_send", send)
+    monkeypatch.setattr(
+        looks,
+        "_publish_color_mode",
+        lambda _state, _name, mode: events.append(f"publish:{mode.value}"),
+    )
+    state.supervisor.runner.files["lofi-composer:/run/ambient/lofi/progress"] = (
+        "out_time_us=10000000\nspeed=1.000x\nprogress=continue\n"
+    )
+    first = {"accent": "#4FC3F7", "tint": "#0B2A3A"}
+    second = {"accent": "#FF8800", "tint": "#101820"}
+    client.put(
+        "/api/channels/lofi/color",
+        headers=AUTH,
+        json={"mode": "manual", "manual": first, "transition_seconds": 4.0},
+    )
+    assert events == ["publish:manual", "send"]
+    events.clear()
+    state.supervisor.runner.files["lofi-composer:/run/ambient/lofi/progress"] = (
+        "out_time_us=12000000\nspeed=1.000x\nprogress=continue\n"
+    )
+
+    response = client.put(
+        "/api/channels/lofi/color", headers=AUTH, json={"manual": second}
+    )
+
+    assert response.status_code == 200
+    first_target = color_targets(first["accent"], first["tint"])
+    midpoint_saturation = (1.0 + first_target.saturation) / 2.0
+    midpoint_brightness = first_target.brightness / 2.0
+    commands = response.json()["commands"]
+    assert any(f"saturation {midpoint_saturation:g}+(" in command for command in commands)
+    assert any(f"brightness {midpoint_brightness:g}+(" in command for command in commands)
+    assert any("hue@viz h 0+(" in command for command in commands)
+    assert all("(t-12)" in command for command in commands)
+    assert events == ["send"]
+
+
+def test_switching_back_to_automatic_reapplies_the_current_slide(
+    api, repo: Path, monkeypatch
+) -> None:
+    """A one-image channel may never see another slide change."""
+    from ambient.api import looks
+
+    client, state = api
+    events = []
+
+    async def send(_state, _name, _messages):
+        events.append("send")
+        return True
+
+    monkeypatch.setattr(looks, "_send", send)
+    monkeypatch.setattr(
+        looks,
+        "_publish_color_mode",
+        lambda _state, _name, mode: events.append(f"publish:{mode.value}"),
+    )
+    monkeypatch.setattr(
+        looks,
+        "_schedule_color_mode",
+        lambda _state, _name, mode, delay: events.append(
+            f"schedule:{mode.value}:{delay:g}"
+        ),
+    )
     slide = repo / "channels" / "lofi" / "images" / "slide.jpeg"
     write_profile(
         ColorProfile(
@@ -449,6 +521,7 @@ def test_switching_back_to_automatic_reapplies_the_current_slide(api, repo: Path
         headers=AUTH,
         json={"mode": "manual", "manual": {"accent": "#4FC3F7", "tint": "#0B2A3A"}},
     )
+    events.clear()
 
     response = client.put("/api/channels/lofi/color", headers=AUTH, json={"mode": "automatic"})
     assert response.status_code == 200
@@ -457,6 +530,7 @@ def test_switching_back_to_automatic_reapplies_the_current_slide(api, repo: Path
     assert "#8FD6A8" in body["detail"]
     config = yaml.safe_load((repo / "channels" / "lofi" / "config.yaml").read_text("utf-8"))
     assert config["color"]["mode"] == "automatic"
+    assert events == ["send", "schedule:automatic:2"]
 
 
 def test_switching_to_automatic_without_a_profile_invents_no_color(api) -> None:

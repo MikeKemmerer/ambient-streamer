@@ -416,6 +416,8 @@ ok "color: ${COLOR_MODE} (composite hue=${INIT_HUE} saturation=${INIT_SATURATION
 # only long-lived Python process here, so it merges Liquidsoap's track state
 # and the active plugin into one file for the control plane. See nowstate.py.
 [[ -p "$FIFO" ]] || mkfifo "$FIFO"
+PRODUCER_BAKED_ACCENT="$ACCENT"
+[[ "$VISUALIZATION" == "off" ]] && PRODUCER_BAKED_ACCENT=""
 CHANNEL_NAME="$CHANNEL_NAME" \
 RUN_DIR="$RUN_DIR" \
 NOW_FILE="$NOW_FILE" \
@@ -427,6 +429,7 @@ LIQ_TELNET_PORT="$LIQ_TELNET_PORT" \
   --width "$WIDTH" --height "$HEIGHT" --fps "$PRODUCER_FPS" \
   --zmq-endpoint "tcp://${ZMQ_BIND_HOST}:${ZMQ_BIND_PORT}" \
   --color-mode "$COLOR_MODE" \
+  --baked-accent "$PRODUCER_BAKED_ACCENT" \
   > "$FIFO" &
 PRODUCER_PID=$!
 ok "producer pid $PRODUCER_PID at ${PRODUCER_FPS} fps, ${WIDTH}x${HEIGHT}"

@@ -51,7 +51,7 @@ from .config import (
 )
 from .events import EventHub
 from .media import MediaError
-from .presets import PresetError
+from .presets import ColorRamp, PresetError
 from .scheduler import ChannelSchedule, Scheduler
 from .supervisor import ChannelBusy, Supervisor, SupervisorError
 from .watchdog import Watchdog
@@ -98,6 +98,8 @@ class AppState:
     bind_address: str = DEFAULT_BIND_ADDRESS
     started_at: float = field(default_factory=time.time)
     cpu: dict[str, float] = field(default_factory=dict)
+    color_ramps: dict[str, ColorRamp] = field(default_factory=dict)
+    color_mode_tasks: dict[str, asyncio.Task[None]] = field(default_factory=dict)
     relay_blocked_until: float = 0.0
 
     # ------------------------------------------------------------ workspace

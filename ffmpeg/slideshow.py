@@ -173,6 +173,25 @@ def hex_to_hue(value: str) -> Optional[float]:
     return hue
 
 
+def viz_rotation(baked: str, wanted: str) -> Optional[float]:
+    baked_hue = hex_to_hue(baked)
+    wanted_hue = hex_to_hue(wanted)
+    if baked_hue is None or wanted_hue is None:
+        return None
+    return round((wanted_hue - baked_hue + 180.0) % 360.0 - 180.0, 2)
+
+
+def nearest_rotation(start: float, target: float) -> float:
+    start = canonical_rotation(start)
+    target = canonical_rotation(target)
+    delta = (target - start + 180.0) % 360.0 - 180.0
+    return start + delta
+
+
+def canonical_rotation(value: float) -> float:
+    return (value + 180.0) % 360.0 - 180.0
+
+
 def clamp(value: float, low: float, high: float) -> float:
     return low if value < low else high if value > high else value
 
@@ -273,10 +292,19 @@ class ColorSender:
     never stall frame production.
     """
 
-    def __init__(self, endpoint: str, transition: float, enabled: bool) -> None:
+    def __init__(self, endpoint: str, transition: float, enabled: bool,
+                 baked_accent: str = "") -> None:
         self.endpoint = endpoint
         self.transition = max(0.0, transition)
         self.enabled = enabled
+        self.baked_accent = baked_accent
+        self.brightness = 0.0
+        self.saturation = 1.0
+        self.viz_hue = 0.0
+        self.ramp_start = 0.0
+        self.start_brightness = self.brightness
+        self.start_saturation = self.saturation
+        self.start_viz_hue = self.viz_hue
         self.queue: "queue.Queue[list[str]]" = queue.Queue(maxsize=1)
         self.thread = threading.Thread(target=self._run, daemon=True)
         self.thread.start()
@@ -330,24 +358,73 @@ class ColorSender:
                 f"*min(max((t-{t0:.3f})/{self.transition:.3f},0),1))")
         return f"{target} {param} {expr}"
 
+    def targets(self, profile: dict, current_hue: Optional[float] = None
+                ) -> tuple[float, float, float]:
+        rotation = viz_rotation(self.baked_accent, str(profile.get("accent", "")))
+        brightness = clamp(float(profile.get("brightness", 0.5)), 0.0, 1.0)
+        warmth = clamp(float(profile.get("warmth", 0.0)), -1.0, 1.0)
+        target_brightness = clamp((brightness - 0.5) * 0.4, -1.0, 1.0)
+        target_saturation = clamp(1.0 + 0.25 * warmth, 0.0, 3.0)
+        hue_start = self.viz_hue if current_hue is None else current_hue
+        target_hue = hue_start
+        if rotation is not None:
+            target_hue = nearest_rotation(hue_start, rotation)
+        return target_brightness, target_saturation, target_hue
+
+    def current(self, stream_time: float) -> tuple[float, float, float]:
+        if self.transition <= 0.0:
+            return self.brightness, self.saturation, self.viz_hue
+        progress = clamp(
+            (stream_time - self.ramp_start) / self.transition, 0.0, 1.0
+        )
+        return (
+            self.start_brightness
+            + (self.brightness - self.start_brightness) * progress,
+            self.start_saturation
+            + (self.saturation - self.start_saturation) * progress,
+            canonical_rotation(
+                self.start_viz_hue
+                + (self.viz_hue - self.start_viz_hue) * progress
+            ),
+        )
+
+    def adopt(self, profile: dict) -> None:
+        """Track a backend-applied color without sending a duplicate command."""
+        self.brightness, self.saturation, self.viz_hue = self.targets(profile)
+        self.start_brightness = self.brightness
+        self.start_saturation = self.saturation
+        self.start_viz_hue = self.viz_hue
+        self.ramp_start = 0.0
+
     def apply(self, profile: dict, stream_time: float) -> None:
         if not self.enabled:
             return
-        hue = hex_to_hue(str(profile.get("accent", "")))
-        brightness = clamp(float(profile.get("brightness", 0.5)), 0.0, 1.0)
-        warmth = clamp(float(profile.get("warmth", 0.0)), -1.0, 1.0)
+        current_brightness, current_saturation, current_hue = self.current(stream_time)
+        target_brightness, target_saturation, target_hue = self.targets(
+            profile, current_hue
+        )
         messages = [
-            self.ramp("eq@eq", "brightness", 0.0,
-                      clamp((brightness - 0.5) * 0.4, -1.0, 1.0), stream_time),
-            self.ramp("eq@eq", "saturation", 1.0,
-                      clamp(1.0 + 0.25 * warmth, 0.0, 3.0), stream_time),
+            self.ramp("eq@eq", "brightness", current_brightness,
+                      target_brightness, stream_time),
+            self.ramp("eq@eq", "saturation", current_saturation,
+                      target_saturation, stream_time),
         ]
-        if hue is not None:
-            messages.append(f"hue@hue h {clamp(hue, -360.0, 360.0):.2f}")
+        if target_hue != current_hue:
+            messages.append(
+                self.ramp("hue@viz", "h", current_hue, target_hue, stream_time)
+            )
         try:
             self.queue.put_nowait(messages)
         except queue.Full:
             log("zmq_backlogged")
+            return
+        self.start_brightness = current_brightness
+        self.start_saturation = current_saturation
+        self.start_viz_hue = current_hue
+        self.brightness = target_brightness
+        self.saturation = target_saturation
+        self.viz_hue = target_hue
+        self.ramp_start = stream_time
 
 
 # --------------------------------------------------------------------------
@@ -371,6 +448,7 @@ class Settings:
     color_mode_file: str
     # Where the slide on screen is recorded, so a restart can pick it up again.
     position_file: str = ""
+    baked_accent: str = ""
 
 
 def read_position(path: str) -> str:
@@ -542,7 +620,8 @@ class Producer:
             log("color_disabled", reason="no_endpoint")
         else:
             self.color = ColorSender(cfg.zmq_endpoint, cfg.transition,
-                                     enabled=self.mode == "auto")
+                                     enabled=self.mode == "auto",
+                                     baked_accent=cfg.baked_accent)
         self.now = nowstate.start_writer()
         self.loader = SlideLoader(cfg)
 
@@ -558,10 +637,11 @@ class Producer:
         self.mode = mode
         if self.color is not None:
             self.color.enabled = mode == "auto"
-            # Resuming re-colors the slide already on screen, so the picture
-            # matches the mode without waiting for the next slide.
+            # The backend fades the current manual color to this slide before
+            # publishing auto mode. Adopt that target without racing it with a
+            # second command; the next slide then starts from the right values.
             if mode == "auto" and self.slide_profile is not None:
-                self.color.apply(self.slide_profile, self.stream_time())
+                self.color.adopt(self.slide_profile)
         log("color_mode_changed", mode=mode, frame=self.frame)
 
     # -- pacing ------------------------------------------------------------
@@ -704,6 +784,7 @@ def parse_args() -> Settings:
                     default=env_str("COLOR_MODE_FILE", default_color_mode_file()))
     ap.add_argument("--transition", type=float,
                     default=env_float("COLOR_TRANSITION_SECONDS", 2.0))
+    ap.add_argument("--baked-accent", default=env_str("ACCENT", "#4FC3F7"))
     ap.add_argument("--position-file",
                     default=env_str("SLIDE_POSITION_FILE", default_position_file()))
     args = ap.parse_args()
@@ -718,7 +799,7 @@ def parse_args() -> Settings:
         zmq_endpoint=args.zmq_endpoint, transition=args.transition,
         color_mode=resolve_color_mode(args.color_mode),
         color_mode_file=args.color_mode_file,
-        position_file=args.position_file,
+        position_file=args.position_file, baked_accent=args.baked_accent,
     )
 
 
