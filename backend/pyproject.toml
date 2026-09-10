@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ambient-backend"
+version = "0.1.0"
+description = "ambient-streamer control plane: configuration, media resolution, ffmpeg command assembly, REST + SSE"
+requires-python = ">=3.10"
+dependencies = [
+    "pydantic>=2.6,<3",
+    "PyYAML>=6.0",
+    "Jinja2>=3.1,<4",
+    "fastapi>=0.110",
+    "uvicorn>=0.27",
+    "Pillow>=10.0",
+    # Streaming multipart parsing for media upload: the body is written
+    # straight into the destination directory, never buffered whole.
+    "python-multipart>=0.0.9",
+]
+
+[project.optional-dependencies]
+# Only zmqctl's direct client needs a broker library; the validator imports
+# without it, and runtime commands are delivered through the composer.
+zmq = ["pyzmq>=25"]
+dev = ["pytest>=8", "httpx>=0.27"]
+
+[project.scripts]
+ambient-compile = "ambient.compile:main"
+ambient-backend = "ambient.main:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["ambient*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

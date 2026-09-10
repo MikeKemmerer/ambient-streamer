@@ -1,0 +1,85 @@
+# ambient-streamer — FastAPI control plane, one global container.
+#
+# This image holds the Docker socket, which is root-equivalent on the host.
+# Three things follow from that and are not negotiable:
+#
+#   * it publishes to ${AMBIENT_BIND_ADDRESS}, loopback by default
+#   * AMBIENT_API_TOKEN is required, not optional
+#   * it drops to PUID/PGID and reaches the socket through the socket's own
+#     group, so a bug in a request handler is not a root shell on the host
+#
+# The supervisor shells out to `docker compose`, so the CLI and the compose
+# plugin are copied from the official CLI image rather than fetched loose: one
+# pinned tag, content-addressed by the registry, no build-time download logic.
+#
+# Pin BASE by digest in production. `python:3.12-slim-bookworm` is a moving tag.
+#   docker build --build-arg BASE=python:3.12-slim-bookworm@sha256:<digest> ...
+ARG BASE=python:3.12-slim-bookworm
+ARG DOCKER_CLI_IMAGE=docker:28.1.1-cli
+
+FROM ${DOCKER_CLI_IMAGE} AS dockercli
+
+FROM ${BASE}
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      gosu \
+      tini \
+      ca-certificates \
+      tzdata \
+ && rm -rf /var/lib/apt/lists/*
+
+COPY --from=dockercli /usr/local/bin/docker /usr/local/bin/docker
+COPY --from=dockercli /usr/local/libexec/docker/cli-plugins/docker-compose \
+                      /usr/local/libexec/docker/cli-plugins/docker-compose
+
+# `docker compose` resolving here, at build time, is the difference between a
+# clear build failure and a channel that will not start at 3am.
+RUN set -eux; \
+    docker --version; \
+    docker compose version --short
+
+# Dependencies first so a backend source edit does not re-resolve the wheel set.
+COPY backend/pyproject.toml /tmp/backend/pyproject.toml
+RUN set -eux; \
+    python -c "import tomllib,pathlib,sys; \
+d=tomllib.loads(pathlib.Path('/tmp/backend/pyproject.toml').read_text()); \
+sys.stdout.write('\n'.join(d['project']['dependencies']))" > /tmp/requirements.txt; \
+    cat /tmp/requirements.txt; \
+    pip install --no-cache-dir -r /tmp/requirements.txt
+
+# No pyzmq. Runtime ZMQ commands are delivered by `docker exec` into the
+# composer, which ships python3-zmq; zmqctl imports it lazily and the message
+# builders this process actually uses need no broker library.
+COPY backend/pyproject.toml /src/backend/pyproject.toml
+COPY backend/ambient /src/backend/ambient
+RUN set -eux; \
+    pip install --no-cache-dir --no-deps /src/backend; \
+    rm -rf /src /tmp/backend /tmp/requirements.txt; \
+    python -c "import ambient.main, ambient.supervisor, ambient.watchdog, ambient.scheduler"
+
+# Baked, not bind-mounted: a release artifact should serve its own UI. The repo
+# is also mounted at the host path at runtime, so an operator can point
+# AMBIENT_FRONTEND_DIR at $AMBIENT_ROOT/frontend to edit it live.
+COPY frontend/ /opt/ambient/frontend/
+
+COPY docker/backend-entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod 755 /usr/local/bin/entrypoint.sh
+
+ENV PUID=1000 \
+    PGID=1000 \
+    HOME=/run/ambient \
+    AMBIENT_FRONTEND_DIR=/opt/ambient/frontend \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+# Documentation only — the real port is AMBIENT_BACKEND_PORT and the host side
+# of the mapping is what keeps this off the LAN.
+EXPOSE 8090
+
+VOLUME ["/var/log/ambient"]
+
+ENTRYPOINT ["/usr/bin/tini", "-g", "--", "/usr/local/bin/entrypoint.sh"]
+CMD ["ambient-backend"]

@@ -1,0 +1,73 @@
+# ambient-streamer — global operational settings
+#
+# Copy to ambient.yaml. The real file is gitignored.
+#   cp ambient.yaml.example ambient.yaml
+#
+# This file holds everything global that is NOT a secret and NOT needed at
+# container-creation time. The rule: if the backend can apply a change to a
+# running channel, it belongs in YAML; if the change needs a container
+# recreated, it belongs in .env. See docs/contracts/config.md.
+#
+# This file is re-read on change.
+
+version: 1
+
+defaults:
+  resolution: 720p            # 480p | 720p | 1080p | 1440p | 2160p
+  fps: 30
+  encoder: libx264            # libx264 | h264_nvenc | h264_qsv
+  crossfade_seconds: 5.0
+
+  slideshow:
+    # 10 fps with a 2.0 s fade gives 20 crossfade steps, which is the point
+    # where stepping stops being visible, for +14.3% of a core at 720p.
+    # At 1080p prefer 5 fps with a 4.0 s fade: same smoothness, ~1/3 less CPU.
+    producer_fps: 10
+    hold_seconds: 20.0
+    fade_seconds: 2.0
+    jpeg_quality: 88
+
+limits:
+  max_channels: 8
+
+  # Cores held back for the OS and the shared containers. A running 720p channel
+  # measured ~1.5 cores with ONE hot plugin, so a 7-core host runs about four.
+  # That is higher than filter benchmarks suggest because the HLS preview is a
+  # second encode, not a free tap off the first.
+  reserved_cores: 1.0
+
+encoders:
+  # An encoder is offered only if a short real encode succeeds. `ffmpeg
+  # -encoders` lists encoders whose hardware is absent — on both hosts tested
+  # it advertised h264_qsv with no Intel device present. Probe, do not trust
+  # the list.
+  probe_order: [h264_nvenc, h264_qsv, libx264]
+  fallback: libx264
+
+paths:
+  common: ./common
+  channels: ./channels
+  logs: /var/log/ambient
+
+  # Directories under channels/ that are not streams. `example` is the template
+  # every new channel is copied from; without this it shows up as a broken
+  # channel in the UI.
+  ignore_channels: ["example"]
+
+relay:
+  # Internal service addresses on the compose network. None of these are
+  # published to the host; the backend proxies what operators need.
+  rtmp: rtmp://mediamtx:1935
+  hls: http://mediamtx:8888
+  icecast: http://icecast:8081
+
+watchdog:
+  poll_seconds: 5
+
+  # Health is out_time advancing against wallclock, not process liveness:
+  # a stalled producer leaves ffmpeg alive at 0.44x while YouTube starves,
+  # and a dead producer makes ffmpeg exit rc=0 looking like success.
+  min_speed: 0.97
+  stall_seconds: 15
+
+  restart_backoff_seconds: [5, 15, 45, 120, 300]

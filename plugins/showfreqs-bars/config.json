@@ -1,0 +1,50 @@
+{
+  "name": "showfreqs-bars",
+  "display_name": "Spectrum Bars",
+  "description": "Frequency spectrum drawn as vertical bars, log-scaled on both axes.",
+  "version": "1.0.0",
+  "author": "ambient-streamer",
+  "commandable": [],
+  "cost": {
+    "cores_720p30": 0.24,
+    "scale_1080p": 1.9
+  },
+  "parameters": [
+    {
+      "name": "detail",
+      "token": "WIN_SIZE",
+      "label": "Detail",
+      "description": "FFT window. Larger resolves more bars and reacts more slowly.",
+      "type": "int",
+      "min": 256,
+      "max": 8192,
+      "step": 256,
+      "default": 1024
+    },
+    {
+      "name": "smoothing",
+      "token": "AVERAGING",
+      "label": "Smoothing",
+      "description": "Frames averaged together. 1 is twitchy, high values glide.",
+      "type": "int",
+      "min": 1,
+      "max": 30,
+      "step": 1,
+      "default": 2
+    },
+    {
+      "name": "shape",
+      "token": "FREQ_MODE",
+      "label": "Shape",
+      "description": "How each frequency bin is drawn.",
+      "type": "enum",
+      "default": "bar",
+      "choices": [
+        { "value": "bar", "label": "Bars" },
+        { "value": "line", "label": "Line" },
+        { "value": "dot", "label": "Dots" }
+      ]
+    }
+  ],
+  "requires_filters": ["showfreqs"]
+}

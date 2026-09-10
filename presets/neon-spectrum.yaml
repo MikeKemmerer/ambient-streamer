@@ -1,0 +1,32 @@
+version: 1
+name: neon-spectrum
+display_name: "Neon Spectrum"
+description: "High-saturation magenta and cyan."
+
+# No `visualization`, for the same reason as minimalist-line-art: this pairs
+# with the `neon-spectrum` plugin, but naming a plugin outside a fresh
+# channel's hot_set would make the preset inapplicable there.
+
+color:
+  mode: manual
+  manual:
+    accent: "#FF3DDA"
+    tint: "#0A0018"
+  transition_seconds: 2.0
+
+slideshow:
+  hold_seconds: 25.0
+  fade_seconds: 2.5
+  order: shuffle
+
+audio:
+  crossfade_seconds: 4.0
+
+# Only the knobs the color ramp does not own: eq.brightness, eq.saturation and
+# hue.h are left to the ramp.
+effects:
+  eq:
+    contrast: 1.2
+    gamma: 0.9
+  hue:
+    s: 1.6

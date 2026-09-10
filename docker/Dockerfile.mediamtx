@@ -1,0 +1,26 @@
+# ambient-streamer — MediaMTX relay with the YouTube publisher.
+#
+# Stock bluenviron/mediamtx:1.9.3 carries no ffmpeg, so the -ffmpeg variant is
+# the base. Everything added here exists to publish a channel to YouTube from
+# the relay rather than from the composer, which is what keeps a composer
+# restart from ending the broadcast (docs/architecture.md §2.6).
+#
+#   docker compose -p ambient build mediamtx
+
+FROM bluenviron/mediamtx:1.9.3-ffmpeg AS shim
+
+# Built against the runtime image's own musl so the preloaded object cannot
+# drift from the ffmpeg it is loaded into.
+RUN apk add --no-cache gcc musl-dev
+COPY docker/argv-shim.c /tmp/argv-shim.c
+RUN gcc -O2 -Wall -Wextra -Werror -fPIC -shared \
+        -o /tmp/libambientargv.so /tmp/argv-shim.c
+
+FROM bluenviron/mediamtx:1.9.3-ffmpeg
+
+COPY --from=shim /tmp/libambientargv.so /usr/local/lib/libambientargv.so
+COPY docker/publish-youtube.sh /usr/local/bin/publish-youtube.sh
+RUN chmod 0755 /usr/local/bin/publish-youtube.sh \
+ && chmod 0444 /usr/local/lib/libambientargv.so
+
+# Unchanged from the base image: /mediamtx reading /mediamtx.yml.

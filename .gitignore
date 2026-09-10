@@ -13,11 +13,34 @@ ambient.yaml
 channels/*/config.yaml
 !channels/example/config.yaml
 
-# Media — large binaries, never committed
-channels/*/audio/
-channels/*/images/
-!channels/example/audio/.gitkeep
-!channels/example/images/.gitkeep
+# Media — large binaries, never committed.
+# Ignore the CONTENTS, not the directory: git cannot re-include a file whose
+# parent directory is excluded, so `channels/*/audio/` would make the !.gitkeep
+# rules below silently dead.
+channels/*/audio/*
+channels/*/images/*
+!channels/*/audio/.gitkeep
+!channels/*/images/.gitkeep
+
+# Shared media library — available to every channel, never duplicated per channel.
+common/audio/*
+common/images/*
+common/bumpers/*
+!common/audio/.gitkeep
+!common/images/.gitkeep
+!common/bumpers/.gitkeep
+
+# beds/ has to be re-included as a DIRECTORY before its contents can be filtered:
+# `common/bumpers/*` above already excluded the directory itself, and a file
+# inside an excluded directory can never be re-included.
+!common/bumpers/beds/
+common/bumpers/beds/*
+!common/bumpers/beds/.gitkeep
+
+# Station bumpers — generated audio. The source text lives in bumpers.yaml,
+# which IS tracked: it is small, human-written, and worth versioning.
+channels/*/bumpers/*
+!channels/*/bumpers/.gitkeep
 *.mp3
 *.flac
 *.ogg
@@ -29,7 +52,10 @@ channels/*/images/
 
 # Generated artifacts
 channels/*/profiles/
+channels/*/playlist.m3u
+channels/*/images.list
 channels/*/docker-compose.yml
+common/profiles/
 hls/
 *.m3u8
 *.log
@@ -47,3 +73,18 @@ build/
 # Editor / OS
 .DS_Store
 Thumbs.db
+
+# Only the template channel ships an .env.example; a copy inside a real channel
+# directory is leftover scaffolding, not something to version.
+channels/*/.env.example
+!channels/example/.env.example
+
+# Spike run artifacts - regenerable, never versioned
+spikes/*/out/
+spikes/*/logs/
+
+# Shared runtime state when AMBIENT_RUN_DIR points inside the repo
+.run/
+
+# Upload staging area; empty in normal operation, may orphan a .part on a crash
+/.uploads/

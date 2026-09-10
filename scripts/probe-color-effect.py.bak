@@ -1,0 +1,106 @@
+#!/usr/bin/env python3
+"""Capture frames from the live preview while forcing a drastic hue change.
+
+The operator reports colour "does nothing". The filtergraph says eq/hue grade
+only the slideshow image and the visualisation is blended in afterwards, so a
+colour change should move the dark background and leave the bright bars alone.
+This measures that instead of assuming it.
+"""
+from __future__ import annotations
+
+import json
+import subprocess
+import sys
+import time
+import urllib.request
+from pathlib import Path
+
+ROOT = Path.home() / "ambient-streamer"
+CHANNEL = "vibecoding"
+HLS = f"http://127.0.0.1:8888/{CHANNEL}/preview/index.m3u8"
+WORK = Path("/tmp/colorprobe")
+
+
+def token() -> str:
+    for line in (ROOT / ".env").read_text(encoding="utf-8").splitlines():
+        if line.startswith("AMBIENT_API_TOKEN="):
+            return line.split("=", 1)[1].strip()
+    return ""
+
+
+def grab(tag: str) -> Path:
+    out = WORK / f"{tag}.png"
+    subprocess.run(
+        ["ffmpeg", "-nostdin", "-y", "-loglevel", "error", "-i", HLS, "-frames:v", "1", str(out)],
+        capture_output=True,
+        timeout=90,
+    )
+    return out
+
+
+def stats(image: Path) -> dict[str, float]:
+    """Mean hue/saturation over the dark background vs the bright overlay."""
+    result = subprocess.run(
+        [
+            "ffmpeg", "-nostdin", "-loglevel", "info", "-i", str(image),
+            "-vf", "signalstats,metadata=print", "-f", "null", "-",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    values: dict[str, float] = {}
+    for line in result.stderr.splitlines():
+        line = line.strip()
+        for key in ("lavfi.signalstats.HUEAVG", "lavfi.signalstats.SATAVG", "lavfi.signalstats.YAVG"):
+            if key in line and "=" in line:
+                try:
+                    values[key.rsplit(".", 1)[1]] = float(line.split("=", 1)[1])
+                except ValueError:
+                    pass
+    return values
+
+
+def set_color(accent: str, tint: str) -> int:
+    body = json.dumps({"mode": "manual", "manual": {"accent": accent, "tint": tint}}).encode()
+    request = urllib.request.Request(
+        f"http://127.0.0.1:8090/api/channels/{CHANNEL}/color",
+        data=body,
+        method="PUT",
+        headers={"Authorization": "Bearer " + token(), "Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(request, timeout=60) as response:
+        return response.status
+
+
+def main() -> int:
+    WORK.mkdir(parents=True, exist_ok=True)
+    print("does a drastic colour change move the picture?")
+
+    before = stats(grab("before"))
+    print(f"  before  hue={before.get('HUEAVG')} sat={before.get('SATAVG')} luma={before.get('YAVG')}")
+
+    print("  setting a hard magenta...")
+    set_color("#FF00FF", "#200020")
+    time.sleep(12)
+    mid = stats(grab("magenta"))
+    print(f"  magenta hue={mid.get('HUEAVG')} sat={mid.get('SATAVG')} luma={mid.get('YAVG')}")
+
+    print("  setting a hard green...")
+    set_color("#00FF00", "#002000")
+    time.sleep(12)
+    after = stats(grab("green"))
+    print(f"  green   hue={after.get('HUEAVG')} sat={after.get('SATAVG')} luma={after.get('YAVG')}")
+
+    moved = abs((mid.get("HUEAVG") or 0) - (after.get("HUEAVG") or 0))
+    print()
+    print(f"  hue moved {moved:.1f} degrees between magenta and green")
+    if moved < 5:
+        print("  -> colour is not reaching the picture at all")
+    else:
+        print("  -> colour reaches the picture, but only the background layer")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

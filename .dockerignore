@@ -1,0 +1,58 @@
+# Build context for every image in docker/.
+#
+# Without this the context is the whole repository — media, spike output and
+# all — which is hundreds of megabytes sent to the daemon on every build. The
+# Dockerfiles need source and config only.
+
+# Media. Never in an image; bind-mounted at runtime.
+channels/*/audio/
+channels/*/images/
+channels/*/bumpers/
+channels/*/profiles/
+common/audio/
+common/images/
+common/bumpers/
+common/fallback/
+common/profiles/
+*.mp3
+*.flac
+*.ogg
+*.wav
+*.m4a
+*.mp4
+*.mkv
+*.ts
+*.m3u8
+*.m3u
+
+# Secrets. Belt and braces: nothing here is COPYed, and it stays that way.
+.env
+channels/*/.env
+*.key
+
+# Generated per install, not part of an image.
+ambient.yaml
+channels/*/docker-compose.yml
+channels/*/images.list
+hls/
+logs/
+*.log
+
+# Spike artifacts and history.
+spikes/
+.git/
+.github/
+
+# Python build leftovers.
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+dist/
+build/
+.pytest_cache/
+.ruff_cache/
+
+.DS_Store
+Thumbs.db

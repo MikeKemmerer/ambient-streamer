@@ -1,0 +1,636 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>ambient-streamer — operator</title>
+<link rel="stylesheet" href="style.css">
+<script src="vendor/hls.js" defer></script>
+<script type="module" src="app.js"></script>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="dot" id="backend-dot" data-tone="idle" title="control plane reachability"></span>
+    <h1>ambient&#8209;streamer</h1>
+    <span class="badge" id="mock-badge" hidden>MOCK API</span>
+  </div>
+
+  <div class="topbar-stats">
+    <div class="stat"><span class="stat-label">channels</span><span class="stat-value num" id="stat-channels">—</span></div>
+    <div class="stat"><span class="stat-label">running</span><span class="stat-value num" id="stat-running">—</span></div>
+    <div class="stat"><span class="stat-label">cores used</span><span class="stat-value num" id="stat-cores">—</span></div>
+    <div class="stat"><span class="stat-label">headroom</span><span class="stat-value num" id="stat-headroom">—</span></div>
+  </div>
+
+  <div class="topbar-actions">
+    <span class="pill" id="sse-pill" data-tone="idle">events: idle</span>
+    <button id="btn-new-channel" type="button">New channel</button>
+    <button id="btn-system" type="button">System</button>
+    <button id="btn-token" type="button">Token</button>
+    <button id="btn-refresh" type="button" title="Re-read all state from the control plane">Refresh</button>
+  </div>
+</header>
+
+<main>
+  <aside class="pane pane-side">
+    <div class="pane-head">
+      <h2>Channels</h2>
+      <span class="muted num" id="channel-count"></span>
+    </div>
+    <div class="channel-list" id="channel-list"></div>
+    <p class="empty small" id="channel-empty">No channels yet.</p>
+    <p class="small muted skipped-note" id="channel-skipped" hidden></p>
+
+    <div class="pane-head">
+      <h2>Events</h2>
+      <button class="link" id="btn-clear-events" type="button">clear</button>
+    </div>
+    <ul class="event-log" id="event-log"></ul>
+  </aside>
+
+  <section class="pane pane-detail">
+    <p class="empty" id="detail-empty">Select a channel to inspect it.</p>
+
+    <div id="detail-body" hidden>
+      <div class="detail-head">
+        <div class="detail-title">
+          <span class="stripe" id="detail-stripe" data-tone="idle"></span>
+          <h2 class="num" id="detail-name">—</h2>
+          <span class="chip" id="detail-state" data-tone="idle">—</span>
+          <span class="chip" id="detail-health" data-tone="idle">—</span>
+          <span class="muted" id="detail-genre"></span>
+        </div>
+        <div class="detail-actions">
+          <button id="btn-skip" type="button" title="Next track. Liquidsoap owns audio, so the video never notices.">Skip track</button>
+          <button id="btn-start" type="button">Start</button>
+          <button id="btn-stop" type="button">Stop</button>
+          <button id="btn-restart" type="button">Restart</button>
+        </div>
+      </div>
+
+      <nav class="tabs" id="tabs">
+        <button type="button" class="tab" data-tab="overview" aria-selected="true">Overview</button>
+        <button type="button" class="tab" data-tab="audio">Audio</button>
+        <button type="button" class="tab" data-tab="slides">Slides</button>
+        <button type="button" class="tab" data-tab="look">Look</button>
+        <button type="button" class="tab" data-tab="schedule">Schedule</button>
+        <button type="button" class="tab" data-tab="logs">Logs</button>
+      </nav>
+
+      <!-- Overview ------------------------------------------------------ -->
+      <div class="tabpanel" data-panel="overview">
+        <div class="overview-grid">
+          <div class="card-flat">
+            <div class="preview">
+              <video id="preview-video" playsinline muted disablepictureinpicture></video>
+              <div class="preview-status" id="preview-status">preview stopped</div>
+            </div>
+            <div class="row preview-controls">
+              <button id="btn-preview-start" type="button">Start preview</button>
+              <button id="btn-preview-stop" type="button">Stop</button>
+              <label class="inline"><input type="checkbox" id="preview-audio"> audio</label>
+              <span class="muted small" id="preview-engine"></span>
+            </div>
+            <div class="feeds" id="feed-list" hidden>
+              <span class="small muted">Open in VLC</span>
+              <ul class="feed-rows" id="feed-rows"></ul>
+            </div>
+            <p class="small muted" id="preview-link-note" hidden></p>
+          </div>
+
+          <div class="card-flat">
+            <h3>Now on air</h3>
+            <dl class="kv" id="onair-kv"></dl>
+            <h3>Pipeline</h3>
+            <dl class="kv" id="pipeline-kv"></dl>
+
+            <h3>Output resolution</h3>
+            <div class="row">
+              <select id="output-resolution" aria-label="output resolution">
+                <option>480p</option><option>720p</option><option>1080p</option>
+                <option>1440p</option><option>2160p</option>
+              </select>
+              <span class="chip" data-tone="warn">restarts the channel</span>
+              <span class="spacer"></span>
+              <button id="btn-resolution-apply" type="button" disabled>Apply</button>
+            </div>
+            <p class="small muted">
+              Not a live change. Resolution is baked into the filtergraph, which is fixed at launch,
+              so applying it restarts the compositor make&#8209;before&#8209;break — about a 1s gap and a
+              new YouTube ingest session.
+            </p>
+          </div>
+
+          <div class="card-flat">
+            <h3>Delivery</h3>
+            <p class="small muted">
+              Where this channel publishes, and how the compositor encodes it. These live in the
+              channel&#8217;s <span class="num">.env</span>, so nothing here touches a stream that is
+              already on air — every change applies on the next start.
+            </p>
+
+            <div class="targets" id="delivery-targets">
+              <label class="target">
+                <input type="checkbox" id="target-youtube" value="youtube" checked>
+                <span class="target-body">
+                  <span class="target-name">YouTube</span>
+                  <span class="target-note">Public broadcast. Needs a stream key.</span>
+                </span>
+              </label>
+              <label class="target">
+                <input type="checkbox" id="target-video" value="video">
+                <span class="target-body">
+                  <span class="target-name">Internal HLS &#8212; video</span>
+                  <span class="target-note">Full size on your network. Never reaches YouTube.</span>
+                </span>
+              </label>
+              <label class="target">
+                <input type="checkbox" id="target-audio" value="audio">
+                <span class="target-body">
+                  <span class="target-name">Internal HLS &#8212; audio only</span>
+                  <span class="target-note">No video encode at all. The cheapest feed.</span>
+                </span>
+              </label>
+            </div>
+            <p class="small muted" id="delivery-reach-note">
+              Pick one or more. Anything without YouTube cannot reach it even with a key stored:
+              the compositor never publishes that relay path, so the publisher hook has nothing
+              to fire on.
+            </p>
+
+            <div class="row">
+              <label class="inline field">stream key
+                <input type="password" id="delivery-key" class="wide-input" placeholder="unchanged"
+                       autocomplete="off" spellcheck="false" aria-describedby="delivery-key-note">
+              </label>
+              <span class="chip" id="delivery-key-state" data-tone="idle">—</span>
+            </div>
+            <p class="small muted" id="delivery-key-note">
+              Write&#8209;only. The control plane never sends a key back, so this box starts empty and
+              leaving it empty keeps the stored key.
+            </p>
+
+            <div class="row">
+              <label class="inline field">rtmp url
+                <input type="text" id="delivery-rtmp" class="wide-input num"
+                       placeholder="rtmp://a.rtmp.youtube.com/live2" autocomplete="off" spellcheck="false">
+              </label>
+            </div>
+
+            <div class="row">
+              <label class="inline">encoder
+                <select id="delivery-encoder">
+                  <option value="">use default</option>
+                  <option value="libx264">libx264</option>
+                  <option value="h264_nvenc">h264_nvenc</option>
+                  <option value="h264_qsv">h264_qsv</option>
+                </select>
+              </label>
+              <label class="inline">fps
+                <input type="number" id="delivery-fps" class="num-input" min="1" max="60" step="1">
+              </label>
+              <label class="inline"><input type="checkbox" id="delivery-fps-default"> use default</label>
+            </div>
+
+            <div class="row">
+              <label class="inline">local HLS
+                <select id="delivery-local">
+                  <option value="">default</option>
+                  <option value="360">360p</option>
+                  <option value="540">540p</option>
+                  <option value="720">720p</option>
+                  <option value="1080">1080p</option>
+                </select>
+              </label>
+              <label class="inline">fps
+                <input type="number" id="delivery-local-fps" class="num-input" min="1" max="60" step="1"
+                       placeholder="default">
+              </label>
+            </div>
+            <p class="small muted" id="delivery-local-note"></p>
+
+            <p class="small muted" id="delivery-effective"></p>
+
+            <div class="row">
+              <span class="chip" id="delivery-lock" data-tone="warn" hidden></span>
+              <span class="spacer"></span>
+              <button id="btn-delivery-apply" type="button" disabled>Apply</button>
+            </div>
+          </div>
+
+          <div class="card-flat">
+            <h3>Metrics</h3>
+            <div class="metric-grid" id="metric-grid"></div>
+            <h3>Danger zone</h3>
+            <p class="small muted">A channel must be stopped before it can be deleted.</p>
+            <div class="row">
+              <input type="text" id="delete-confirm" placeholder="type channel name" autocomplete="off" spellcheck="false">
+              <button id="btn-delete" type="button" class="danger" disabled>Delete channel</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Audio --------------------------------------------------------- -->
+      <div class="tabpanel" data-panel="audio" hidden>
+        <div class="editor">
+          <div class="editor-col">
+            <div class="pane-head">
+              <h3>Playlist <span class="muted num" id="playlist-count"></span></h3>
+              <span class="chip" id="playlist-dirty" data-tone="warn" hidden>unsaved</span>
+            </div>
+            <p class="small muted">Order is the play order. PUT replaces the whole list.</p>
+            <ul class="pick-list" id="playlist-selected"></ul>
+
+            <div class="onair-pick" id="onair-pick" hidden>
+              <div class="pane-head">
+                <h3>Play now <span class="muted num" id="onair-count"></span></h3>
+              </div>
+              <p class="small muted" id="onair-note">
+                Every resolved track, in play order. Clicking one interrupts what is playing.
+                Audio only &mdash; the video never restarts.
+              </p>
+              <ul class="pick-list onair-list" id="onair-tracks"></ul>
+            </div>
+          </div>
+          <div class="editor-col">
+            <div class="pane-head">
+              <h3>Available audio</h3>
+              <button type="button" class="tiny" id="btn-playlist-add-all" disabled>Add all</button>
+            </div>
+            <input type="search" id="audio-filter" placeholder="filter…" autocomplete="off">
+            <ul class="pick-list available" id="audio-available"></ul>
+
+            <div class="upload" id="audio-upload">
+              <div class="pane-head">
+                <h3>Upload audio</h3>
+                <button type="button" class="link" id="btn-audio-upload-clear" hidden>clear finished</button>
+              </div>
+              <div class="dest" id="audio-dest">
+                <label class="dest-opt">
+                  <input type="radio" name="audio-dest" value="channel" checked>
+                  <span class="dest-body">
+                    <span class="dest-name">this channel only</span>
+                    <span class="dest-path num" id="audio-dest-channel">channels/…/audio/</span>
+                  </span>
+                </label>
+                <label class="dest-opt">
+                  <input type="radio" name="audio-dest" value="common">
+                  <span class="dest-body">
+                    <span class="dest-name">shared library — every channel can select it, stored once</span>
+                    <span class="dest-path num">common/audio/</span>
+                  </span>
+                </label>
+              </div>
+              <div class="dropzone" id="audio-dropzone" data-dest="channel">
+                <div class="dz-to">
+                  <span class="tree" id="audio-dz-tree">channel</span>
+                  <span class="num" id="audio-dz-path">channels/…/audio/</span>
+                </div>
+                <div class="dz-hint">Drop files here, or
+                  <button type="button" class="link" id="btn-audio-pick">choose files</button>
+                </div>
+                <div class="dz-note small muted">
+                  mp3 flac ogg opus m4a aac wav. The name is only a hint — the control plane probes
+                  what is actually inside each file and rejects the rest.
+                </div>
+                <input type="file" id="audio-file-input" multiple hidden
+                       accept=".mp3,.flac,.ogg,.opus,.m4a,.aac,.wav,audio/*">
+              </div>
+              <ul class="upload-list" id="audio-upload-list"></ul>
+              <p class="small upload-summary" id="audio-upload-summary" hidden></p>
+            </div>
+          </div>
+        </div>
+        <div class="row editor-bar">
+          <label class="inline"><input type="checkbox" id="audio-shuffle"> shuffle</label>
+          <label class="inline">crossfade <input type="number" id="audio-crossfade" min="0" max="30" step="0.5" class="num-input"> s</label>
+          <span class="spacer"></span>
+          <button id="btn-playlist-revert" type="button">Revert</button>
+          <button id="btn-playlist-save" type="button" class="primary">Save playlist</button>
+        </div>
+      </div>
+
+      <!-- Slides -------------------------------------------------------- -->
+      <div class="tabpanel" data-panel="slides" hidden>
+        <div class="editor">
+          <div class="editor-col">
+            <div class="pane-head">
+              <h3>Slides <span class="muted num" id="slides-count"></span></h3>
+              <span class="chip" id="slides-dirty" data-tone="warn" hidden>unsaved</span>
+            </div>
+            <p class="small muted">The producer rescans between slides. No encoder restart.</p>
+            <ul class="pick-list" id="slides-selected"></ul>
+          </div>
+          <div class="editor-col">
+            <div class="pane-head">
+              <h3>Available images</h3>
+              <button type="button" class="tiny" id="btn-slides-add-all" disabled>Add all</button>
+            </div>
+            <input type="search" id="image-filter" placeholder="filter…" autocomplete="off">
+            <ul class="pick-list available" id="image-available"></ul>
+
+            <div class="upload" id="images-upload">
+              <div class="pane-head">
+                <h3>Upload images</h3>
+                <button type="button" class="link" id="btn-images-upload-clear" hidden>clear finished</button>
+              </div>
+              <div class="dest" id="images-dest">
+                <label class="dest-opt">
+                  <input type="radio" name="images-dest" value="channel" checked>
+                  <span class="dest-body">
+                    <span class="dest-name">this channel only</span>
+                    <span class="dest-path num" id="images-dest-channel">channels/…/images/</span>
+                  </span>
+                </label>
+                <label class="dest-opt">
+                  <input type="radio" name="images-dest" value="common">
+                  <span class="dest-body">
+                    <span class="dest-name">shared library — every channel can select it, stored once</span>
+                    <span class="dest-path num">common/images/</span>
+                  </span>
+                </label>
+              </div>
+              <div class="dropzone" id="images-dropzone" data-dest="channel">
+                <div class="dz-to">
+                  <span class="tree" id="images-dz-tree">channel</span>
+                  <span class="num" id="images-dz-path">channels/…/images/</span>
+                </div>
+                <div class="dz-hint">Drop files here, or
+                  <button type="button" class="link" id="btn-images-pick">choose files</button>
+                </div>
+                <div class="dz-note small muted">
+                  jpg jpeg png webp bmp. The name is only a hint — the control plane probes what is
+                  actually inside each file and rejects the rest.
+                </div>
+                <input type="file" id="images-file-input" multiple hidden
+                       accept=".jpg,.jpeg,.png,.webp,.bmp,image/*">
+              </div>
+              <ul class="upload-list" id="images-upload-list"></ul>
+              <p class="small upload-summary" id="images-upload-summary" hidden></p>
+            </div>
+          </div>
+        </div>
+        <div class="row editor-bar">
+          <label class="inline">order
+            <select id="slides-order">
+              <option value="sequential">sequential</option>
+              <option value="shuffle">shuffle</option>
+            </select>
+          </label>
+          <label class="inline">hold <input type="number" id="slides-hold" min="1" max="600" step="1" class="num-input"> s</label>
+          <label class="inline">fade <input type="number" id="slides-fade" min="0" max="60" step="0.5" class="num-input"> s</label>
+          <span class="spacer"></span>
+          <button id="btn-slides-revert" type="button">Revert</button>
+          <button id="btn-slides-save" type="button" class="primary">Save slides</button>
+        </div>
+      </div>
+
+      <!-- Look ---------------------------------------------------------- -->
+      <div class="tabpanel" data-panel="look" hidden>
+        <div class="look-grid">
+          <div class="card-flat">
+            <h3>Visualization</h3>
+            <div class="viz-power" id="viz-power">
+              <div class="row">
+                <label class="inline"><input type="checkbox" id="viz-enabled"> visualization on</label>
+                <span class="chip" data-tone="warn">applies on next start</span>
+                <span class="spacer"></span>
+                <span class="chip num" data-tone="info" id="viz-cores" hidden></span>
+                <button id="btn-viz-apply" type="button" disabled>Apply</button>
+              </div>
+              <p class="small muted">
+                By far the largest lever a channel has. Off removes the plugin branches, the
+                <span class="num">streamselect</span> selector and the alpha composite in one go and
+                the channel becomes a slideshow with audio. A live 1080p30 channel measured
+                <span class="num">0.999x</span> realtime with it off against
+                <span class="num">0.415x</span> with it on &mdash; it could not keep up at all. The
+                plugin choice is kept either way, so switching it back on restores exactly the same
+                look.
+              </p>
+              <p class="small muted">
+                Not a live change. The filtergraph is fixed at launch, so this reaches the compositor
+                on the channel&#8217;s next start; a running channel keeps drawing until it is
+                restarted.
+              </p>
+              <p class="small" id="viz-power-state"></p>
+            </div>
+            <div class="row viz-standby" id="viz-standby">
+              <label class="inline"><input type="checkbox" id="viz-visible"> showing on air</label>
+              <span class="chip" data-tone="ok">live &mdash; one frame</span>
+              <span class="small muted" id="viz-visible-note"></span>
+            </div>
+            <p class="small muted">
+              A plugin can only be switched to instantly if it is already rendering. An FFmpeg
+              filtergraph is fixed at launch, so every plugin in this channel's hot set draws frames
+              whether or not it is on screen — which is exactly why hot set membership costs CPU,
+              roughly 0.28 cores per idle branch at 720p, measured. Anything outside the hot set is
+              staged: the channel restarts make&#8209;before&#8209;break, about a 1s gap.
+            </p>
+            <ul class="plugin-list" id="plugin-list"></ul>
+            <div class="row hot-set-bar" id="hot-set-bar">
+              <span class="small" id="hot-set-state"></span>
+              <span class="spacer"></span>
+              <span class="chip num" data-tone="info" id="hot-set-cores" hidden></span>
+              <button id="btn-hot-set-revert" type="button" disabled>Revert</button>
+              <button id="btn-hot-set-apply" type="button" disabled>Apply hot set</button>
+            </div>
+            <p class="inline-error" id="viz-error" hidden></p>
+          </div>
+
+          <div class="card-flat">
+            <h3>Color</h3>
+            <div class="row">
+              <label class="inline"><input type="radio" name="color-mode" value="automatic"> automatic</label>
+              <label class="inline"><input type="radio" name="color-mode" value="manual"> manual</label>
+            </div>
+            <div class="row">
+              <label class="inline">accent
+                <input type="color" id="color-accent" value="#4FC3F7">
+                <input type="text" id="color-accent-hex" class="hex-input" maxlength="7" spellcheck="false"
+                       aria-label="accent color hex">
+              </label>
+            </div>
+            <div class="row">
+              <label class="inline">tint
+                <input type="color" id="color-tint" value="#101820">
+                <input type="text" id="color-tint-hex" class="hex-input" maxlength="7" spellcheck="false"
+                       aria-label="tint color hex">
+              </label>
+            </div>
+            <div class="row">
+              <label class="inline">transition <input type="number" id="color-transition" min="0" max="60" step="0.5" class="num-input"> s</label>
+              <span class="spacer"></span>
+              <button id="btn-color-save" type="button" class="primary">Apply color</button>
+            </div>
+            <p class="small muted">Automatic mode derives colors per slide from the image profile; the manual values above are ignored.</p>
+          </div>
+
+          <div class="card-flat">
+            <h3>Preset</h3>
+            <div class="row">
+              <select id="preset-select" aria-label="preset"></select>
+              <button id="btn-preset-apply" type="button" class="primary">Apply preset</button>
+            </div>
+            <p class="small muted" id="preset-description"></p>
+            <p class="small muted">A preset never restarts the stream. One whose visualization is outside the hot set is rejected.</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Schedule ------------------------------------------------------ -->
+      <div class="tabpanel" data-panel="schedule" hidden>
+        <div class="row editor-bar">
+          <label class="inline">timezone
+            <input type="text" id="schedule-tz" class="tz-input" spellcheck="false" placeholder="America/Los_Angeles">
+          </label>
+          <span class="spacer"></span>
+          <button id="btn-rule-add" type="button">Add rule</button>
+          <button id="btn-schedule-save" type="button" class="primary">Save schedule</button>
+        </div>
+        <p class="small muted">Resolution order, most specific first: date → days + window → window → channel default. First match wins.</p>
+        <div class="rules" id="schedule-rules"></div>
+      </div>
+
+      <!-- Logs ---------------------------------------------------------- -->
+      <div class="tabpanel" data-panel="logs" hidden>
+        <div class="row editor-bar">
+          <label class="inline">service
+            <select id="log-service">
+              <option value="compositor" selected>compositor</option>
+              <option value="liquidsoap">liquidsoap</option>
+              <option value="producer">producer</option>
+              <option value="watchdog">watchdog</option>
+            </select>
+          </label>
+          <label class="inline">lines
+            <select id="log-lines">
+              <option>100</option>
+              <option selected>200</option>
+              <option>500</option>
+              <option>1000</option>
+            </select>
+          </label>
+          <label class="inline"><input type="checkbox" id="log-follow"> auto-refresh</label>
+          <span class="log-path num small" id="log-path"></span>
+          <span class="spacer"></span>
+          <button id="btn-log-refresh" type="button">Refresh</button>
+        </div>
+        <pre class="logs" id="log-output">—</pre>
+      </div>
+    </div>
+  </section>
+</main>
+
+<div class="toasts" id="toasts" role="status" aria-live="polite"></div>
+
+<!-- Confirm a change that is not live ---------------------------------- -->
+<dialog id="confirm-dialog" aria-labelledby="confirm-title">
+  <div>
+    <h2 id="confirm-title">Confirm</h2>
+    <p class="small" id="confirm-body"></p>
+    <div class="consequence">
+      <span class="chip" data-tone="warn">not a live change</span>
+      <span class="small" id="confirm-cost"></span>
+    </div>
+    <p class="small muted" id="confirm-note"></p>
+    <div class="row dialog-actions">
+      <span class="spacer"></span>
+      <button type="button" id="btn-confirm-cancel">Cancel</button>
+      <button type="button" id="btn-confirm-ok" class="danger">Proceed</button>
+    </div>
+  </div>
+</dialog>
+
+<!-- Token ------------------------------------------------------------- -->
+<dialog id="token-dialog">
+  <form method="dialog" id="token-form">
+    <h2>API token</h2>
+    <p class="small muted">
+      Every endpoint except <span class="num">/api/health</span> needs a bearer token.
+      It is kept in this browser's localStorage and sent only in an Authorization header.
+    </p>
+    <input type="password" id="token-input" placeholder="AMBIENT_API_TOKEN" autocomplete="off" spellcheck="false">
+    <p class="inline-error" id="token-error" hidden></p>
+    <div class="row dialog-actions">
+      <button type="button" id="btn-token-forget" class="danger">Forget token</button>
+      <span class="spacer"></span>
+      <button type="button" id="btn-token-cancel">Cancel</button>
+      <button type="submit" class="primary">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- Create channel ---------------------------------------------------- -->
+<dialog id="create-dialog">
+  <form method="dialog" id="create-form">
+    <h2>New channel</h2>
+    <div class="form-grid">
+      <label>name
+        <input type="text" id="create-name" required pattern="[a-z0-9]([a-z0-9_\-]{0,30}[a-z0-9])?"
+               placeholder="lofi" autocomplete="off" spellcheck="false">
+      </label>
+      <label>genre
+        <input type="text" id="create-genre" placeholder="lo-fi hip hop" autocomplete="off">
+      </label>
+      <label>resolution
+        <select id="create-resolution">
+          <option>480p</option><option selected>720p</option><option>1080p</option>
+          <option>1440p</option><option>2160p</option>
+        </select>
+      </label>
+      <label>fps
+        <input type="number" id="create-fps" value="30" min="1" max="60">
+      </label>
+      <label>encoder
+        <select id="create-encoder">
+          <option value="libx264">libx264</option>
+          <option value="h264_nvenc">h264_nvenc</option>
+          <option value="h264_qsv">h264_qsv</option>
+        </select>
+      </label>
+      <label>active visualization
+        <select id="create-viz"></select>
+      </label>
+    </div>
+    <fieldset class="hotset">
+      <legend>hot set — every branch costs CPU whether or not it is on screen</legend>
+      <div id="create-hotset"></div>
+    </fieldset>
+    <p class="small muted">
+      The YouTube stream key is not set here. Put it in
+      <span class="num">channels/&lt;name&gt;/.env</span> as
+      <span class="num">YOUTUBE_STREAM_KEY</span>; the relay reads it when the path becomes ready.
+    </p>
+    <p class="inline-error" id="create-error" hidden></p>
+    <div class="row dialog-actions">
+      <span class="spacer"></span>
+      <button type="button" id="btn-create-cancel">Cancel</button>
+      <button type="submit" class="primary">Create</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- System ------------------------------------------------------------ -->
+<dialog id="system-dialog">
+  <div>
+    <div class="row">
+      <h2>System &amp; capacity</h2>
+      <span class="spacer"></span>
+      <button type="button" id="btn-system-close">Close</button>
+    </div>
+    <h3>Host</h3>
+    <dl class="kv" id="system-kv"></dl>
+    <h3>Encoders (probe results, not <span class="num">ffmpeg -encoders</span>)</h3>
+    <ul class="encoder-list" id="encoder-list"></ul>
+    <h3>Capacity</h3>
+    <div class="capacity-bar"><div class="capacity-fill" id="capacity-fill"></div></div>
+    <dl class="kv" id="capacity-kv"></dl>
+  </div>
+</dialog>
+
+</body>
+</html>

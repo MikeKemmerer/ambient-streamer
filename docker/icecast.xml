@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ambient-streamer — Icecast relay.
+
+  ONE Icecast serves EVERY channel. It is a global container, never per channel.
+  It exists so a Liquidsoap restart cannot reach the compositor: `output.harbor`
+  was measured stalling the compositor's output 18.19s on a 9.41s outage, while
+  Icecast with a fallback mount measured 0s / 0.00% silence.
+  See docs/contracts/audio-transport.md before changing anything here.
+
+  This file is a TEMPLATE. docker/icecast-entrypoint.sh renders it to
+  /etc/icecast.xml at container start:
+    @TOKEN@              <- substituted from the environment
+    <!-- @CHANNEL_MOUNTS@ -->  <- replaced by one mount block per channel
+
+  Adding a channel must NOT restart Icecast (that would kill every compositor's
+  audio input). Instead the backend appends the mount to the mounts list and
+  sends SIGHUP; the entrypoint re-renders and reloads in place.
+-->
+<icecast>
+    <location>ambient-streamer</location>
+    <admin>@ADMIN_EMAIL@</admin>
+
+    <limits>
+        <clients>@MAX_CLIENTS@</clients>
+        <sources>@MAX_SOURCES@</sources>
+        <!-- 2 MB is ~64s at MP3 256k. The default 128 KB is only ~4s, and the
+             compositor is a CPU-bound encoder: any transient dip below realtime
+             overran the queue, Icecast dropped it, and the reconnect left FFmpeg
+             clamping audio DTS to the last high value so out_time froze for good
+             and the watchdog restarted the channel in a loop. -->
+        <queue-size>2097152</queue-size>
+        <client-timeout>30</client-timeout>
+        <header-timeout>15</header-timeout>
+        <!-- A source that goes quiet for 10s is treated as gone, which is what
+             hands listeners to the fallback mount. -->
+        <source-timeout>10</source-timeout>
+        <!-- Burst, despite the compositor wanting live audio, because "live"
+             costs more than the latency it saves. FFmpeg needs several seconds
+             of MP3 content before it emits its first packet: measured 0s to
+             first packet from a file and 9s from this mount with no burst, the
+             difference being purely how fast the same bytes arrive. That 9s is
+             dead air on every settings restart, because the replacement
+             compositor evicts the outgoing one the moment it connects.
+             256 KB is about 8s at the ~254 kbps this mount measured, so a
+             reconnecting compositor gets what FFmpeg is waiting for at once and
+             is that far behind wallclock instead - a fixed offset nobody
+             watching ambient music can perceive. -->
+        <burst-on-connect>1</burst-on-connect>
+        <burst-size>262144</burst-size>
+    </limits>
+
+    <!-- Passwords come from the environment. Never a literal in a tracked file. -->
+    <authentication>
+        <source-password>@SOURCE_PASSWORD@</source-password>
+        <relay-password>@RELAY_PASSWORD@</relay-password>
+        <admin-user>@ADMIN_USER@</admin-user>
+        <admin-password>@ADMIN_PASSWORD@</admin-password>
+    </authentication>
+
+    <hostname>icecast</hostname>
+
+    <!-- Internal only. The compose stack publishes no host port for this
+         service; bind-address is the second layer, not the first. -->
+    <listen-socket>
+        <port>@PORT@</port>
+        <bind-address>0.0.0.0</bind-address>
+    </listen-socket>
+
+    <!-- Never advertise to a public YP directory. -->
+    <directory>
+        <yp-url-timeout>15</yp-url-timeout>
+    </directory>
+
+    <!-- Serves the fallback MP3s out of the webroot. Required: a fallback-mount
+         that names a file resolves through fileserve. -->
+    <fileserve>1</fileserve>
+
+    <!-- Applies to every mount, including ones not listed below. -->
+    <mount type="default">
+        <public>0</public>
+        <hidden>1</hidden>
+    </mount>
+
+    <!-- @CHANNEL_MOUNTS@ -->
+
+    <!-- Paths as laid out in libretime/icecast:2.4.4 (proven in spike S1). -->
+    <paths>
+        <basedir>/usr/share/icecast</basedir>
+        <logdir>/var/log/icecast</logdir>
+        <webroot>/usr/share/icecast/web</webroot>
+        <adminroot>/usr/share/icecast/admin</adminroot>
+        <alias source="/" destination="/status.xsl"/>
+    </paths>
+
+    <logging>
+        <!-- "-" is stdout: keeps `docker logs` working, which is how the
+             source_move_clients transitions are observed. -->
+        <accesslog>-</accesslog>
+        <errorlog>-</errorlog>
+        <loglevel>@LOG_LEVEL@</loglevel>
+        <logsize>10000</logsize>
+        <logarchive>0</logarchive>
+    </logging>
+
+    <security>
+        <chroot>0</chroot>
+    </security>
+</icecast>

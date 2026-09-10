@@ -1,0 +1,48 @@
+{
+  "name": "minimal-line",
+  "display_name": "Minimal Line",
+  "description": "One thin unfilled trace on black; linear scale, so it stays quiet on quiet music.",
+  "version": "1.0.0",
+  "author": "ambient-streamer",
+  "commandable": [],
+  "cost": {
+    "cores_720p30": 0.13,
+    "scale_1080p": 2.4
+  },
+  "parameters": [
+    {
+      "name": "weight",
+      "token": "LINE_DRAW",
+      "label": "Weight",
+      "description": "Thin keeps the single hairline; filled makes it a solid band.",
+      "type": "enum",
+      "default": "full",
+      "choices": [
+        { "value": "full", "label": "Hairline" },
+        { "value": "scale", "label": "Soft edge" }
+      ]
+    },
+    {
+      "name": "response",
+      "token": "LINE_SCALE",
+      "label": "Response",
+      "description": "Linear stays quiet on quiet music; cbrt lifts it.",
+      "type": "enum",
+      "default": "lin",
+      "choices": [
+        { "value": "lin", "label": "Linear" },
+        { "value": "sqrt", "label": "Square root" },
+        { "value": "cbrt", "label": "Cube root" }
+      ]
+    },
+    {
+      "name": "split_stereo",
+      "token": "LINE_SPLIT",
+      "label": "Split stereo",
+      "description": "Draw left and right as separate traces.",
+      "type": "bool",
+      "default": false
+    }
+  ],
+  "requires_filters": ["showwaves"]
+}

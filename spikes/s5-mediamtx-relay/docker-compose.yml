@@ -1,0 +1,28 @@
+# S5 spike stack. Distinct project name (`-p ambient-spike`) so nothing collides with the
+# arrstack / Plex containers already running on this host.
+#
+#   relay        = the real repo config under test (docker/mediamtx.yml)
+#   youtube-sim  = stand-in for YouTube ingest; its publisher timeline is the measurement
+#                  that answers "did the YouTube leg survive a composer restart?"
+#
+# restart: "no" on purpose — a spike must show a crash, not silently paper over it.
+
+services:
+  relay:
+    image: bluenviron/mediamtx:1.9.3
+    restart: "no"
+    volumes:
+      - ${RELAY_CONFIG:-../../docker/mediamtx.yml}:/mediamtx.yml:ro
+    ports:
+      - "1935:1935"   # RTMP ingest from composers
+      - "8888:8888"   # HLS preview
+      - "9000:9997"   # control API (container 9997 -> free host port)
+
+  youtube-sim:
+    image: bluenviron/mediamtx:1.9.3
+    restart: "no"
+    volumes:
+      - ./mediamtx-youtube-sim.yml:/mediamtx.yml:ro
+    ports:
+      - "8081:1935"   # "YouTube" RTMP ingest
+      - "8090:9997"   # its API, polled to timestamp publisher presence

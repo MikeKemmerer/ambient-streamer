@@ -1,0 +1,216 @@
+{#-
+  ambient-streamer — per-channel compose template.
+
+  Rendered by the backend supervisor into channels/<name>/docker-compose.yml and
+  run as its own project:
+
+      docker compose -p ambient-{{ channel }} \
+        -f channels/{{ channel }}/docker-compose.yml up -d
+
+  The generated file is gitignored and never hand-edited, but operators DO read
+  it when something is wrong — keep it readable.
+
+  Variables (all supplied by the backend):
+    channel        channel name, [a-z0-9-]
+    repo_root      absolute host path of the repository
+    common_dir     absolute host path of the shared media library
+    channel_dir    absolute host path of channels/<name>
+    log_dir        absolute host path of the channel's log directory
+    encoder        libx264 | h264_nvenc | h264_qsv
+-#}
+# GENERATED — do not edit. Source: docker/compose.channel.yml.j2
+# Channel: {{ channel }}
+#
+# Two containers. Liquidsoap owns audio and may restart freely; Icecast's
+# fallback mount absorbs it. The compositor must NOT restart — its filtergraph
+# is fixed at launch, and every live-editable feature routes around that
+# (image2pipe for slides, zmq for color, streamselect for plugins).
+
+name: ambient-{{ channel }}
+
+x-channel-common: &channel-common
+  restart: unless-stopped
+  # No env_file. channels/<name>/.env holds the YouTube stream key, and loading
+  # it wholesale would put that key in `docker inspect` for both containers.
+  # It is read for INTERPOLATION instead (scripts/channel.sh passes it with
+  # --env-file), and only the values below are handed to a container.
+  networks: [ambient]
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "5"
+
+services:
+  # ---------------------------------------------------------------------------
+  # Audio engine. Source client to the global Icecast; never talks to the
+  # compositor directly.
+  # ---------------------------------------------------------------------------
+  {{ channel }}-liquidsoap:
+    <<: *channel-common
+    container_name: {{ channel }}-liquidsoap
+    image: ambient-liquidsoap:{{ image_tag | default('dev') }}
+    build:
+      context: {{ repo_root }}
+      dockerfile: docker/Dockerfile.liquidsoap
+    environment:
+      CHANNEL_NAME: {{ channel }}
+      CHANNEL_MOUNT: ${CHANNEL_MOUNT:-/{{ channel }}}
+      ICECAST_HOST: icecast
+      ICECAST_PORT: ${AMBIENT_ICECAST_PORT:-8081}
+      ICECAST_SOURCE_PASSWORD: ${ICECAST_SOURCE_PASSWORD:?required}
+      CROSSFADE_SECONDS: "{{ crossfade_seconds }}"
+      # Telnet control socket for track/queue status. Bound inside the container
+      # only — it is never published.
+      LIQ_TELNET_PORT: 1234
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      TZ: ${TZ:-UTC}
+    volumes:
+      - {{ repo_root }}/liquidsoap:/opt/ambient:ro
+      - {{ common_dir }}:/media/common:ro
+      - {{ channel_dir }}:/media/channel:ro
+      - {{ log_dir }}:/var/log/ambient
+    tmpfs:
+      - /run/ambient:mode=0755,size=16m
+    deploy:
+      resources:
+        limits:
+          cpus: "${LIQUIDSOAP_CPU_LIMIT:-0.5}"
+          memory: ${LIQUIDSOAP_MEMORY_LIMIT:-512m}
+
+  # ---------------------------------------------------------------------------
+  # Compositor. Reads audio from Icecast, slides from a Python producer on
+  # image2pipe, and publishes RTMP to the MediaMTX relay.
+  #
+  # This container restarting is the failure this whole design exists to avoid.
+  # ---------------------------------------------------------------------------
+  {{ channel }}-composer:
+    <<: *channel-common
+    container_name: {{ channel }}-composer
+    image: ambient-composer:{{ image_tag | default('dev') }}
+    build:
+      context: {{ repo_root }}
+      dockerfile: docker/Dockerfile.composer
+    environment:
+      CHANNEL_NAME: {{ channel }}
+      CHANNEL_MOUNT: ${CHANNEL_MOUNT:-/{{ channel }}}
+      AUDIO_URL: http://icecast:${AMBIENT_ICECAST_PORT:-8081}${CHANNEL_MOUNT:-/{{ channel }}}
+      RELAY_RTMP: rtmp://mediamtx:${AMBIENT_RTMP_PORT:-1935}
+      # No YOUTUBE_STREAM_KEY. The compositor publishes to the relay and never
+      # to YouTube, so it has no reason to hold the credential — and holding it
+      # would expose it through `docker inspect` on every channel container.
+      ENCODER: ${ENCODER:-{{ encoder | default('libx264') }}}
+      # Without these the entrypoint falls back to a single hardcoded plugin and
+      # the channel's whole visualization selection is silently ignored.
+      ACTIVE_PLUGIN: "{{ active_plugin }}"
+      HOT_SET: "{{ hot_set }}"
+      # Off skips the plugin branches, the selector and the composite entirely.
+      # Measured on a live 1080p30 channel: 0.999x realtime with it off against
+      # 0.415x with it on — by far
+      # the largest lever a channel has.
+      VISUALIZATION: "{{ visualization }}"
+      # Standby: the overlay's timeline switch, flipped live over zmq. Unlike
+      # VISUALIZATION the branches still render, so this costs what on costs.
+      VIZ_VISIBLE: "{{ viz_visible }}"
+      PLUGIN_PARAMS: '{{ plugin_parameters }}'
+      # Without the mode the producer cannot tell a manual color from one it
+      # derived, and overwrites the operator's choice at the next slide.
+      COLOR_MODE: "{{ color_mode }}"
+      COLOR_TRANSITION_SECONDS: "{{ color_transition_seconds }}"
+      # A filtergraph is fixed at launch, so a manual color starts baked in
+      # rather than being reapplied after every composer restart.
+      COLOR_INIT_HUE: "{{ color_init_hue }}"
+      COLOR_INIT_SATURATION: "{{ color_init_saturation }}"
+      COLOR_INIT_BRIGHTNESS: "{{ color_init_brightness }}"
+{%- if encoder == 'h264_nvenc' %}
+      # `video` is the one that matters and is NOT granted by default: without
+      # it the GPU appears, libcuda loads, and NVENC still fails with
+      # "Cannot load libnvidia-encode.so.1".
+      NVIDIA_DRIVER_CAPABILITIES: compute,video,utility
+      NVIDIA_VISIBLE_DEVICES: ${NVIDIA_DEVICE_ID:-all}
+      # Defaults to libx264: on consumer NVENC a second session costs a whole
+      # channel. Set it to h264_nvenc only on a card with no session cap.
+      PREVIEW_ENCODER: ${PREVIEW_ENCODER:-libx264}
+{%- endif %}
+{%- if color_mode == 'manual' %}
+      # Plugins bake their accent at launch, so a manual channel would render a
+      # correctly tinted image behind default-blue bars without this.
+      ACCENT: "{{ color_accent }}"
+{%- endif %}
+      # WIDTH/HEIGHT, not RESOLUTION: the entrypoint sizes the graph from these.
+      WIDTH: "{{ width }}"
+      HEIGHT: "{{ height }}"
+      # Slideshow cost lives here. A crossfade decodes and blends two images at
+      # once, so hold and fade are the cheapest levers on a busy host.
+      HOLD_SECONDS: "{{ hold_seconds }}"
+      FADE_SECONDS: "{{ fade_seconds }}"
+      PRODUCER_FPS: "{{ producer_fps }}"
+      JPEG_QUALITY: "{{ jpeg_quality }}"
+      # Rendered, not `${FPS:-30}`: nothing ever defines a bare FPS, so the
+      # interpolation default won unconditionally and every channel encoded at 30
+      # no matter what CHANNEL_FPS said.
+      FPS: "{{ fps }}"
+      # Each `off` is a relay path the composer never publishes, so that path
+      # never goes ready. mediamtx hangs the YouTube hook on the program path
+      # alone, which is what makes "cannot reach YouTube" structural rather
+      # than a matter of leaving the stream key blank.
+      PUBLISH_PROGRAM: "{{ publish_program }}"
+      PUBLISH_VIDEO: "{{ publish_video }}"
+      PUBLISH_AUDIO: "{{ publish_audio }}"
+      # The operator preview at <channel>/preview, always published.
+      PREVIEW_WIDTH: "{{ preview_width }}"
+      PREVIEW_HEIGHT: "{{ preview_height }}"
+      PREVIEW_FPS: "{{ preview_fps }}"
+      # The internal video feed at <channel>/video.
+      LOCAL_WIDTH: "{{ local_width }}"
+      LOCAL_HEIGHT: "{{ local_height }}"
+      LOCAL_FPS: "{{ local_fps }}"
+      # ipc:// on tmpfs, not tcp://. A published ZMQ port is a remote kill surface.
+      ZMQ_BIND_HOST: 127.0.0.1
+      ZMQ_BIND_PORT: "5555"
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      TZ: ${TZ:-UTC}
+    volumes:
+      - {{ repo_root }}/ffmpeg:/opt/ambient:ro
+      # /plugins, not /opt/ambient/plugins: the entrypoint's PLUGIN_DIR default,
+      # and nesting it under the read-only /opt/ambient mount cannot create the
+      # mountpoint.
+      - {{ repo_root }}/plugins:/plugins:ro
+      - {{ common_dir }}:/media/common:ro
+      - {{ channel_dir }}:/media/channel:ro
+      - {{ log_dir }}:/var/log/ambient
+      # Shared with the backend, NOT a private tmpfs. The watchdog reads
+      # /run/ambient/<channel>/progress from here; a per-container tmpfs leaves
+      # it permanently blind and restarting a healthy composer forever.
+      - {{ run_dir }}:/run/ambient
+    deploy:
+      resources:
+        limits:
+          # Real requirements, not decoration: 8 channels on one host means the
+          # host must refuse to oversubscribe itself into a sub-1.0x stream.
+          cpus: "${CHANNEL_CPU_LIMIT:-2.0}"
+          memory: ${CHANNEL_MEMORY_LIMIT:-2g}
+{%- if encoder == 'h264_nvenc' %}
+        reservations:
+          devices:
+            - driver: nvidia
+              # Pinned by UUID or index so channels do not all land on card 0.
+              device_ids: ["${NVIDIA_DEVICE_ID:-0}"]
+              capabilities: [gpu, video]
+{%- elif encoder == 'h264_qsv' %}
+    # QSV needs a real render node. Not available on Docker Desktop / WSL2 —
+    # /dev/dri is not exposed there. Bare-metal Linux only.
+    devices:
+      - /dev/dri:/dev/dri
+{%- endif %}
+    depends_on:
+      {{ channel }}-liquidsoap:
+        condition: service_started
+
+networks:
+  ambient:
+    # Created by the global stack. Channels join it; they never create it.
+    external: true
+    name: ambient

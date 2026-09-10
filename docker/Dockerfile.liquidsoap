@@ -1,0 +1,32 @@
+# ambient-streamer — Liquidsoap audio engine, one container per channel.
+#
+# Pinned deliberately. Liquidsoap's script language changes between minor
+# versions and a 24/7 service that silently picks up a new interpreter is a
+# liability. v2.4.2 is the build spike S1 measured against.
+FROM savonet/liquidsoap:v2.4.2
+
+USER root
+
+# gosu drops privileges cleanly at exec time; tini reaps so a Liquidsoap restart
+# does not leave zombie ffmpeg children behind.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends gosu tini ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+
+# Contract requires MP3 256k/44.1k/stereo out of Liquidsoap. Fail the build here
+# rather than at 3am on-air if the base image ever ships without lame.
+RUN liquidsoap --check 'output.file(%mp3(bitrate=256, samplerate=44100, stereo=true), "/dev/null", sine())' \
+ && liquidsoap --version
+
+COPY docker/liquidsoap-entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod 755 /usr/local/bin/entrypoint.sh
+
+ENV PUID=1000 \
+    PGID=1000 \
+    HOME=/run/ambient
+
+# /media/* are read-only mounts; the writable surfaces are the log dir and tmpfs.
+VOLUME ["/var/log/ambient"]
+
+ENTRYPOINT ["/usr/bin/tini", "-g", "--", "/usr/local/bin/entrypoint.sh"]
+CMD ["liquidsoap", "/opt/ambient/channel.liq"]
