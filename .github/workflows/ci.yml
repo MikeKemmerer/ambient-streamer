@@ -137,26 +137,27 @@ jobs:
           docker compose -p ambient config --quiet
           echo "global stack validates"
 
-      - name: Published ports — backend only, loopback only
+      - name: Published ports — backend and directory, loopback only
         # The Docker socket is root-equivalent on the host. If this ever
-        # renders a 0.0.0.0 binding, or a second published service, the review
-        # that let it through should have been this check.
+        # renders a 0.0.0.0 binding, or another published service, the review
+        # that let it through should have been this check. The directory is the
+        # intentional HLS front door; RTMP, Icecast and the relay API stay private.
         run: |
           set -euo pipefail
           docker compose -p ambient config --format json > /tmp/stack.json
           publishers="$(jq -r '.services | to_entries[] | select(.value.ports != null) | .key' /tmp/stack.json | sort | paste -sd, -)"
           echo "services publishing a host port: ${publishers:-none}"
-          if [ "$publishers" != "backend" ]; then
-            echo "::error::only the backend may publish a host port, got: ${publishers:-none}"
+          if [ "$publishers" != "backend,directory" ]; then
+            echo "::error::only backend and directory may publish host ports, got: ${publishers:-none}"
             exit 1
           fi
-          jq -r '.services.backend.ports[] | "\(.host_ip // "0.0.0.0") \(.published) -> \(.target)"' /tmp/stack.json
-          offenders="$(jq -r '.services.backend.ports[] | (.host_ip // "0.0.0.0")' /tmp/stack.json | grep -vE '^(127\.0\.0\.1|::1)$' || true)"
+          jq -r '.services | {backend, directory} | to_entries[] | .key as $service | .value.ports[] | "\($service): \(.host_ip // "0.0.0.0") \(.published) -> \(.target)"' /tmp/stack.json
+          offenders="$(jq -r '.services | {backend, directory} | to_entries[] | .key as $service | .value.ports[] | select((.host_ip // "0.0.0.0") | test("^(127\\.0\\.0\\.1|::1)$") | not) | "\($service)=\(.host_ip // "0.0.0.0")"' /tmp/stack.json)"
           if [ -n "$offenders" ]; then
-            echo "::error::backend published on ${offenders}, not loopback"
+            echo "::error::published outside loopback: ${offenders}"
             exit 1
           fi
-          echo "only backend publishes, and only on loopback"
+          echo "only backend and directory publish, and only on loopback"
 
       - name: Build every image
         run: |
