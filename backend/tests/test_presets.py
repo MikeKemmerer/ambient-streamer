@@ -18,6 +18,7 @@ from ambient.presets import (
     effect_messages,
     get_preset,
     load_registry,
+    nearest_rotation,
 )
 from ambient.zmqctl import ZmqValidationError, validate_message
 
@@ -120,6 +121,33 @@ def test_a_transition_is_one_self_animating_expression_per_filter() -> None:
     messages = color_messages("#FF8800", "#101820", transition_seconds=4.0, stream_time=10.0)
     ramps = [m for m in messages if "min(max((t-10)" in m]
     assert len(ramps) == 3  # one message each, not a command stream
+
+
+def test_a_transition_starts_from_the_current_color() -> None:
+    current = color_targets("#4FC3F7", "#0B2A3A")
+    messages = color_messages(
+        "#FF8800",
+        "#101820",
+        transition_seconds=4.0,
+        stream_time=10.0,
+        current=current,
+        current_accent="#4FC3F7",
+        baked_accent="#4FC3F7",
+    )
+
+    assert any(f"saturation {current.saturation:g}+(" in message for message in messages)
+    assert any(f"brightness {current.brightness:g}+(" in message for message in messages)
+    assert any("hue@viz h 0+(" in message for message in messages)
+
+
+def test_a_transition_without_stream_time_uses_final_values() -> None:
+    messages = color_messages("#FF8800", "#101820", transition_seconds=4.0)
+    assert all("t-" not in message for message in messages)
+
+
+def test_hue_rotation_takes_the_short_path_across_the_boundary() -> None:
+    assert nearest_rotation(179.0, -179.0) == 181.0
+    assert nearest_rotation(-179.0, 179.0) == -181.0
 
 
 def test_a_zero_second_transition_sends_a_plain_value() -> None:

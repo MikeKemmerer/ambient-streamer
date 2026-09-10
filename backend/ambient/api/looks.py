@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -35,6 +36,7 @@ router = APIRouter(prefix="/api", tags=["looks"])
 STREAMSELECT_TARGET = "streamselect@sel"
 # Timeline `enable` on the composite, which is what makes standby one frame.
 OVERLAY_TARGET = "overlay@viz"
+COLOR_MODE_SETTLE_SECONDS = 0.6
 
 
 class VisualizationBody(StrictModel):
@@ -440,8 +442,37 @@ async def post_preset(name: str, body: PresetBody, state: AppState = Authed) -> 
 
 @router.put("/channels/{name}/color")
 async def set_color(name: str, body: ColorBody, state: AppState = Authed) -> dict[str, Any]:
+    _cancel_color_mode_task(state, name)
     channel = state.channel(name, resolve_media=False)
-    was_manual = channel.config.color.mode is ColorMode.MANUAL
+    previous_color = channel.config.color
+    was_manual = previous_color.mode is ColorMode.MANUAL
+    current: preset_registry.ColorTargets | None = None
+    current_accent = ""
+    current_profile: colorprofile.ColorProfile | None = None
+    if was_manual:
+        current = preset_registry.color_targets(
+            previous_color.manual.accent, previous_color.manual.tint
+        )
+        current_accent = previous_color.manual.accent
+    else:
+        current_profile = await _current_slide_profile(state, channel)
+        if current_profile is not None:
+            current = preset_registry.automatic_color_targets(
+                current_profile.accent,
+                current_profile.brightness,
+                current_profile.warmth,
+            )
+            current_accent = current_profile.accent
+    stream_time = await _stream_time(state, name)
+    baked_accent = _baked_accent(state, name)
+    current, current_rotation = _sample_color_ramp(
+        state,
+        name,
+        current,
+        current_accent,
+        baked_accent,
+        stream_time,
+    )
     data = channel.config.model_dump(mode="json")
     color = data["color"]
     if body.mode is not None:
@@ -452,36 +483,78 @@ async def set_color(name: str, body: ColorBody, state: AppState = Authed) -> dic
         color["transition_seconds"] = body.transition_seconds
     config = ChannelConfig.model_validate(data)
     save_channel_config(channel.directory, config)
-    _publish_color_mode(state, name, config.color.mode)
+    if config.color.mode is ColorMode.MANUAL and not was_manual:
+        _publish_color_mode(state, name, ColorMode.MANUAL)
+        await asyncio.sleep(COLOR_MODE_SETTLE_SECONDS)
 
     messages: list[str] = []
     detail = ""
+    target: preset_registry.ColorTargets | None = None
+    target_accent = ""
     if config.color.mode is ColorMode.MANUAL:
+        target = preset_registry.color_targets(
+            config.color.manual.accent, config.color.manual.tint
+        )
+        target_accent = config.color.manual.accent
         messages = preset_registry.color_messages(
             config.color.manual.accent,
             config.color.manual.tint,
             transition_seconds=config.color.transition_seconds,
-            stream_time=await _stream_time(state, name),
-            baked_accent=_baked_accent(state, name),
+            stream_time=stream_time,
+            current=current,
+            current_accent=current_accent,
+            current_viz_rotation=current_rotation,
+            baked_accent=baked_accent,
+            target=target,
         )
     elif was_manual:
         # The producer only re-colors on a slide change, which on a one-image
         # channel may never come.
-        profile = await _current_slide_profile(state, channel)
+        profile = current_profile or await _current_slide_profile(state, channel)
         if profile is None:
             detail = (
                 "switched to automatic, but the current slide has no color profile; "
                 "the manual color stays until the next slide change"
             )
         else:
+            target = preset_registry.automatic_color_targets(
+                profile.accent, profile.brightness, profile.warmth
+            )
+            target_accent = profile.accent
             messages = preset_registry.color_messages(
                 profile.accent,
                 profile.dominant,
                 transition_seconds=config.color.transition_seconds,
-                stream_time=await _stream_time(state, name),
+                stream_time=stream_time,
+                current=current,
+                current_accent=current_accent,
+                current_viz_rotation=current_rotation,
+                baked_accent=baked_accent,
+                target=target,
             )
             detail = f"switched to automatic and re-applied {profile.accent} from the current slide"
-    await _send(state, name, messages)
+    delivered = await _send(state, name, messages)
+    if delivered and target is not None:
+        _remember_color_ramp(
+            state,
+            name,
+            current or preset_registry.NEUTRAL_TARGETS,
+            current_rotation,
+            target,
+            target_accent,
+            baked_accent,
+            stream_time,
+            config.color.transition_seconds,
+        )
+    if config.color.mode is ColorMode.AUTOMATIC and was_manual and (
+        delivered or target is None
+    ):
+        _schedule_color_mode(
+            state,
+            name,
+            ColorMode.AUTOMATIC,
+            config.color.transition_seconds if delivered else 0.0,
+        )
     return {
         "channel": name,
         "color": config.color.model_dump(mode="json"),
@@ -496,11 +569,70 @@ def _baked_accent(state: AppState, name: str) -> str:
     `hue` rotates rather than sets, so a requested color is only reachable as a
     rotation away from whatever the graph was actually built with.
     """
+    if not state.channel(name, resolve_media=False).config.visualization.enabled:
+        return ""
     try:
         value = (state.workspace.run_dir / name / "viz-accent").read_text(encoding="utf-8")
     except OSError:
         return ""
     return value.strip()
+
+
+def _sample_color_ramp(
+    state: AppState,
+    name: str,
+    fallback: preset_registry.ColorTargets | None,
+    fallback_accent: str,
+    baked_accent: str,
+    stream_time: float | None,
+) -> tuple[preset_registry.ColorTargets | None, float | None]:
+    rotation = (
+        preset_registry.viz_rotation(baked_accent, fallback_accent)
+        if baked_accent and fallback_accent
+        else None
+    )
+    ramp = state.color_ramps.get(name)
+    if ramp is None or stream_time is None:
+        return fallback, rotation
+    if stream_time < ramp.started_at or time.monotonic() > (
+        ramp.created_at + ramp.seconds + 1.0
+    ):
+        state.color_ramps.pop(name, None)
+        return fallback, rotation
+    targets, sampled_rotation = ramp.sample(stream_time)
+    return targets, preset_registry.canonical_rotation(sampled_rotation)
+
+
+def _remember_color_ramp(
+    state: AppState,
+    name: str,
+    current: preset_registry.ColorTargets,
+    current_rotation: float | None,
+    target: preset_registry.ColorTargets,
+    target_accent: str,
+    baked_accent: str,
+    stream_time: float | None,
+    seconds: float,
+) -> None:
+    if stream_time is None:
+        state.color_ramps.pop(name, None)
+        return
+    start_rotation = current_rotation or 0.0
+    target_rotation = start_rotation
+    if baked_accent and target_accent:
+        target_rotation = preset_registry.nearest_rotation(
+            start_rotation,
+            preset_registry.viz_rotation(baked_accent, target_accent),
+        )
+    state.color_ramps[name] = preset_registry.ColorRamp(
+        start=current,
+        target=target,
+        start_rotation=start_rotation,
+        target_rotation=target_rotation,
+        started_at=stream_time,
+        seconds=seconds,
+        created_at=time.monotonic(),
+    )
 
 
 def _publish_color_mode(state: AppState, name: str, mode: ColorMode) -> None:
@@ -520,6 +652,29 @@ def _publish_color_mode(state: AppState, name: str, mode: ColorMode) -> None:
         temp.replace(target)
     except OSError as exc:
         LOG.warning("color mode for %s not published: %s", name, exc)
+
+
+def _cancel_color_mode_task(state: AppState, name: str) -> None:
+    task = state.color_mode_tasks.pop(name, None)
+    if task is not None:
+        task.cancel()
+
+
+def _schedule_color_mode(
+    state: AppState, name: str, mode: ColorMode, delay: float
+) -> None:
+    async def publish() -> None:
+        try:
+            if delay > 0.0:
+                await asyncio.sleep(delay)
+            _publish_color_mode(state, name, mode)
+        except asyncio.CancelledError:
+            return
+        finally:
+            if state.color_mode_tasks.get(name) is asyncio.current_task():
+                state.color_mode_tasks.pop(name, None)
+
+    state.color_mode_tasks[name] = asyncio.create_task(publish())
 
 
 async def _current_slide_profile(
@@ -562,18 +717,83 @@ def _slide_image(
 async def apply_preset_to_channel(
     state: AppState, name: str, preset_name: str
 ) -> preset_registry.PresetApplication:
+    _cancel_color_mode_task(state, name)
     channel = state.channel(name, resolve_media=False)
+    was_manual = channel.config.color.mode is ColorMode.MANUAL
     preset = preset_registry.get_preset(state.workspace.presets_dir, preset_name)
+    current: preset_registry.ColorTargets | None = None
+    current_accent = ""
+    if channel.config.color.mode is ColorMode.MANUAL:
+        current = preset_registry.color_targets(
+            channel.config.color.manual.accent, channel.config.color.manual.tint
+        )
+        current_accent = channel.config.color.manual.accent
+    else:
+        profile = await _current_slide_profile(state, channel)
+        if profile is not None:
+            current = preset_registry.automatic_color_targets(
+                profile.accent, profile.brightness, profile.warmth
+            )
+            current_accent = profile.accent
+    stream_time = await _stream_time(state, name)
+    baked_accent = _baked_accent(state, name)
+    current, current_rotation = _sample_color_ramp(
+        state,
+        name,
+        current,
+        current_accent,
+        baked_accent,
+        stream_time,
+    )
     try:
         application = preset_registry.apply_preset(
-            preset, channel.config, stream_time=await _stream_time(state, name)
+            preset,
+            channel.config,
+            stream_time=stream_time,
+            current=current,
+            current_accent=current_accent,
+            current_viz_rotation=current_rotation,
+            baked_accent=baked_accent,
         )
     except preset_registry.NotInHotSet as exc:
         raise ApiError(409, "not_in_hot_set", str(exc)) from exc
 
     save_channel_config(channel.directory, application.config)
+    is_manual = application.config.color.mode is ColorMode.MANUAL
+    target: preset_registry.ColorTargets | None = None
+    target_accent = ""
+    if is_manual:
+        target = preset_registry.color_targets(
+            application.config.color.manual.accent,
+            application.config.color.manual.tint,
+        )
+        target_accent = application.config.color.manual.accent
+    if is_manual and not was_manual:
+        _publish_color_mode(state, name, ColorMode.MANUAL)
+        await asyncio.sleep(COLOR_MODE_SETTLE_SECONDS)
     if application.rewrite_images_list:
         recompile(state, name)
+
+    if was_manual and not is_manual:
+        profile = await _current_slide_profile(state, channel)
+        if profile is not None:
+            target = preset_registry.automatic_color_targets(
+                profile.accent, profile.brightness, profile.warmth
+            )
+            target_accent = profile.accent
+            application.messages.extend(
+                preset_registry.color_messages(
+                    profile.accent,
+                    profile.dominant,
+                    transition_seconds=application.config.color.transition_seconds,
+                    stream_time=stream_time,
+                    current=current,
+                    current_accent=current_accent,
+                    current_viz_rotation=current_rotation,
+                    baked_accent=baked_accent,
+                    target=target,
+                )
+            )
 
     if application.visualization is not None:
         hot_set = application.config.visualization.hot_set
@@ -583,7 +803,26 @@ async def apply_preset_to_channel(
                 STREAMSELECT_TARGET, hot_set.index(application.visualization), len(hot_set)
             ),
         )
-    await _send(state, name, application.messages)
+    delivered = await _send(state, name, application.messages)
+    if delivered and target is not None:
+        _remember_color_ramp(
+            state,
+            name,
+            current or preset_registry.NEUTRAL_TARGETS,
+            current_rotation,
+            target,
+            target_accent,
+            baked_accent,
+            stream_time,
+            application.config.color.transition_seconds,
+        )
+    if not is_manual and was_manual and (delivered or target is None):
+        _schedule_color_mode(
+            state,
+            name,
+            ColorMode.AUTOMATIC,
+            application.config.color.transition_seconds if delivered else 0.0,
+        )
     if application.visualization is not None:
         await state.events.publish(
             CHANNEL_VISUALIZATION, {"active": application.visualization}, channel=name
@@ -591,20 +830,19 @@ async def apply_preset_to_channel(
     return application
 
 
-async def _stream_time(state: AppState, name: str) -> float:
+async def _stream_time(state: AppState, name: str) -> float | None:
     """Color ramps are expressions in `t`, which is stream time, not wallclock."""
-    verdict = state.watchdog.latest.get(name)
-    if verdict is not None and verdict.sample is not None:
-        return round(verdict.sample.out_time_seconds, 3)
     sample = parse_progress(await state.supervisor.read_run_file(name, "progress"))
-    return round(sample.out_time_seconds, 3) if sample else 0.0
+    return round(sample.out_time_seconds, 3) if sample else None
 
 
-async def _send(state: AppState, name: str, messages: list[str]) -> None:
+async def _send(state: AppState, name: str, messages: list[str]) -> bool:
     """Best effort: a stopped channel keeps the persisted config change."""
     if not messages:
-        return
+        return False
     try:
         await state.supervisor.send_zmq_batch(name, messages)
     except (ZmqCommandError, ZmqValidationError, OSError) as exc:
         LOG.info("channel %s: runtime command not delivered: %s", name, exc)
+        return False
+    return True
