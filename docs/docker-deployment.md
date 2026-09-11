@@ -158,9 +158,9 @@ stay editable on the host. Icecast runs as `PUID:PGID` from the start.
 |-------|--------|---------|
 | `libretime/icecast:2.4.4` | pulled | tag-pinned |
 | `ambient-mediamtx:dev` | built `FROM bluenviron/mediamtx:1.9.3-ffmpeg` | **version-pinned and load-bearing** |
-| `ambient-backend:dev` | built `FROM python:3.12-slim-bookworm`, Docker CLI copied from `docker:29.8.0-cli` | pin base by digest in production |
+| `ambient-backend:dev` | built from digest-pinned `python:3.12-slim-bookworm`, Docker CLI copied from digest-pinned `docker:29.8.0-cli` | GHCR release digest in production |
 | `ambient-composer:dev` | built `FROM ubuntu:24.04` | pin by digest in production |
-| `ambient-liquidsoap:dev` | built `FROM savonet/liquidsoap:v2.4.5` | revalidate S1 failover before deploying |
+| `ambient-liquidsoap:dev` | built from digest-pinned `savonet/liquidsoap:v2.4.5` | GHCR release digest; revalidate S1 failover before deploying |
 
 **MediaMTX refuses to start on an unknown config key**, so bumping the relay image without
 re-reading its release notes turns a routine upgrade into an outage. 1.9.3 is what
@@ -179,8 +179,10 @@ docker build --build-arg BASE=ubuntu:24.04@sha256:<digest> \
   -f docker/Dockerfile.composer -t ambient-composer:dev .
 ```
 
-Override the image names with `AMBIENT_MEDIAMTX_IMAGE`, `AMBIENT_BACKEND_IMAGE`, or per-channel
-via the template's `image_tag`.
+Override image names with `AMBIENT_MEDIAMTX_IMAGE`, `AMBIENT_BACKEND_IMAGE`,
+`AMBIENT_LIQUIDSOAP_IMAGE`, or the per-channel template's local-development `image_tag`.
+Tagged releases publish immutable backend and Liquidsoap image digests; see
+[releases.md](releases.md).
 
 ### Pending relay migrations
 
@@ -413,7 +415,7 @@ your own credentials.
 The backend is a normal member of the `ambient` project — `docker compose -p ambient up -d`
 starts it alongside Icecast and MediaMTX.
 
-`docker/Dockerfile.backend` is built `FROM python:3.12-slim-bookworm` and copies the Docker CLI
+`docker/Dockerfile.backend` is built from digest-pinned `python:3.12-slim-bookworm` and copies the Docker CLI
 and the Compose plugin out of a pinned `docker:*-cli` image, because the supervisor shells out
 to `docker compose` and does not speak the socket API. `docker compose version` is run **at
 build time**, so a broken CLI is a build failure rather than a channel that will not start at

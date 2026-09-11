@@ -12,10 +12,10 @@
 # plugin are copied from the official CLI image rather than fetched loose: one
 # pinned tag, content-addressed by the registry, no build-time download logic.
 #
-# Pin BASE by digest in production. `python:3.12-slim-bookworm` is a moving tag.
-#   docker build --build-arg BASE=python:3.12-slim-bookworm@sha256:<digest> ...
-ARG BASE=python:3.12-slim-bookworm
-ARG DOCKER_CLI_IMAGE=docker:29.8.0-cli
+# Multi-architecture manifest digests: release builds must not drift underneath
+# an unchanged commit. Dependency refreshes update these deliberately.
+ARG BASE=python:3.12-slim-bookworm@sha256:782412e85d0f0984994c290652577d4018aff08145c85b262bb63dc0c7522254
+ARG DOCKER_CLI_IMAGE=docker:29.8.0-cli@sha256:eccaacfeed644c7de222ff047483568cb988dde95476fbaaf10ea2d04921bb66
 
 FROM ${DOCKER_CLI_IMAGE} AS dockercli
 

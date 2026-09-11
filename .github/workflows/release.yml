@@ -1,11 +1,7 @@
 name: Publish Release
 
-# Follows the videokiosk2 pattern: a SemVer tag, a VERSION file that must agree
-# with it, and a source archive with the release metadata appended.
-#
-# Deliberately source-only. Publishing images would mean publishing a build of
-# ffmpeg and Liquidsoap that a 24/7 operator could pull without noticing it had
-# changed; the images are pinned and built on the host that runs them.
+# A SemVer tag, source archive, and immutable multi-architecture runtime images.
+# Production consumes image digests from release.env, never a floating tag.
 
 on:
   push:
@@ -25,12 +21,19 @@ on:
 
 permissions:
   contents: write
+  packages: write
+  id-token: write
+  attestations: write
+
+concurrency:
+  group: release-${{ inputs.version || github.ref_name }}
+  cancel-in-progress: false
 
 jobs:
   publish:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
 
@@ -54,6 +57,8 @@ jobs:
       - name: Determine release metadata
         id: release
         env:
+          GH_TOKEN: ${{ github.token }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           INPUT_VERSION: ${{ inputs.version }}
           INPUT_PRERELEASE: ${{ inputs.prerelease }}
         run: |
@@ -61,6 +66,10 @@ jobs:
           tag="$GITHUB_REF_NAME"
           prerelease=false
           if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            if [[ "$GITHUB_REF_NAME" != "$DEFAULT_BRANCH" ]]; then
+              echo "manual releases must run from $DEFAULT_BRANCH, not $GITHUB_REF_NAME" >&2
+              exit 1
+            fi
             tag="$INPUT_VERSION"
             prerelease="$INPUT_PRERELEASE"
           elif [[ "$tag" == *-* ]]; then
@@ -72,6 +81,27 @@ jobs:
             exit 1
           fi
 
+          expected_prerelease=false
+          [[ "$tag" == *-* ]] && expected_prerelease=true
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" && "$prerelease" != "$expected_prerelease" ]]; then
+            echo "prerelease input ($prerelease) disagrees with tag $tag" >&2
+            exit 1
+          fi
+          prerelease="$expected_prerelease"
+
+          if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+            tagged_commit="$(git rev-list -n 1 "$tag")"
+            if [[ "$tagged_commit" != "$GITHUB_SHA" ]]; then
+              echo "tag $tag points to $tagged_commit, workflow is building $GITHUB_SHA" >&2
+              exit 1
+            fi
+          fi
+
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "release $tag already exists; refusing to republish immutable tags" >&2
+            exit 1
+          fi
+
           version_file=$(tr -d '\r\n' < VERSION)
           release_base="${tag#v}"
           release_base="${release_base%%-*}"
@@ -80,33 +110,131 @@ jobs:
             exit 1
           fi
 
-          repository_name="${GITHUB_REPOSITORY#*/}"
-          archive_tar="$RUNNER_TEMP/${repository_name}-${tag}.tar"
-          archive_path="${archive_tar}.gz"
-          release_metadata="$RUNNER_TEMP/RELEASE.json"
-          jq -n \
-            --arg version "$version_file" \
-            --arg tag "$tag" \
-            --arg commit "$GITHUB_SHA" \
-            '{version: $version, tag: $tag, commit: $commit}' \
-            > "$release_metadata"
-          git archive --format=tar --prefix="${repository_name}-${tag}/" --output="$archive_tar" HEAD
-          tar --append --file="$archive_tar" \
-            --transform="s|^|${repository_name}-${tag}/|" \
-            -C "$RUNNER_TEMP" RELEASE.json
-          gzip -n "$archive_tar"
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
 
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
           echo "make_latest=$([[ "$prerelease" == true ]] && echo false || echo true)" >> "$GITHUB_OUTPUT"
+          echo "backend_image=ghcr.io/${owner}/ambient-streamer-backend" >> "$GITHUB_OUTPUT"
+          echo "liquidsoap_image=ghcr.io/${owner}/ambient-streamer-liquidsoap" >> "$GITHUB_OUTPUT"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@1f40c72289eff860ee54a304f1438e3cff362e0a # v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push backend
+        id: backend
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        with:
+          context: .
+          file: docker/Dockerfile.backend
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.release.outputs.backend_image }}:run-${{ github.run_id }}-${{ github.run_attempt }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ steps.release.outputs.tag }}
+          cache-from: type=gha,scope=release-backend
+          cache-to: type=gha,mode=max,scope=release-backend
+          provenance: mode=max
+          sbom: true
+
+      - name: Attest backend image
+        uses: actions/attest-build-provenance@8beda2b7ed98355c0e97c0a63bec38ae472e66c4 # v4
+        with:
+          subject-name: ${{ steps.release.outputs.backend_image }}
+          subject-digest: ${{ steps.backend.outputs.digest }}
+          push-to-registry: true
+
+      - name: Build and push Liquidsoap
+        id: liquidsoap
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        with:
+          context: .
+          file: docker/Dockerfile.liquidsoap
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.release.outputs.liquidsoap_image }}:run-${{ github.run_id }}-${{ github.run_attempt }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ steps.release.outputs.tag }}
+          cache-from: type=gha,scope=release-liquidsoap
+          cache-to: type=gha,mode=max,scope=release-liquidsoap
+          provenance: mode=max
+          sbom: true
+
+      - name: Attest Liquidsoap image
+        uses: actions/attest-build-provenance@8beda2b7ed98355c0e97c0a63bec38ae472e66c4 # v4
+        with:
+          subject-name: ${{ steps.release.outputs.liquidsoap_image }}
+          subject-digest: ${{ steps.liquidsoap.outputs.digest }}
+          push-to-registry: true
+
+      - name: Build release artifacts
+        id: artifacts
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
+          BACKEND_IMAGE: ${{ steps.release.outputs.backend_image }}
+          BACKEND_DIGEST: ${{ steps.backend.outputs.digest }}
+          LIQUIDSOAP_IMAGE: ${{ steps.release.outputs.liquidsoap_image }}
+          LIQUIDSOAP_DIGEST: ${{ steps.liquidsoap.outputs.digest }}
+        run: |
+          set -euo pipefail
+          repository_name="${GITHUB_REPOSITORY#*/}"
+          archive_tar="$RUNNER_TEMP/${repository_name}-${TAG}.tar"
+          archive_path="${archive_tar}.gz"
+          manifest="$RUNNER_TEMP/release-manifest.json"
+          release_env="$RUNNER_TEMP/release.env"
+
+          jq -n \
+            --arg version "$(tr -d '\r\n' < VERSION)" \
+            --arg tag "$TAG" \
+            --arg commit "$GITHUB_SHA" \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg backend "${BACKEND_IMAGE}@${BACKEND_DIGEST}" \
+            --arg liquidsoap "${LIQUIDSOAP_IMAGE}@${LIQUIDSOAP_DIGEST}" \
+            '{version: $version, tag: $tag, commit: $commit, repository: $repository, images: {backend: $backend, liquidsoap: $liquidsoap}}' \
+            > "$manifest"
+
+          cat > "$release_env" <<EOF
+          AMBIENT_RELEASE_TAG=$TAG
+          AMBIENT_RELEASE_COMMIT=$GITHUB_SHA
+          AMBIENT_RELEASE_REPOSITORY=$GITHUB_REPOSITORY
+          AMBIENT_BACKEND_IMAGE=${BACKEND_IMAGE}@${BACKEND_DIGEST}
+          AMBIENT_LIQUIDSOAP_IMAGE=${LIQUIDSOAP_IMAGE}@${LIQUIDSOAP_DIGEST}
+          EOF
+
+          cp "$manifest" "$RUNNER_TEMP/RELEASE.json"
+          git archive --format=tar --prefix="${repository_name}-${TAG}/" --output="$archive_tar" HEAD
+          tar --append --file="$archive_tar" \
+            --transform="s|^|${repository_name}-${TAG}/|" \
+            -C "$RUNNER_TEMP" RELEASE.json
+          gzip -n "$archive_tar"
+
           echo "archive_path=$archive_path" >> "$GITHUB_OUTPUT"
+          echo "manifest_path=$manifest" >> "$GITHUB_OUTPUT"
+          echo "env_path=$release_env" >> "$GITHUB_OUTPUT"
 
       - name: Create GitHub release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@5113cdc90fd4d541c801c55356214017bf5ae34b # v3
         with:
           tag_name: ${{ steps.release.outputs.tag }}
           target_commitish: ${{ github.sha }}
           generate_release_notes: true
           prerelease: ${{ steps.release.outputs.prerelease }}
           make_latest: ${{ steps.release.outputs.make_latest }}
-          files: ${{ steps.release.outputs.archive_path }}
+          files: |
+            ${{ steps.artifacts.outputs.archive_path }}
+            ${{ steps.artifacts.outputs.manifest_path }}
+            ${{ steps.artifacts.outputs.env_path }}

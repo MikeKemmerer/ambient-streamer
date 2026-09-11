@@ -245,7 +245,7 @@ Nothing in this repository checks either of these. It is the operator's responsi
 | `plugins/` | Visualization plugins (`viz.ffmpeg` + `config.json`) |
 | `presets/` | Preset packs — look-and-feel bundles that can never require a restart |
 | `docker/` | Dockerfiles, Icecast and MediaMTX config, the YouTube publisher, per-channel Compose template |
-| `scripts/` | `install.sh`, `channel.sh`, `make-fallback.sh`, `verify-stack.sh` |
+| `scripts/` | installers, channel control, release deployment, probes and verification |
 | `spikes/` | Phase 0 harnesses and raw output behind the measured claims |
 | `docs/` | Guides, architecture, and the frozen lane contracts |
 
@@ -258,6 +258,7 @@ Nothing in this repository checks either of these. It is the operator's responsi
 | [docs/architecture.md](docs/architecture.md) | Container topology, data flow, why FFmpeg never restarts |
 | [docs/scaling.md](docs/scaling.md) | Capacity planning and encoder ceilings |
 | [docs/docker-deployment.md](docs/docker-deployment.md) | Ports, GPU passthrough, resource limits, secrets, the Docker socket |
+| [docs/releases.md](docs/releases.md) | GHCR release images, attestations, digest-pinned deployment and rollback |
 | [docs/api-reference.md](docs/api-reference.md) | Every REST endpoint and SSE event, with examples |
 | [docs/plugin-development.md](docs/plugin-development.md) | Writing a visualization plugin |
 | [docs/visualization-filters.md](docs/visualization-filters.md) | The FFmpeg filters available and how they behave here |

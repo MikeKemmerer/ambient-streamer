@@ -49,7 +49,7 @@ services:
   {{ channel }}-liquidsoap:
     <<: *channel-common
     container_name: {{ channel }}-liquidsoap
-    image: ambient-liquidsoap:{{ image_tag | default('dev') }}
+    image: ${AMBIENT_LIQUIDSOAP_IMAGE:-ambient-liquidsoap:{{ image_tag | default('dev') }}}
     build:
       context: {{ repo_root }}
       dockerfile: docker/Dockerfile.liquidsoap
