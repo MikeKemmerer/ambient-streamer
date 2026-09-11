@@ -29,7 +29,9 @@ channel: `speed=0.996x`, 3085–3137 kbits/s, `drop_frames=0`, `dup_frames=0`.
 | `scripts/install.sh`, compile CLI, per-channel start/stop | |
 
 Start with [docs/quickstart.md](docs/quickstart.md), which is explicit about what each gap
-means in practice.
+means in practice. Existing installations use immutable release images and the guarded upgrade
+procedure in [docs/releases.md](docs/releases.md), including hosts originally installed without
+Git.
 
 ## Requirements
 

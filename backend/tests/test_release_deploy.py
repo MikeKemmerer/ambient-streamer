@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import stat
@@ -37,12 +38,16 @@ def deploy_repo(tmp_path: Path) -> tuple[Path, Path, Path]:
 
     docker_log = root / "docker.log"
     channel_log = root / "channel.log"
+    gh_log = root / "gh.log"
     executable(
         fake_bin / "docker",
         """#!/bin/sh
 printf '%s\n' "$*" >> "$DOCKER_LOG"
 case "$*" in
   *"compose"*"config --images"*) printf '%s\n' "$AMBIENT_BACKEND_IMAGE" ;;
+    *"ps --filter label=com.docker.compose.service=lofi-composer"*)
+        [ "${FAKE_COMPOSER_RUNNING:-true}" = true ] && printf '%s\n' "${FAKE_COMPOSER_NAME:-lofi-composer}"
+        ;;
     *"org.opencontainers.image.revision"*) printf '%s\n' "$FAKE_IMAGE_REVISION" ;;
     *"org.opencontainers.image.source"*) printf '%s\n' "https://github.com/MikeKemmerer/ambient-streamer" ;;
     *".State.Running"*"-liquidsoap"*) printf '%s\n' "${FAKE_LIQ_RUNNING:-true}" ;;
@@ -53,6 +58,20 @@ case "$*" in
   *".Config.Image"*"-liquidsoap"*) printf '%s\n' "$LIQUIDSOAP_IMAGE" ;;
 esac
 exit 0
+""",
+    )
+    executable(
+        fake_bin / "gh",
+        r"""#!/bin/sh
+printf '%s\n' "$*" >> "$GH_LOG"
+case "$*" in
+    "attestation verify --help") exit 0 ;;
+    attestation\ verify\ oci://ghcr.io/*\ --repo\ *\ --source-digest\ *)
+        [ "${FAKE_ATTEST_FAIL:-false}" = true ] && exit 1
+        exit 0
+        ;;
+    *) exit 1 ;;
+esac
 """,
     )
     executable(
@@ -88,23 +107,30 @@ def run_deploy(
     *args: str,
     running: bool = True,
     composer_running: bool = True,
+    composer_name: str = "lofi-composer",
     image_identity: bool = True,
+    attest: bool = True,
 ) -> subprocess.CompletedProcess[str]:
     root, docker_log, channel_log = fixture
+    release_values = dict(
+        line.split("=", 1)
+        for line in (root / "release.env").read_text(encoding="utf-8").splitlines()
+    )
     env = {
         **os.environ,
         "PATH": f"{root / 'fake-bin'}:{os.environ['PATH']}",
         "DOCKER_LOG": str(docker_log),
         "CHANNEL_LOG": str(channel_log),
+        "GH_LOG": str(root / "gh.log"),
         "BACKEND_IMAGE": BACKEND,
         "LIQUIDSOAP_IMAGE": LIQUIDSOAP,
         "AMBIENT_BACKEND_IMAGE": "ghcr.io/hostile/wrong-backend@sha256:" + "c" * 64,
         "AMBIENT_LIQUIDSOAP_IMAGE": "ghcr.io/hostile/wrong-liquidsoap@sha256:" + "d" * 64,
         "FAKE_LIQ_RUNNING": "true" if running else "false",
         "FAKE_COMPOSER_RUNNING": "true" if composer_running else "false",
-        "FAKE_IMAGE_REVISION": subprocess.check_output(
-            ["git", "rev-parse", "HEAD"], cwd=root, text=True
-        ).strip()
+        "FAKE_COMPOSER_NAME": composer_name,
+        "FAKE_ATTEST_FAIL": "false" if attest else "true",
+        "FAKE_IMAGE_REVISION": release_values["AMBIENT_RELEASE_COMMIT"]
         if image_identity
         else "0" * 40,
     }
@@ -133,17 +159,28 @@ def test_prepare_pulls_and_records_digests_without_recreating(deploy_repo) -> No
     assert not channel_log.exists()
     assert log.count("org.opencontainers.image.revision") == 2
     assert log.count("org.opencontainers.image.source") == 2
+    attestations = (root / "gh.log").read_text(encoding="utf-8")
+    assert f"attestation verify oci://{BACKEND}" in attestations
+    assert f"attestation verify oci://{LIQUIDSOAP}" in attestations
+    assert attestations.count("--source-digest ") == 2
 
 
 def test_selected_rollout_never_recreates_the_composer(deploy_repo) -> None:
     _root, docker_log, channel_log = deploy_repo
-    result = run_deploy(deploy_repo, "--backend", "--liquidsoap", "lofi")
+    result = run_deploy(
+        deploy_repo,
+        "--backend",
+        "--liquidsoap",
+        "lofi",
+        composer_name="lofi-composer-next",
+    )
 
     assert result.returncode == 0, result.stderr
     log = docker_log.read_text(encoding="utf-8")
     assert "up -d --no-deps --force-recreate --wait --wait-timeout 60 backend" in log
     assert "exec ambient-backend python -m ambient.compile lofi" in log
     assert "force-recreate lofi-composer" not in log
+    assert "{{.Id}} lofi-composer-next" in log
     channel_calls = channel_log.read_text(encoding="utf-8").splitlines()
     assert channel_calls == [
         "config lofi --images",
@@ -191,7 +228,7 @@ def test_stopped_composer_is_refused_before_pulls_or_changes(deploy_repo) -> Non
     )
 
     assert result.returncode != 0
-    assert "composer is not running" in result.stderr
+    assert "expected one running composer for lofi, found 0" in result.stderr
     assert "pull " not in docker_log.read_text(encoding="utf-8")
     assert (root / ".env").read_bytes() == original_env
     assert not channel_log.exists()
@@ -204,6 +241,17 @@ def test_wrong_image_revision_stops_before_env_or_container_changes(deploy_repo)
 
     assert result.returncode != 0
     assert "image revision" in result.stderr
+    assert (root / ".env").read_bytes() == original_env
+    assert "compose" not in docker_log.read_text(encoding="utf-8")
+    assert not channel_log.exists()
+
+
+def test_failed_attestation_stops_before_env_or_container_changes(deploy_repo) -> None:
+    root, docker_log, channel_log = deploy_repo
+    original_env = (root / ".env").read_bytes()
+    result = run_deploy(deploy_repo, "--backend", attest=False)
+
+    assert result.returncode != 0
     assert (root / ".env").read_bytes() == original_env
     assert "compose" not in docker_log.read_text(encoding="utf-8")
     assert not channel_log.exists()
@@ -224,4 +272,53 @@ def test_wrong_ghcr_package_owner_is_rejected_before_docker(deploy_repo) -> None
 
     assert result.returncode != 0
     assert "invalid backend image digest reference" in result.stderr
+    assert not docker_log.exists()
+
+
+def test_extracted_release_identity_is_accepted_without_git(deploy_repo) -> None:
+    root, _docker_log, _channel_log = deploy_repo
+    release_values = dict(
+        line.split("=", 1)
+        for line in (root / "release.env").read_text(encoding="utf-8").splitlines()
+    )
+    (root / "RELEASE.json").write_text(
+        json.dumps(
+            {
+                "tag": release_values["AMBIENT_RELEASE_TAG"],
+                "commit": release_values["AMBIENT_RELEASE_COMMIT"],
+                "repository": release_values["AMBIENT_RELEASE_REPOSITORY"],
+                "images": {
+                    "backend": release_values["AMBIENT_BACKEND_IMAGE"],
+                    "liquidsoap": release_values["AMBIENT_LIQUIDSOAP_IMAGE"],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    shutil.rmtree(root / ".git")
+
+    result = run_deploy(deploy_repo)
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_mismatched_extracted_release_is_rejected_before_docker(deploy_repo) -> None:
+    root, docker_log, _channel_log = deploy_repo
+    (root / "RELEASE.json").write_text(
+        json.dumps(
+            {
+                "tag": "v1.2.3",
+                "commit": "0" * 40,
+                "repository": "MikeKemmerer/ambient-streamer",
+                "images": {"backend": BACKEND, "liquidsoap": LIQUIDSOAP},
+            }
+        ),
+        encoding="utf-8",
+    )
+    shutil.rmtree(root / ".git")
+
+    result = run_deploy(deploy_repo)
+
+    assert result.returncode != 0
+    assert "RELEASE.json commit does not match" in result.stderr
     assert not docker_log.exists()

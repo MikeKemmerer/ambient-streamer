@@ -17,20 +17,23 @@ def test_release_builds_only_backend_and_liquidsoap_for_both_platforms() -> None
     assert "file: docker/Dockerfile.mediamtx" not in WORKFLOW
 
 
-def test_release_pins_actions_and_publishes_build_metadata() -> None:
+def test_release_pins_actions_and_attests_both_images() -> None:
     for action in (
         "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
         "docker/setup-qemu-action@1f40c72289eff860ee54a304f1438e3cff362e0a",
         "docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e",
         "docker/login-action@dbcb813823bdd20940b903addbd779551569679f",
         "docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a",
+        "actions/attest-build-provenance@8beda2b7ed98355c0e97c0a63bec38ae472e66c4",
         "softprops/action-gh-release@5113cdc90fd4d541c801c55356214017bf5ae34b",
     ):
         assert action in WORKFLOW
     assert WORKFLOW.count("provenance: mode=max") == 2
     assert WORKFLOW.count("sbom: true") == 2
+    assert WORKFLOW.count("push-to-registry: true") == 2
     assert "packages: write" in WORKFLOW
-    assert "attest-build-provenance" not in WORKFLOW
+    assert "id-token: write" in WORKFLOW
+    assert "attestations: write" in WORKFLOW
 
 
 def test_release_never_publishes_a_floating_latest_tag() -> None:

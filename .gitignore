@@ -61,6 +61,7 @@ channels/*/bumpers/*
 
 # Generated artifacts
 /release.env
+/.release-backups/
 channels/*/profiles/
 channels/*/playlist.m3u
 channels/*/images.list
