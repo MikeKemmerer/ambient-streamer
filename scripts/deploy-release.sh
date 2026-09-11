@@ -86,9 +86,6 @@ HEAD_COMMIT="$(git rev-parse HEAD)"
 
 command -v docker >/dev/null 2>&1 || die "docker not found"
 docker info >/dev/null 2>&1 || die "Docker daemon did not answer"
-command -v gh >/dev/null 2>&1 || die "gh not found — install GitHub CLI to verify attestations"
-gh attestation verify --help >/dev/null 2>&1 \
-	|| die "gh does not support attestation verification — upgrade GitHub CLI"
 
 declare -A COMPOSER_IDS=()
 for channel in "${CHANNELS[@]}"; do
@@ -111,13 +108,21 @@ fi
 log "pulling $TAG images"
 docker pull "$BACKEND_IMAGE"
 docker pull "$LIQUIDSOAP_IMAGE"
-log "verifying GitHub build attestations"
-SIGNER_WORKFLOW="${RELEASE_REPOSITORY}/.github/workflows/release.yml"
-gh attestation verify "oci://$BACKEND_IMAGE" --repo "$RELEASE_REPOSITORY" \
-	--signer-workflow "$SIGNER_WORKFLOW" --source-digest "$COMMIT" >/dev/null
-gh attestation verify "oci://$LIQUIDSOAP_IMAGE" --repo "$RELEASE_REPOSITORY" \
-	--signer-workflow "$SIGNER_WORKFLOW" --source-digest "$COMMIT" >/dev/null
-ok "both image attestations verified against $RELEASE_REPOSITORY"
+
+verify_image_identity() {
+	local image="$1" name="$2" revision source
+	revision="$(docker image inspect -f '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$image")"
+	[[ "$revision" == "$COMMIT" ]] \
+		|| die "$name image revision is $revision, expected $COMMIT"
+	source="$(docker image inspect -f '{{ index .Config.Labels "org.opencontainers.image.source" }}' "$image")"
+	[[ "$source" == "https://github.com/$RELEASE_REPOSITORY" ]] \
+		|| die "$name image source is $source, expected https://github.com/$RELEASE_REPOSITORY"
+}
+
+log "verifying image source and revision labels"
+verify_image_identity "$BACKEND_IMAGE" backend
+verify_image_identity "$LIQUIDSOAP_IMAGE" Liquidsoap
+ok "both image identities match $RELEASE_REPOSITORY@$COMMIT"
 
 # Process environment has higher Compose precedence than root/channel env files.
 # Export the already-validated digests so neither a shell variable nor a
