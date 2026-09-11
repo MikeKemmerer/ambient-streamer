@@ -318,7 +318,7 @@ def mount_frontend(app: FastAPI, directory: Path) -> bool:
 
 
 def create_app(root: Path | str | None = None) -> FastAPI:
-    from .api import bumpers, channels, directory, looks, media, preview, system
+    from .api import bumpers, channels, directory, looks, media, preview, soundboard, system
 
     resolved_root = repo_root(root)
 
@@ -410,6 +410,7 @@ def create_app(root: Path | str | None = None) -> FastAPI:
     app.include_router(system.router)
     app.include_router(channels.router)
     app.include_router(media.router)
+    app.include_router(soundboard.router)
     app.include_router(looks.router)
     app.include_router(bumpers.router)
     # Tokenless, and mapped onto the public root by the LAN front door.

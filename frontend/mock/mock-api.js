@@ -99,6 +99,16 @@ const MEDIA_IMAGES = {
   },
 };
 
+const MEDIA_SOUNDBOARD = {
+  common: [
+    'common/soundboard/air-horn.wav',
+    'common/soundboard/metal-pipe.wav',
+    'common/soundboard/applause.wav',
+    'common/soundboard/record-scratch.wav',
+  ],
+  channels: { lofi: [], chant: [], deepspace: [] },
+};
+
 // Upload rules. The extension list is the cheap check; the magic-byte probe
 // stands in for the real backend actually looking at the file, which is the only
 // check that means anything when the name and the Content-Type come from the
@@ -113,6 +123,11 @@ const UPLOAD_KINDS = {
     folder: 'images',
     extensions: ['.jpg', '.jpeg', '.png', '.webp', '.bmp'],
     library: MEDIA_IMAGES,
+  },
+  soundboard: {
+    folder: 'soundboard',
+    extensions: ['.mp3', '.flac', '.ogg', '.opus', '.m4a', '.aac', '.wav'],
+    library: MEDIA_SOUNDBOARD,
   },
 };
 
@@ -497,15 +512,40 @@ function logLines(name, service, lines) {
   return out.join('\n');
 }
 
+function previewWav() {
+  const rate = 8000;
+  const frames = 1600;
+  const data = new ArrayBuffer(44 + frames * 2);
+  const view = new DataView(data);
+  const text = (offset, value) => [...value].forEach((char, i) => view.setUint8(offset + i, char.charCodeAt(0)));
+  text(0, 'RIFF');
+  view.setUint32(4, 36 + frames * 2, true);
+  text(8, 'WAVEfmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, rate, true);
+  view.setUint32(28, rate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  text(36, 'data');
+  view.setUint32(40, frames * 2, true);
+  for (let i = 0; i < frames; i += 1) {
+    view.setInt16(44 + i * 2, Math.round(5000 * Math.sin(2 * Math.PI * 440 * i / rate)), true);
+  }
+  return data;
+}
+
 // --------------------------------------------------------------------------
 // Upload
 // --------------------------------------------------------------------------
 
 async function sniff(file, kind) {
+  const probeKind = kind === 'soundboard' ? 'audio' : kind;
   const head = new Uint8Array(await file.slice(0, 12).arrayBuffer());
   // ISO-BMFF (m4a/aac in mp4) carries its brand at offset 4, not 0.
-  if (kind === 'audio' && String.fromCharCode(...head.slice(4, 8)) === 'ftyp') return true;
-  return SIGNATURES[kind].some((sig) => sig.every((byte, i) => head[i] === byte));
+  if (probeKind === 'audio' && String.fromCharCode(...head.slice(4, 8)) === 'ftyp') return true;
+  return SIGNATURES[probeKind].some((sig) => sig.every((byte, i) => head[i] === byte));
 }
 
 async function upload(form) {
@@ -513,7 +553,7 @@ async function upload(form) {
 
   const kind = String(form.get('kind') || '');
   const spec = UPLOAD_KINDS[kind];
-  if (!spec) return fail(400, 'invalid_kind', `kind must be audio or images, not "${kind}".`);
+  if (!spec) return fail(400, 'invalid_kind', `kind must be audio, images or soundboard, not "${kind}".`);
 
   const destination = String(form.get('destination') || 'channel');
   if (!['common', 'channel'].includes(destination)) {
@@ -530,7 +570,7 @@ async function upload(form) {
   if (!files.length) return fail(400, 'no_files', 'No file parts in the request.');
 
   const dir = destination === 'common' ? `common/${spec.folder}` : `channels/${name}/${spec.folder}`;
-  const noun = kind === 'audio' ? 'audio' : 'an image';
+  const noun = kind === 'images' ? 'an image' : 'audio';
   const results = [];
   for (const file of files) {
     const base = file.name.split(/[\\/]/).pop();
@@ -641,7 +681,7 @@ async function route(url, init) {
   // This mock puts uploads on one route only, so the client's route probe has
   // something real to be turned away from rather than a listing it might read as
   // a successful upload.
-  if (method === 'POST' && /^\/api\/media\/(audio|images)(\/upload)?$/.test(path)) {
+  if (method === 'POST' && /^\/api\/media\/(audio|images|soundboard)(\/upload)?$/.test(path)) {
     return fail(405, 'method_not_allowed', `${path} does not accept POST.`);
   }
   if (path === '/api/media/upload' && method === 'POST') return upload(form);
@@ -788,6 +828,33 @@ async function route(url, init) {
     entry.status.next_track = entry.playlist[(at + 1) % entry.playlist.length];
     statusEvent(name);
     return json({ accepted: true, channel: name, action: 'play', track: wanted, detail: '4' }, 202);
+  }
+
+  if (tail === 'soundboard' && method === 'GET') {
+    const paths = [...MEDIA_SOUNDBOARD.common, ...(MEDIA_SOUNDBOARD.channels[name] || [])];
+    return json({
+      channel: name,
+      clips: paths.map((clip) => ({
+        name: clip.split('/').pop().replace(/\.[^.]+$/, ''),
+        path: clip,
+        container_path: clip.startsWith('common/')
+          ? `/media/common/${clip.slice('common/'.length)}`
+          : `/media/channel/${clip.split('/').slice(2).join('/')}`,
+        origin: clip.startsWith('common/') ? 'common' : 'channel',
+        bytes: 48000,
+      })),
+    });
+  }
+
+  if (tail === 'soundboard/preview' && method === 'GET') {
+    return new Response(previewWav(), { headers: { 'Content-Type': 'audio/wav' } });
+  }
+
+  if (tail === 'soundboard/play' || tail === 'soundboard/stop') {
+    if (entry.status.state !== 'running') {
+      return fail(409, 'channel_not_running', `${name} has no Liquidsoap soundboard.`);
+    }
+    return json({ accepted: true, channel: name, action: tail.replace('/', '_') }, 202);
   }
 
   if (tail === 'playlist') {

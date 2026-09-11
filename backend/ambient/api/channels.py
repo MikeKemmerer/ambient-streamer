@@ -357,7 +357,7 @@ async def create_channel(body: CreateChannel, state: AppState = Authed) -> dict[
     )
     config = ChannelConfig(name=name, genre=body.genre, visualization=visualization)
 
-    for sub in ("audio", "images", "bumpers", "profiles"):
+    for sub in ("audio", "images", "bumpers", "soundboard", "profiles"):
         (directory / sub).mkdir(parents=True, exist_ok=True)
     save_channel_config(directory, config)
     _write_channel_env(directory, body, mount, fallback)

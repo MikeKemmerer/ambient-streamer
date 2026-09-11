@@ -18,6 +18,11 @@ RUN apt-get update \
 RUN liquidsoap --check 'output.file(%mp3(bitrate=256, samplerate=44100, stereo=true), "/dev/null", sine())' \
  && liquidsoap --version
 
+COPY liquidsoap/channel.liq /tmp/channel.liq
+RUN CHANNEL_MOUNT=/check ICECAST_SOURCE_PASSWORD=check \
+    liquidsoap --check /tmp/channel.liq \
+ && rm /tmp/channel.liq
+
 COPY docker/liquidsoap-entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod 755 /usr/local/bin/entrypoint.sh
 

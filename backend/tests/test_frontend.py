@@ -104,6 +104,25 @@ def test_static_assets_carry_a_sane_content_type(ui) -> None:
     assert "vendored" in nested.text
 
 
+def test_source_ui_includes_soundboard_controls() -> None:
+    root = Path(__file__).resolve().parents[2]
+    html = (root / "frontend" / "index.html").read_text(encoding="utf-8")
+    script = (root / "frontend" / "app.js").read_text(encoding="utf-8")
+
+    for element_id in (
+        "soundboard-grid",
+        "soundboard-filter",
+        "soundboard-arm",
+        "btn-soundboard-submit",
+        "btn-soundboard-stop",
+        "soundboard-dropzone",
+    ):
+        assert f'id="{element_id}"' in html
+    assert "api.playSound" in script
+    assert "api.previewSound" in script
+    assert "api.stopSoundboard" in script
+
+
 def test_a_missing_asset_is_a_contract_shaped_404(ui) -> None:
     client, _frontend = ui
     response = client.get("/nope.js")

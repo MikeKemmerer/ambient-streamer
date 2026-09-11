@@ -109,6 +109,7 @@ CASES = [
     ("PUT", "/api/channels/lofi/playlist", {"tracks": ["channels/lofi/audio/01 - a track.m4a"]}, 200, TOKEN),
     ("PUT", "/api/channels/lofi/playlist", {"tracks": ["../../etc/passwd"]}, 400, TOKEN),
     ("GET", "/api/channels/lofi/images", None, 200, TOKEN),
+    ("GET", "/api/channels/lofi/soundboard", None, 200, TOKEN),
     ("PUT", "/api/channels/lofi/images", {"slides": ["channels/lofi/images/*"]}, 200, TOKEN),
     ("PUT", "/api/channels/lofi/visualization", {"active": "showfreqs-bars"}, 200, TOKEN),
     ("PUT", "/api/channels/lofi/visualization?allow_restart=false", {"active": "minimal-line"}, 409, TOKEN),

@@ -3,7 +3,7 @@
 #
 #   scripts/new-channel.sh lofi
 #
-# Creates channels/lofi/{audio,images,bumpers,profiles}, a 0600 .env and a
+# Creates channels/lofi/{audio,images,bumpers,soundboard,profiles}, a 0600 .env and a
 # config.yaml carrying the channel's own name and its own Icecast mounts, then
 # encodes the channel's fallback MP3.
 #
@@ -94,12 +94,12 @@ head1 "2/5  directories"
 
 # profiles/ matches what POST /api/channels creates; color extraction writes
 # there. Its contents are generated, so it gets no .gitkeep.
-for sub in audio images bumpers; do
+for sub in audio images bumpers soundboard; do
 	mkdir -p "$CHANNEL_DIR/$sub"
 	: > "$CHANNEL_DIR/$sub/.gitkeep"
 done
 mkdir -p "$CHANNEL_DIR/profiles"
-ok "channels/$CHANNEL/{audio,images,bumpers,profiles}"
+ok "channels/$CHANNEL/{audio,images,bumpers,soundboard,profiles}"
 
 # ---------------------------------------------------------------------------
 # 3. .env

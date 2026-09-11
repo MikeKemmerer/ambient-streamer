@@ -25,7 +25,7 @@ PYTHON  ?= python3
 
 COMPOSE := docker compose -p $(PROJECT)
 
-.PHONY: help install build up down test lint compile fallback verify capacity \
+.PHONY: help install build up down test lint compile fallback soundboard verify capacity \
         channel-new channel-start channel-stop clean require-channel
 
 help: ## List every target (default)
@@ -78,6 +78,9 @@ compile: ## Compile config -> playlist.m3u, images.list, compose file (CHANNEL=,
 
 fallback: ## Encode an Icecast fallback MP3, 256k/44.1k/stereo (CHANNEL=, default 'default')
 	scripts/make-fallback.sh $(if $(CHANNEL),$(CHANNEL),default)
+
+soundboard: ## Regenerate the four original starter sound effects
+	scripts/generate-soundboard.py
 
 verify: ## Bring the stack up, prove Icecast serves its fallback, tear it down
 	scripts/verify-stack.sh

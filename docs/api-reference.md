@@ -86,9 +86,14 @@ Common `error` tokens: `unauthorized`, `unknown_channel`, `invalid_channel_name`
 | GET | `/api/channels/{name}/preview` | **extension** — resolves the HLS URL |
 | GET | `/api/media/audio` | contract |
 | GET | `/api/media/images` | contract |
+| GET | `/api/media/soundboard` | **extension** — shared and per-channel effects |
 | POST | `/api/media/profiles` | **extension** — color extraction |
 | GET / PUT | `/api/channels/{name}/playlist` | contract |
 | GET / PUT | `/api/channels/{name}/images` | contract |
+| GET | `/api/channels/{name}/soundboard` | **extension** — playable effects |
+| GET | `/api/channels/{name}/soundboard/preview` | **extension** — browser-only audio |
+| POST | `/api/channels/{name}/soundboard/play` | **extension** — overlay one effect |
+| POST | `/api/channels/{name}/soundboard/stop` | **extension** — stop and clear effects |
 | GET | `/api/plugins` | contract |
 | PUT | `/api/channels/{name}/visualization` | contract |
 | GET | `/api/presets` | contract |
@@ -98,8 +103,8 @@ Common `error` tokens: `unauthorized`, `unknown_channel`, `invalid_channel_name`
 | POST | `/api/channels/{name}/bumpers/generate` | contract |
 | GET | `/api/channels/{name}/bumpers/{id}/preview` | contract |
 
-Everything in the contract is implemented. The three extensions are additive and do not change
-any contract shape.
+Everything in the contract is implemented. Extensions are additive and do not change any
+contract shape.
 
 ---
 
@@ -612,6 +617,30 @@ command stream — the ZMQ path ceilings at about 31.5 commands/s.
 
 See [color-profiles.md](color-profiles.md#the-two-appliers) for why a manual color on a channel
 with extracted profiles only holds until the next slide.
+
+---
+
+## Soundboard
+
+Effects are discovered from `common/soundboard/` and
+`channels/<name>/soundboard/`. The response includes display paths and the validated container
+paths accepted by the play endpoint.
+
+| Method | Path | Notes |
+|--------|------|-------|
+| GET | `/api/channels/{name}/soundboard` | list shared and channel-local effects |
+| GET | `/api/channels/{name}/soundboard/preview?clip=...` | authenticated audio for browser-only preview |
+| POST | `/api/channels/{name}/soundboard/play` | `202`; body `{ "clip": "/media/common/soundboard/air-horn.wav" }` |
+| POST | `/api/channels/{name}/soundboard/stop` | `202`; stop the active effect and clear queued effects |
+| POST | `/api/media/soundboard/upload` | audio-probed upload to `common` or one channel |
+
+The play endpoint accepts only a path returned by the channel's soundboard listing. Liquidsoap
+mixes the effect over the post-crossfade music source, ducks music to 35% with a 150 ms fade,
+and limits the result before Icecast. FFmpeg is never restarted.
+
+The operator UI never sends a pad click directly to the stream. Select a sound, preview it in
+the browser if needed, check **Arm stream playback**, then press **Play selected sound**. The
+arm checkbox clears after every submission attempt and whenever the selected sound changes.
 
 ---
 

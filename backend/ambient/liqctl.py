@@ -27,8 +27,10 @@ NEXT = "ambient.next"
 
 # Takes an argument, so it cannot go through the plain whitelist - see `push`.
 PUSH = "queue.push"
+SOUNDBOARD_PUSH = "soundboard.push"
+SOUNDBOARD_STOP = "soundboard.flush_and_skip"
 
-_ALLOWED = frozenset({SKIP, STATUS, CURRENT, NEXT})
+_ALLOWED = frozenset({SKIP, STATUS, CURRENT, NEXT, SOUNDBOARD_STOP})
 
 TELNET_PORT = 1234
 
@@ -115,3 +117,19 @@ def push(
 ) -> str:
     """Put one specific track on air, interrupting whatever is playing."""
     return _exchange(host, f"{PUSH} {validate_uri(uri, allowed)}", port=port, timeout=timeout)
+
+
+def push_soundboard(
+    host: str,
+    uri: str,
+    *,
+    allowed: Iterable[str],
+    port: int = TELNET_PORT,
+    timeout: float = 5.0,
+) -> str:
+    """Queue one validated effect on the dedicated overlay source."""
+    try:
+        token = validate_uri(uri, allowed)
+    except LiquidsoapError as exc:
+        raise LiquidsoapError(str(exc).replace("track", "soundboard clip")) from exc
+    return _exchange(host, f"{SOUNDBOARD_PUSH} {token}", port=port, timeout=timeout)

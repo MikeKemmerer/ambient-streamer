@@ -6,7 +6,8 @@ every byte of an upload is hostile until proven otherwise:
 * the submitted filename is **normalized first, then validated** — unicode
   folded, separators unified, percent-escapes decoded for detection, reduced to
   a basename. Checking before normalizing is the classic way to get this wrong.
-* the destination is confined to `<tree>/audio` or `<tree>/images` for exactly
+* the destination is confined to `<tree>/audio`, `<tree>/images` or
+    `<tree>/soundboard` for exactly
   one of the two trees in docs/contracts/media-selection.md, re-checked after
   symlink resolution.
 * the extension allowlist is the contract's, and the **content is probed** —
@@ -64,12 +65,17 @@ _DRIVE_LETTER = re.compile(r"^[A-Za-z]:")
 # `:` `*` `?` `"` `<` `>` `|` are rejected outright; separators are handled above.
 _ILLEGAL_CHARS = frozenset(':*?"<>|')
 
-KIND_BY_SEGMENT = {"audio": MediaKind.AUDIO, "images": MediaKind.IMAGE}
+KIND_BY_SEGMENT = {
+    "audio": MediaKind.AUDIO,
+    "images": MediaKind.IMAGE,
+    "soundboard": MediaKind.SOUNDBOARD,
+}
 # The UI names the plural folder, the enum names the singular kind; take either.
 KIND_ALIASES = {
     "audio": MediaKind.AUDIO,
     "image": MediaKind.IMAGE,
     "images": MediaKind.IMAGE,
+    "soundboard": MediaKind.SOUNDBOARD,
 }
 
 # Pillow's format name -> the extensions that may legitimately carry it.
@@ -170,7 +176,7 @@ def check_extension(filename: str, kind: MediaKind) -> str:
 
 @dataclass(frozen=True)
 class UploadTarget:
-    """Where one request writes: `common` or one channel, audio or images."""
+    """Where one request writes: `common` or one channel, for one media kind."""
 
     name: str
     kind: MediaKind
@@ -342,9 +348,9 @@ def validate_image(path: Path, suffix: str) -> str:
 
 
 def validate_content(path: Path, head: bytes, suffix: str, kind: MediaKind) -> str:
-    if kind is MediaKind.AUDIO:
-        return validate_audio(path, head, suffix)
-    return validate_image(path, suffix)
+    if kind is MediaKind.IMAGE:
+        return validate_image(path, suffix)
+    return validate_audio(path, head, suffix)
 
 
 # --------------------------------------------------------------------------

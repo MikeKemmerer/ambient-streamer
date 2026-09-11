@@ -90,6 +90,28 @@ async function request(method, path, body, opts = {}) {
   return data;
 }
 
+async function requestBlob(path) {
+  const headers = {};
+  const token = getToken();
+  if (token) headers.Authorization = `Bearer ${token}`;
+  let res;
+  try {
+    res = await fetch(path, { headers, cache: 'no-store' });
+  } catch {
+    throw new ApiError(0, 'unreachable', 'Cannot reach the control plane.');
+  }
+  if (!res.ok) {
+    let data = null;
+    try { data = await res.json(); } catch { /* not a JSON response */ }
+    throw new ApiError(
+      res.status,
+      (data && data.error) || `http_${res.status}`,
+      (data && data.detail) || res.statusText,
+    );
+  }
+  return res.blob();
+}
+
 const enc = encodeURIComponent;
 
 function query(params) {
@@ -131,6 +153,12 @@ export const api = {
 
   mediaAudio: () => request('GET', '/api/media/audio'),
   mediaImages: () => request('GET', '/api/media/images'),
+  soundboard: (name) => request('GET', `/api/channels/${enc(name)}/soundboard`),
+  previewSound: (name, clip) =>
+    requestBlob(`/api/channels/${enc(name)}/soundboard/preview${query({ clip })}`),
+  playSound: (name, clip) =>
+    request('POST', `/api/channels/${enc(name)}/soundboard/play`, { clip }),
+  stopSoundboard: (name) => request('POST', `/api/channels/${enc(name)}/soundboard/stop`),
   playlist: (name) => request('GET', `/api/channels/${enc(name)}/playlist`),
   play: (name, track) => request('POST', `/api/channels/${enc(name)}/play`, { track }),
   setPlaylist: (name, tracks) => request('PUT', `/api/channels/${enc(name)}/playlist`, { tracks }),
