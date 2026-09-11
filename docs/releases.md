@@ -17,12 +17,10 @@ Each `vX.Y.Z` release contains:
 
 Builds use unique `run-<run-id>-<attempt>` staging tags; no SemVer or floating `latest` image tag
 is published. Production records and pulls only the `@sha256:...` references from `release.env`.
-Both images carry BuildKit SBOM/provenance and a GitHub build-provenance attestation.
+Both images carry BuildKit SBOM/provenance and source/revision labels.
 
 GHCR packages may be private when first created. Make them public in the package settings, or
 run `docker login ghcr.io` on the production host with a token that has `read:packages`.
-Production also needs GitHub CLI authenticated (`gh auth login`) and a version that provides
-`gh attestation verify`. The helper checks that capability before pulling either image.
 
 ## Creating a release
 
@@ -34,7 +32,7 @@ Production also needs GitHub CLI authenticated (`gh auth login`) and a version t
    git push origin v1.2.0
    ```
 
-3. Wait for **Publish Release** to finish both multi-architecture builds and attestations.
+3. Wait for **Publish Release** to finish both multi-architecture builds.
 4. Confirm the GitHub release contains all three files and both GHCR packages show the expected
    digest.
 
@@ -57,8 +55,8 @@ scripts/deploy-release.sh release.env
 ```
 
 The helper parses the manifest rather than sourcing it, validates both GHCR digest references,
-checks every requested channel before pulling, verifies each attestation against the exact
-release commit, and preserves the `.env` file's mode and every secret.
+checks every requested channel before pulling, verifies each pulled image's source and revision
+labels against the exact release commit, and preserves the `.env` file's mode and every secret.
 
 ## Rolling out
 

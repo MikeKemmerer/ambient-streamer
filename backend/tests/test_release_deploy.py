@@ -37,13 +37,14 @@ def deploy_repo(tmp_path: Path) -> tuple[Path, Path, Path]:
 
     docker_log = root / "docker.log"
     channel_log = root / "channel.log"
-    gh_log = root / "gh.log"
     executable(
         fake_bin / "docker",
         """#!/bin/sh
 printf '%s\n' "$*" >> "$DOCKER_LOG"
 case "$*" in
   *"compose"*"config --images"*) printf '%s\n' "$AMBIENT_BACKEND_IMAGE" ;;
+    *"org.opencontainers.image.revision"*) printf '%s\n' "$FAKE_IMAGE_REVISION" ;;
+    *"org.opencontainers.image.source"*) printf '%s\n' "https://github.com/MikeKemmerer/ambient-streamer" ;;
     *".State.Running"*"-liquidsoap"*) printf '%s\n' "${FAKE_LIQ_RUNNING:-true}" ;;
     *".State.Running"*"-composer"*) printf '%s\n' "${FAKE_COMPOSER_RUNNING:-true}" ;;
     *".State.Running"*"ambient-backend"*) printf '%s\n' true ;;
@@ -52,20 +53,6 @@ case "$*" in
   *".Config.Image"*"-liquidsoap"*) printf '%s\n' "$LIQUIDSOAP_IMAGE" ;;
 esac
 exit 0
-""",
-    )
-    executable(
-        fake_bin / "gh",
-        r"""#!/bin/sh
-printf '%s\n' "$*" >> "$GH_LOG"
-case "$*" in
-    "attestation verify --help") exit 0 ;;
-    attestation\ verify\ oci://ghcr.io/*\ --repo\ *\ --source-digest\ *)
-        [ "${FAKE_ATTEST_FAIL:-false}" = true ] && exit 1
-        exit 0
-        ;;
-  *) exit 1 ;;
-esac
 """,
     )
     executable(
@@ -101,7 +88,7 @@ def run_deploy(
     *args: str,
     running: bool = True,
     composer_running: bool = True,
-    attest: bool = True,
+    image_identity: bool = True,
 ) -> subprocess.CompletedProcess[str]:
     root, docker_log, channel_log = fixture
     env = {
@@ -109,14 +96,17 @@ def run_deploy(
         "PATH": f"{root / 'fake-bin'}:{os.environ['PATH']}",
         "DOCKER_LOG": str(docker_log),
         "CHANNEL_LOG": str(channel_log),
-        "GH_LOG": str(root / "gh.log"),
         "BACKEND_IMAGE": BACKEND,
         "LIQUIDSOAP_IMAGE": LIQUIDSOAP,
         "AMBIENT_BACKEND_IMAGE": "ghcr.io/hostile/wrong-backend@sha256:" + "c" * 64,
         "AMBIENT_LIQUIDSOAP_IMAGE": "ghcr.io/hostile/wrong-liquidsoap@sha256:" + "d" * 64,
         "FAKE_LIQ_RUNNING": "true" if running else "false",
         "FAKE_COMPOSER_RUNNING": "true" if composer_running else "false",
-        "FAKE_ATTEST_FAIL": "false" if attest else "true",
+        "FAKE_IMAGE_REVISION": subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=root, text=True
+        ).strip()
+        if image_identity
+        else "0" * 40,
     }
     return subprocess.run(
         [str(root / "scripts" / "deploy-release.sh"), "release.env", *args],
@@ -141,11 +131,8 @@ def test_prepare_pulls_and_records_digests_without_recreating(deploy_repo) -> No
     assert f"pull {BACKEND}" in log and f"pull {LIQUIDSOAP}" in log
     assert "compose" not in log
     assert not channel_log.exists()
-    attestations = (root / "gh.log").read_text(encoding="utf-8")
-    assert f"attestation verify oci://{BACKEND}" in attestations
-    assert f"attestation verify oci://{LIQUIDSOAP}" in attestations
-    assert "--signer-workflow MikeKemmerer/ambient-streamer/.github/workflows/release.yml" in attestations
-    assert attestations.count("--source-digest ") == 2
+    assert log.count("org.opencontainers.image.revision") == 2
+    assert log.count("org.opencontainers.image.source") == 2
 
 
 def test_selected_rollout_never_recreates_the_composer(deploy_repo) -> None:
@@ -210,12 +197,13 @@ def test_stopped_composer_is_refused_before_pulls_or_changes(deploy_repo) -> Non
     assert not channel_log.exists()
 
 
-def test_failed_attestation_stops_before_env_or_container_changes(deploy_repo) -> None:
+def test_wrong_image_revision_stops_before_env_or_container_changes(deploy_repo) -> None:
     root, docker_log, channel_log = deploy_repo
     original_env = (root / ".env").read_bytes()
-    result = run_deploy(deploy_repo, "--backend", attest=False)
+    result = run_deploy(deploy_repo, "--backend", image_identity=False)
 
     assert result.returncode != 0
+    assert "image revision" in result.stderr
     assert (root / ".env").read_bytes() == original_env
     assert "compose" not in docker_log.read_text(encoding="utf-8")
     assert not channel_log.exists()
