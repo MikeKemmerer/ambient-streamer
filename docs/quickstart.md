@@ -88,7 +88,7 @@ Seven steps, in order:
 | 1 prerequisites | `docker`, `docker compose`, `ffmpeg`, `ffprobe`, `openssl`; daemon reachable; warns if `/var/run/docker.sock` is group `root` |
 | 2 configuration | creates `.env` (mode 600) and `ambient.yaml` from the examples; strips CRLF, which would otherwise put a trailing `\r` inside every password |
 | 3 secrets | generates the three Icecast passwords and `AMBIENT_API_TOKEN` **only where empty**; records `AMBIENT_REPO_ROOT`; `chmod 600` on every `channels/*/.env` |
-| 4 paths | creates `channels/`, `common/{audio,images,bumpers,fallback,profiles}` and the log directory; warns on 9p, NFS and CIFS |
+| 4 paths | creates `channels/`, `common/{audio,images,bumpers,soundboard,fallback,profiles}` and the log directory; warns on 9p, NFS and CIFS |
 | 5 ports | **fails** if the backend port is taken, naming the container or process holding it |
 | 6 encoders | runs a **real short encode** per encoder and reports how many channels this host has room for |
 | 7 fallback | encodes `common/fallback/default.mp3`, plus one per existing channel |
@@ -156,7 +156,7 @@ Channel names must match `^[a-z0-9][a-z0-9_-]{0,30}[a-z0-9]?$` — they become a
 a Compose project name and an Icecast mount.
 
 ```bash
-mkdir -p channels/lofi/{audio,images,profiles,bumpers}
+mkdir -p channels/lofi/{audio,images,profiles,bumpers,soundboard}
 cp channels/example/.env.example channels/lofi/.env && chmod 600 channels/lofi/.env
 cp channels/example/config.yaml  channels/lofi/config.yaml
 ```

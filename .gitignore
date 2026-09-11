@@ -26,6 +26,7 @@ channels/*/images/*
 common/audio/*
 common/images/*
 common/bumpers/*
+common/soundboard/*
 !common/audio/.gitkeep
 !common/images/.gitkeep
 !common/bumpers/.gitkeep
@@ -49,6 +50,12 @@ channels/*/bumpers/*
 *.mp4
 *.mkv
 *.ts
+
+# Bundled, original soundboard starters. Operator uploads remain ignored.
+!common/soundboard/air-horn.wav
+!common/soundboard/metal-pipe.wav
+!common/soundboard/applause.wav
+!common/soundboard/record-scratch.wav
 
 # Generated artifacts
 channels/*/profiles/

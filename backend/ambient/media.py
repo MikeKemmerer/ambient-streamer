@@ -39,14 +39,19 @@ class MediaError(ValueError):
 class MediaKind(str, Enum):
     AUDIO = "audio"
     IMAGE = "image"
+    SOUNDBOARD = "soundboard"
 
     @property
     def extensions(self) -> frozenset[str]:
-        return AUDIO_EXTENSIONS if self is MediaKind.AUDIO else IMAGE_EXTENSIONS
+        return IMAGE_EXTENSIONS if self is MediaKind.IMAGE else AUDIO_EXTENSIONS
 
     @property
     def folder(self) -> str:
-        return "audio" if self is MediaKind.AUDIO else "images"
+        return {
+            MediaKind.AUDIO: "audio",
+            MediaKind.IMAGE: "images",
+            MediaKind.SOUNDBOARD: "soundboard",
+        }[self]
 
 
 @dataclass(frozen=True)
@@ -86,6 +91,29 @@ class SelectionResult:
     @property
     def container_paths(self) -> list[str]:
         return [f.container_path for f in self.files]
+
+
+def discover_soundboard(roots: MediaRoots) -> SelectionResult:
+    """Find shared and channel-local effects without following escaping links."""
+    result = SelectionResult()
+    for tree, origin in ((roots.common_dir, "common"), (roots.channel_dir, "channel")):
+        folder = tree / MediaKind.SOUNDBOARD.folder
+        if not folder.is_dir():
+            continue
+        for path in sorted(folder.rglob("*"), key=lambda item: natural_key(str(item))):
+            if path.name.startswith(".") or path.suffix.lower() not in AUDIO_EXTENSIONS:
+                continue
+            real = path.resolve()
+            if not real.is_file() or not _is_under(real, tree):
+                continue
+            result.files.append(
+                MediaFile(
+                    host_path=real,
+                    container_path=to_container_path(real, roots),
+                    origin=origin,
+                )
+            )
+    return result
 
 
 def natural_key(text: str) -> list[object]:

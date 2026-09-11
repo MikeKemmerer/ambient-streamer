@@ -246,6 +246,7 @@ LOG_DIR="$(env_value AMBIENT_LOG_DIR)"
        into the backend at the same path on both sides."
 
 for dir in "$DATA_DIR" "$COMMON_DIR/audio" "$COMMON_DIR/images" "$COMMON_DIR/bumpers" \
+		   "$COMMON_DIR/soundboard" \
            "$COMMON_DIR/fallback" "$COMMON_DIR/profiles"; do
 	if [[ -d "$dir" ]]; then continue; fi
 	if (( CHECK_ONLY )); then note_warning "$dir is missing (--check)"; continue; fi

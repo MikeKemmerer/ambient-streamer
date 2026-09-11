@@ -74,6 +74,7 @@
       <nav class="tabs" id="tabs">
         <button type="button" class="tab" data-tab="overview" aria-selected="true">Overview</button>
         <button type="button" class="tab" data-tab="audio">Audio</button>
+        <button type="button" class="tab" data-tab="soundboard">Soundboard</button>
         <button type="button" class="tab" data-tab="slides">Slides</button>
         <button type="button" class="tab" data-tab="look">Look</button>
         <button type="button" class="tab" data-tab="schedule">Schedule</button>
@@ -311,6 +312,70 @@
           <span class="spacer"></span>
           <button id="btn-playlist-revert" type="button">Revert</button>
           <button id="btn-playlist-save" type="button" class="primary">Save playlist</button>
+        </div>
+      </div>
+
+      <!-- Soundboard ---------------------------------------------------- -->
+      <div class="tabpanel" data-panel="soundboard" hidden>
+        <div class="editor">
+          <div class="editor-col">
+            <div class="pane-head">
+              <h3>Soundboard</h3>
+              <button type="button" class="danger" id="btn-soundboard-stop"
+                      aria-label="Stop sound effects"
+                      title="Stop the active effect and clear queued effects">&#9632;</button>
+            </div>
+            <input type="search" id="soundboard-filter" placeholder="filter sounds" autocomplete="off">
+            <div class="soundboard-grid" id="soundboard-grid"></div>
+            <p class="muted small" id="soundboard-empty" hidden></p>
+            <div class="soundboard-submit">
+              <span class="soundboard-selected" id="soundboard-selected">No sound selected</span>
+              <label class="inline soundboard-arm">
+                <input type="checkbox" id="soundboard-arm" disabled>
+                Arm stream playback
+              </label>
+              <button type="button" class="primary" id="btn-soundboard-submit" disabled>
+                Play selected sound
+              </button>
+            </div>
+          </div>
+          <div class="editor-col">
+            <div class="upload" id="soundboard-upload">
+              <div class="pane-head">
+                <h3>Upload sounds</h3>
+                <button type="button" class="link" id="btn-soundboard-upload-clear" hidden>clear finished</button>
+              </div>
+              <div class="dest" id="soundboard-dest">
+                <label class="dest-opt">
+                  <input type="radio" name="soundboard-dest" value="channel">
+                  <span class="dest-body">
+                    <span class="dest-name">this channel only</span>
+                    <span class="dest-path num" id="soundboard-dest-channel">channels/…/soundboard/</span>
+                  </span>
+                </label>
+                <label class="dest-opt">
+                  <input type="radio" name="soundboard-dest" value="common" checked>
+                  <span class="dest-body">
+                    <span class="dest-name">shared soundboard</span>
+                    <span class="dest-path num">common/soundboard/</span>
+                  </span>
+                </label>
+              </div>
+              <div class="dropzone" id="soundboard-dropzone" data-dest="common">
+                <div class="dz-to">
+                  <span class="tree" id="soundboard-dz-tree">common</span>
+                  <span class="num" id="soundboard-dz-path">common/soundboard/</span>
+                </div>
+                <div class="dz-hint">Drop files here, or
+                  <button type="button" class="link" id="btn-soundboard-pick">choose files</button>
+                </div>
+                <input type="file" id="soundboard-file-input" multiple hidden
+                       accept=".mp3,.flac,.ogg,.opus,.m4a,.aac,.wav,audio/*">
+              </div>
+              <ul class="upload-list" id="soundboard-upload-list"></ul>
+              <p class="small upload-summary" id="soundboard-upload-summary" hidden></p>
+            </div>
+          </div>
         </div>
       </div>
 

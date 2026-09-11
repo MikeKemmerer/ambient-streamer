@@ -121,6 +121,11 @@ async def list_images(state: AppState = Authed) -> dict[str, Any]:
     return _library(state, MediaKind.IMAGE, profiles=True)
 
 
+@router.get("/media/soundboard")
+async def list_soundboard(state: AppState = Authed) -> dict[str, Any]:
+    return _library(state, MediaKind.SOUNDBOARD)
+
+
 @router.post("/media/profiles", status_code=202)
 async def extract_profiles(
     force: bool = False, channel: str | None = None, state: AppState = Authed
@@ -167,7 +172,7 @@ def _field_kind(value: str, fallback: MediaKind | None) -> MediaKind:
     kind = KIND_ALIASES.get(value.lower())
     if kind is None:
         raise UploadAborted(
-            "invalid_kind", f"kind must be audio or images, not {value[:40]!r}", 400
+            "invalid_kind", f"kind must be audio, images or soundboard, not {value[:40]!r}", 400
         )
     return kind
 
@@ -248,6 +253,8 @@ def _recompile_uploaded(state: AppState, upload: UploadTarget) -> list[str]:
             channel = state.channel(name)
         except ApiError as exc:
             LOG.warning("upload: channel %s not recompiled: %s", name, exc.detail)
+            continue
+        if upload.kind is MediaKind.SOUNDBOARD:
             continue
         selection = channel.audio if upload.kind is MediaKind.AUDIO else channel.images
         if not any(_within(upload.directory, w) for w in selection.watched_dirs):
@@ -366,7 +373,7 @@ async def upload_media(
 
 @router.post("/media/{kind}/upload")
 async def upload_media_kind(
-    kind: Literal["audio", "images"],
+    kind: Literal["audio", "images", "soundboard"],
     request: Request,
     request_target: str | None = Query(None, alias="target"),
     on_conflict: Literal["reject", "rename"] = "reject",

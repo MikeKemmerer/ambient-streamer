@@ -440,6 +440,61 @@ main {
 .onair-list li.playing .idx { color: var(--accent); }
 .onair-list li.playing .name .base { color: var(--accent); }
 
+/* ---------- soundboard ---------- */
+
+.soundboard-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 8px;
+  margin-top: 8px;
+}
+.sound-pad {
+  min-height: 82px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 10px;
+  text-align: left;
+  border: 1px solid #2f4858;
+  border-radius: var(--radius);
+  border-color: #2f4858;
+  background: #14232a;
+}
+.sound-pad:hover { background: #1b3038; border-color: #3d6a78; }
+.sound-pad[data-selected="true"] { background: var(--info-bg); border-color: var(--accent); }
+.sound-pad-select {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-areas: "radio name" "radio origin";
+  align-items: center;
+  gap: 2px 8px;
+  min-width: 0;
+  cursor: pointer;
+}
+.sound-pad-select input { grid-area: radio; }
+.sound-pad-name { grid-area: name; font-weight: 700; overflow-wrap: anywhere; }
+.sound-pad-origin {
+  grid-area: origin;
+  color: var(--fg-mute);
+  font-family: var(--mono);
+  font-size: 10px;
+  text-transform: uppercase;
+}
+.sound-preview { white-space: nowrap; }
+.soundboard-submit {
+  display: grid;
+  gap: 7px;
+  margin-top: 12px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+.soundboard-selected { font-weight: 700; overflow-wrap: anywhere; }
+.soundboard-arm { color: var(--fg-dim); }
+.soundboard-submit button { justify-self: start; }
+
 /* ---------- upload ---------- */
 
 .upload { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 4px; }

@@ -489,6 +489,16 @@ def test_an_empty_file_is_rejected(uploader) -> None:
     assert response.json()["results"][0]["error"] == "unsupported_content"
 
 
+def test_soundboard_upload_is_audio_probed_without_recompiling(uploader, repo: Path) -> None:
+    client, _state = uploader
+    response = send(client, "soundboard", [part("air-horn.wav", wav_bytes())])
+
+    assert response.status_code == 200
+    assert response.json()["kind"] == "soundboard"
+    assert response.json()["recompiled"] == []
+    assert (repo / "common" / "soundboard" / "air-horn.wav").is_file()
+
+
 def test_oversize_is_refused_while_the_body_streams(uploader, repo: Path) -> None:
     client, state = uploader
     state.workspace.ambient.uploads.max_file_mb = 1

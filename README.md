@@ -23,6 +23,7 @@ channel: `speed=0.996x`, 3085–3137 kbits/s, `drop_frames=0`, `dup_frames=0`.
 | Composer filtergraph: slideshow + visualization plugin + preview split | Resolution, fps, `hot_set` and slideshow timing reaching the compositor |
 | MediaMTX relay, HLS preview, `runOnReady` YouTube publisher | Icecast mount registration when a channel is created |
 | FastAPI control plane: REST, SSE, supervisor, watchdog, scheduler | Bumper synthesis |
+| Manual soundboard overlays with shared/channel-local effects | |
 | Five visualization plugins, six preset packs | |
 | Color-profile extraction and live `eq`/`hue` application | |
 | `scripts/install.sh`, compile CLI, per-channel start/stop | |
@@ -83,15 +84,20 @@ source connected, and tears itself down again.
 ### 3. Create a channel
 
 ```bash
-mkdir -p channels/lofi/{audio,images,profiles,bumpers}
+mkdir -p channels/lofi/{audio,images,profiles,bumpers,soundboard}
 cp channels/example/.env.example channels/lofi/.env && chmod 600 channels/lofi/.env
 cp channels/example/config.yaml  channels/lofi/config.yaml
 ```
 
 Put that channel's YouTube stream key in `channels/lofi/.env`, then add media — to
-`channels/lofi/audio` and `channels/lofi/images` for this channel only, or to `common/audio` and
-`common/images` to make it available to every channel. Select what the channel uses in
+`channels/lofi/audio`, `channels/lofi/images` and `channels/lofi/soundboard` for this channel
+only, or to the matching folders under `common/` to make it available to every channel. Select what the channel uses in
 `channels/lofi/config.yaml`; an empty list means "everything in this channel's own folder".
+
+The operator UI's Soundboard tab overlays effects without interrupting the music. Four original
+starter effects ship in `common/soundboard/`; regenerate them with `make soundboard`. Stream
+playback is deliberately armed: select a pad, optionally preview it locally, check **Arm stream
+playback**, then submit. Arming resets after every attempt.
 
 Register the channel's Icecast mount and give it a fallback file. Adding a mount is a SIGHUP,
 never a restart — restarting Icecast would take every running channel's audio input with it:
@@ -233,7 +239,7 @@ Nothing in this repository checks either of these. It is the operator's responsi
 | `backend/ambient/` | Control plane: config layer, media resolver, FFmpeg command builder, ZMQ validator, Compose renderer, REST + SSE app, supervisor, watchdog, scheduler, color extraction |
 | `frontend/` | Operator UI — plain HTML/CSS/JS, no build step, `hls.js` vendored as one file |
 | `channels/<name>/` | Per-channel `.env`, `config.yaml`, media, color profiles, generated files |
-| `common/` | Shared media library — audio, images, bumpers, beds, fallbacks — mounted read-only into every channel |
+| `common/` | Shared media library — audio, images, soundboard effects, bumpers, beds, fallbacks — mounted read-only into every channel |
 | `liquidsoap/` | Parameterized Liquidsoap channel script |
 | `ffmpeg/` | Slideshow producer and compositor entrypoint |
 | `plugins/` | Visualization plugins (`viz.ffmpeg` + `config.json`) |

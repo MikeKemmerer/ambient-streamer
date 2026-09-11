@@ -72,7 +72,8 @@ programme = fallback(id="programme", track_sensitive=false, [requests, pl])
 # mksafe must be OUTERMOST: a fallible source reaching output.icecast drops the
 # mount, which is the one failure Icecast cannot paper over.
 faded = if crossfade_s > 0. then crossfade(id="xfade", duration=crossfade_s, programme) else programme end
-radio = mksafe(faded)
+effects = request.queue(id="soundboard")
+radio = mksafe(limit(smooth_add(duration=0.15, p=0.35, normal=faded, special=effects)))
 
 current = ref("")
 started = ref(time())

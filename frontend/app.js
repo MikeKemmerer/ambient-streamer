@@ -78,6 +78,14 @@ const UPLOAD = {
     list: () => state.slides,
     rerender: () => renderSlidesTab(),
   },
+  soundboard: {
+    folder: 'soundboard',
+    noun: 'sound effect',
+    extensions: ['.mp3', '.flac', '.ogg', '.opus', '.m4a', '.aac', '.wav'],
+    largeBytes: 25 * 1024 * 1024,
+    list: () => ({ saved: [], watched: [] }),
+    rerender: () => renderSoundboardTab(),
+  },
 };
 
 const UPLOAD_CONCURRENCY = 2;
@@ -90,6 +98,7 @@ const state = {
   plugins: [],
   presets: [],
   media: { audio: [], images: [] },
+  soundboard: { clips: [], selected: null },
   capacity: null,
   system: null,
   playlist: { saved: [], draft: [], watched: [], onair: [] },
@@ -108,8 +117,8 @@ const state = {
   addable: { audio: [], images: [] },
   // Upload rows and the chosen tree live here, never re-derived from a render, so
   // a status refresh or a media reload cannot wipe a transfer in progress.
-  uploads: { audio: [], images: [] },
-  uploadDest: { audio: 'channel', images: 'channel' },
+  uploads: { audio: [], images: [], soundboard: [] },
+  uploadDest: { audio: 'channel', images: 'channel', soundboard: 'common' },
   scheduleRows: [],
   jobs: new Map(),
   configErrors: new Map(),
@@ -319,11 +328,12 @@ async function loadChannelDetail(name) {
   renderDetail();
   renderLookTab();
   renderScheduleTab();
-  await Promise.all([loadSelection(name), loadMedia(name)]);
+  await Promise.all([loadSelection(name), loadMedia(name), loadSoundboard(name)]);
   syncAudioForm();
   syncSlidesForm();
   renderAudioTab();
   renderSlidesTab();
+  renderSoundboardTab();
 }
 
 async function loadSelection(name) {
@@ -356,6 +366,16 @@ async function loadMedia(name) {
   ]);
   if (audio !== undefined) state.media.audio = asMediaGroups(audio, name);
   if (images !== undefined) state.media.images = asMediaGroups(images, name);
+}
+
+async function loadSoundboard(name) {
+  const data = await guard('soundboard', () => api.soundboard(name));
+  if (state.selected !== name || data === undefined) return;
+  state.soundboard.clips = asList(data, 'clips').filter((clip) => clip && clip.container_path);
+  if (!state.soundboard.clips.some((clip) => clip.container_path === state.soundboard.selected)) {
+    state.soundboard.selected = null;
+    $('soundboard-arm').checked = false;
+  }
 }
 
 // --------------------------------------------------------------------------
@@ -429,6 +449,8 @@ function selectChannel(name) {
   updateCard(name);
   state.playlist = { saved: [], draft: [], watched: [], onair: [] };
   state.slides = { saved: [], draft: [], watched: [] };
+  stopSoundPreview();
+  state.soundboard = { clips: [], selected: null };
   state.resolutionDraft = null;
   state.vizEnabledDraft = null;
   state.hotSetDraft = null;
@@ -931,6 +953,131 @@ function renderAudioTab() {
   syncUpload('audio');
 }
 
+function renderSoundboardTab() {
+  const name = state.selected;
+  if (!name) return;
+  const running = (state.channels.get(name) || {}).state === 'running';
+  const needle = $('soundboard-filter').value.trim().toLowerCase();
+  const clips = state.soundboard.clips.filter((clip) =>
+    !needle || `${clip.name} ${clip.path}`.toLowerCase().includes(needle));
+  const grid = $('soundboard-grid');
+  clear(grid);
+  for (const clip of clips) {
+    const selected = clip.container_path === state.soundboard.selected;
+    const choose = el('label', { class: 'sound-pad-select' }, [
+      el('input', {
+        type: 'radio',
+        name: 'soundboard-clip',
+        value: clip.container_path,
+        checked: selected,
+        onchange: () => selectSound(clip.container_path),
+      }),
+      el('span', { class: 'sound-pad-name', text: clip.name }),
+      el('span', { class: 'sound-pad-origin', text: clip.origin }),
+    ]);
+    const preview = el('button', {
+      class: 'tiny sound-preview',
+      type: 'button',
+      title: `Preview ${clip.name} in this browser only`,
+      text: 'Preview',
+      onclick: () => previewSound(clip, preview),
+    });
+    grid.append(el('div', {
+      class: 'sound-pad',
+      dataset: { selected: String(selected) },
+    }, [choose, preview]));
+  }
+  $('soundboard-empty').hidden = clips.length > 0;
+  $('soundboard-empty').textContent = state.soundboard.clips.length
+    ? 'no sounds match'
+    : 'no sound effects uploaded';
+  $('btn-soundboard-stop').disabled = !running;
+  syncSoundboardSubmit(running);
+  syncUpload('soundboard');
+}
+
+function selectSound(containerPath) {
+  state.soundboard.selected = containerPath;
+  $('soundboard-arm').checked = false;
+  renderSoundboardTab();
+}
+
+function syncSoundboardSubmit(running = (state.channels.get(state.selected) || {}).state === 'running') {
+  const selected = state.soundboard.clips.find(
+    (clip) => clip.container_path === state.soundboard.selected);
+  const arm = $('soundboard-arm');
+  arm.disabled = !running || !selected;
+  if (arm.disabled) arm.checked = false;
+  $('soundboard-selected').textContent = selected ? selected.name : 'No sound selected';
+  $('btn-soundboard-submit').disabled = !running || !selected || !arm.checked;
+}
+
+async function submitSound() {
+  const name = state.selected;
+  const clip = state.soundboard.clips.find(
+    (item) => item.container_path === state.soundboard.selected);
+  if (!name || !clip || !$('soundboard-arm').checked) return;
+  try {
+    const result = await guard(
+      `soundboard ${name}`,
+      () => api.playSound(name, clip.container_path),
+      'accepted',
+    );
+    if (result !== undefined) toast('ok', 'soundboard', `${clip.name} sent to stream`);
+  } finally {
+    $('soundboard-arm').checked = false;
+    syncSoundboardSubmit();
+  }
+}
+
+let soundPreviewAudio = null;
+let soundPreviewUrl = null;
+let soundPreviewButton = null;
+
+function stopSoundPreview() {
+  if (soundPreviewAudio) soundPreviewAudio.pause();
+  if (soundPreviewUrl) URL.revokeObjectURL(soundPreviewUrl);
+  if (soundPreviewButton) soundPreviewButton.textContent = 'Preview';
+  soundPreviewAudio = null;
+  soundPreviewUrl = null;
+  soundPreviewButton = null;
+}
+
+async function previewSound(clip, button) {
+  if (soundPreviewButton === button && soundPreviewAudio) {
+    stopSoundPreview();
+    return;
+  }
+  stopSoundPreview();
+  const blob = await guard(
+    `preview ${clip.name}`,
+    () => api.previewSound(state.selected, clip.container_path),
+  );
+  if (blob === undefined) return;
+  soundPreviewUrl = URL.createObjectURL(blob);
+  soundPreviewAudio = new Audio(soundPreviewUrl);
+  soundPreviewButton = button;
+  button.textContent = 'Stop preview';
+  soundPreviewAudio.addEventListener('ended', stopSoundPreview, { once: true });
+  try {
+    await soundPreviewAudio.play();
+  } catch (err) {
+    stopSoundPreview();
+    toast('bad', 'preview', String((err && err.message) || err));
+  }
+}
+
+async function stopSoundboard() {
+  const name = state.selected;
+  if (!name) return;
+  const result = await guard(
+    `stop soundboard ${name}`,
+    () => api.stopSoundboard(name),
+    'accepted',
+  );
+  if (result !== undefined) toast('ok', 'soundboard', 'stopped');
+}
+
 /** The live playlist as Liquidsoap sees it — resolved files, not config entries. */
 function renderOnAir() {
   const entries = state.playlist.onair;
@@ -1221,6 +1368,10 @@ function watchedDirs(kind) {
 }
 
 function summarize(kind, stored) {
+  if (kind === 'soundboard') {
+    const targets = [...new Set(stored.map((entry) => entry.target))];
+    return `${stored.length} sound effect${stored.length === 1 ? '' : 's'} stored in ${targets.join(', ')}.`;
+  }
   const dirs = watchedDirs(kind);
   const targets = [...new Set(stored.map((entry) => entry.target))];
   const live = targets.filter((target) => dirs.some((dir) => target === dir || target.startsWith(dir)));
@@ -1256,8 +1407,10 @@ async function finishBatch(kind) {
 
   if (stored.length && state.selected) {
     await loadMedia(state.selected);
+    await loadSoundboard(state.selected);
     renderAudioTab();
     renderSlidesTab();
+    renderSoundboardTab();
   }
 
   const summary = $(`${kind}-upload-summary`);
@@ -2364,6 +2517,10 @@ function wire() {
   $('preview-video').addEventListener('click', () => $('preview-video').play().catch(() => {}));
 
   $('audio-filter').addEventListener('input', () => renderAudioTab());
+  $('soundboard-filter').addEventListener('input', () => renderSoundboardTab());
+  $('soundboard-arm').addEventListener('change', () => syncSoundboardSubmit());
+  $('btn-soundboard-submit').addEventListener('click', () => submitSound());
+  $('btn-soundboard-stop').addEventListener('click', () => stopSoundboard());
   $('image-filter').addEventListener('input', () => renderSlidesTab());
   $('btn-playlist-add-all').addEventListener('click', () => addAll('audio'));
   $('btn-slides-add-all').addEventListener('click', () => addAll('images'));
@@ -2391,6 +2548,7 @@ function wire() {
 
   wireUpload('audio');
   wireUpload('images');
+  wireUpload('soundboard');
   // A file dropped anywhere else would otherwise navigate away from the panel,
   // taking any unsaved list edit with it.
   for (const type of ['dragover', 'drop']) {
