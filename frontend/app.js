@@ -975,13 +975,17 @@ function renderSoundboardTab() {
       el('span', { class: 'sound-pad-name', text: clip.name }),
       el('span', { class: 'sound-pad-origin', text: clip.origin }),
     ]);
+    // A refresh rebuilds the grid, so the button a running preview points at
+    // has to be handed over or the only way to stop it is detached.
+    const playing = Boolean(soundPreviewAudio) && soundPreviewClip === clip.container_path;
     const preview = el('button', {
       class: 'tiny sound-preview',
       type: 'button',
       title: `Preview ${clip.name} in this browser only`,
-      text: 'Preview',
+      text: playing ? 'Stop preview' : 'Preview',
       onclick: () => previewSound(clip, preview),
     });
+    if (playing) soundPreviewButton = preview;
     grid.append(el('div', {
       class: 'sound-pad',
       dataset: { selected: String(selected) },
@@ -1033,27 +1037,35 @@ async function submitSound() {
 let soundPreviewAudio = null;
 let soundPreviewUrl = null;
 let soundPreviewButton = null;
+let soundPreviewClip = null;
+// Bumped by every teardown so a blob still in flight cannot take over a newer
+// preview: two overlapping clips would play at once and leak an object URL.
+let soundPreviewToken = 0;
 
 function stopSoundPreview() {
+  soundPreviewToken += 1;
   if (soundPreviewAudio) soundPreviewAudio.pause();
   if (soundPreviewUrl) URL.revokeObjectURL(soundPreviewUrl);
   if (soundPreviewButton) soundPreviewButton.textContent = 'Preview';
   soundPreviewAudio = null;
   soundPreviewUrl = null;
   soundPreviewButton = null;
+  soundPreviewClip = null;
 }
 
 async function previewSound(clip, button) {
-  if (soundPreviewButton === button && soundPreviewAudio) {
+  if (soundPreviewClip === clip.container_path && soundPreviewAudio) {
     stopSoundPreview();
     return;
   }
   stopSoundPreview();
+  const token = soundPreviewToken;
   const blob = await guard(
     `preview ${clip.name}`,
     () => api.previewSound(state.selected, clip.container_path),
   );
-  if (blob === undefined) return;
+  if (blob === undefined || token !== soundPreviewToken) return;
+  soundPreviewClip = clip.container_path;
   soundPreviewUrl = URL.createObjectURL(blob);
   soundPreviewAudio = new Audio(soundPreviewUrl);
   soundPreviewButton = button;

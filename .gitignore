@@ -19,8 +19,10 @@ channels/*/config.yaml
 # rules below silently dead.
 channels/*/audio/*
 channels/*/images/*
+channels/*/soundboard/*
 !channels/*/audio/.gitkeep
 !channels/*/images/.gitkeep
+!channels/*/soundboard/.gitkeep
 
 # Shared media library — available to every channel, never duplicated per channel.
 common/audio/*
