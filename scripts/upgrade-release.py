@@ -73,7 +73,8 @@ def safe_members(archive: tarfile.TarFile, prefix: str) -> list[tarfile.TarInfo]
     members = archive.getmembers()
     for member in members:
         path = PurePosixPath(member.name)
-        if path.is_absolute() or ".." in path.parts or not member.name.startswith(prefix):
+        inside_prefix = member.name == prefix.rstrip("/") or member.name.startswith(prefix)
+        if path.is_absolute() or ".." in path.parts or not inside_prefix:
             fail(f"unsafe archive path: {member.name}")
         if not (member.isdir() or member.isfile()):
             fail(f"unsupported archive entry: {member.name}")

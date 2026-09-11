@@ -50,6 +50,10 @@ def release_files(tmp_path: Path) -> tuple[Path, Path]:
     ).encode()
     archive_path = tmp_path / "ambient-streamer-v1.2.3.tar.gz"
     with tarfile.open(archive_path, "w:gz") as archive:
+        root = tarfile.TarInfo("ambient-streamer-v1.2.3")
+        root.type = tarfile.DIRTYPE
+        root.mode = 0o755
+        archive.addfile(root)
         add_file(archive, "ambient-streamer-v1.2.3/README.md", b"new source\n")
         add_file(
             archive,
