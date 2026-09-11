@@ -51,6 +51,11 @@ def test_release_identity_guards_are_present() -> None:
     assert "group: release-${{ inputs.version || github.ref_name }}" in WORKFLOW
 
 
+def test_secret_guard_checks_files_without_matching_source_literals() -> None:
+    assert "git ls-files | grep -E" in WORKFLOW
+    assert "YOUTUBE_STREAM_KEY=[^[:space:]]" not in WORKFLOW
+
+
 def test_published_image_bases_are_manifest_pinned() -> None:
     backend = (ROOT / "docker" / "Dockerfile.backend").read_text(encoding="utf-8")
     liquidsoap = (ROOT / "docker" / "Dockerfile.liquidsoap").read_text(encoding="utf-8")
