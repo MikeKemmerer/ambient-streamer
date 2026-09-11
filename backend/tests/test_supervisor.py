@@ -53,6 +53,9 @@ def test_image_tag_falls_back_to_the_template_default(tmp_path: Path) -> None:
     workspace, channel = resolve(make_repo(tmp_path))
     document = yaml.safe_load(render_compose(workspace, channel))
     assert document["services"]["lofi-composer"]["image"] == "ambient-composer:dev"
+    assert document["services"]["lofi-liquidsoap"]["image"] == (
+        "${AMBIENT_LIQUIDSOAP_IMAGE:-ambient-liquidsoap:dev}"
+    )
 
 
 def test_encoder_default_applies_when_the_channel_env_omits_it(tmp_path: Path) -> None:

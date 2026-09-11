@@ -60,6 +60,7 @@ channels/*/bumpers/*
 !common/soundboard/record-scratch.wav
 
 # Generated artifacts
+/release.env
 channels/*/profiles/
 channels/*/playlist.m3u
 channels/*/images.list
