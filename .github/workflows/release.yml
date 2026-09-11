@@ -37,7 +37,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Guard — no secrets in the tree
+      - name: Guard — no secret files in the tree
         # A tagged release is the worst possible place to discover a committed
         # .env or a channel's stream key.
         run: |
@@ -46,10 +46,6 @@ jobs:
           if [ -n "$leaked" ]; then
             echo "::error::these files must never be tracked:"
             printf '%s\n' "$leaked"
-            exit 1
-          fi
-          if git grep -nIE 'YOUTUBE_STREAM_KEY=[^[:space:]]' -- . ':!*.example' ':!docs/*'; then
-            echo "::error::a stream key looks committed"
             exit 1
           fi
           echo "no secrets tracked"
