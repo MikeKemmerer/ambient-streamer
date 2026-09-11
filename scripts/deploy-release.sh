@@ -80,23 +80,81 @@ RELEASE_OWNER="${RELEASE_OWNER,,}"
 [[ "$LIQUIDSOAP_IMAGE" =~ ^ghcr\.io/${RELEASE_OWNER}/ambient-streamer-liquidsoap@sha256:[0-9a-f]{64}$ ]] \
 	|| die "invalid Liquidsoap image digest reference: $LIQUIDSOAP_IMAGE"
 
-HEAD_COMMIT="$(git rev-parse HEAD)"
-[[ "$HEAD_COMMIT" == "$COMMIT" ]] \
-	|| die "checkout is $HEAD_COMMIT, release $TAG requires $COMMIT"
+GIT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+if [[ "$GIT_ROOT" == "$REPO_ROOT" ]]; then
+	SOURCE_COMMIT="$(git rev-parse HEAD)"
+	[[ "$SOURCE_COMMIT" == "$COMMIT" ]] \
+		|| die "checkout is $SOURCE_COMMIT, release $TAG requires $COMMIT"
+else
+	RELEASE_JSON="$REPO_ROOT/RELEASE.json"
+	[[ -f "$RELEASE_JSON" ]] \
+		|| die "source identity unavailable — use a release checkout or extracted release archive"
+	command -v python3 >/dev/null 2>&1 \
+		|| die "python3 not found — required to validate RELEASE.json"
+	archive_identity="$(python3 - "$RELEASE_JSON" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    data = json.load(handle)
+for key in ("tag", "commit", "repository"):
+    value = data.get(key)
+    if not isinstance(value, str) or "\n" in value or "\r" in value:
+        raise SystemExit(f"invalid {key} in RELEASE.json")
+images = data.get("images")
+if not isinstance(images, dict):
+    raise SystemExit("invalid images in RELEASE.json")
+for key in ("backend", "liquidsoap"):
+    value = images.get(key)
+    if not isinstance(value, str) or "\n" in value or "\r" in value:
+        raise SystemExit(f"invalid {key} image in RELEASE.json")
+print(data["tag"])
+print(data["commit"])
+print(data["repository"])
+print(images["backend"])
+print(images["liquidsoap"])
+PY
+)" || die "could not parse $RELEASE_JSON"
+	mapfile -t ARCHIVE_FIELDS <<< "$archive_identity"
+	[[ "${ARCHIVE_FIELDS[0]:-}" == "$TAG" ]] || die "RELEASE.json tag does not match $TAG"
+	[[ "${ARCHIVE_FIELDS[1]:-}" == "$COMMIT" ]] || die "RELEASE.json commit does not match $COMMIT"
+	[[ "${ARCHIVE_FIELDS[2]:-}" == "$RELEASE_REPOSITORY" ]] \
+		|| die "RELEASE.json repository does not match $RELEASE_REPOSITORY"
+	[[ "${ARCHIVE_FIELDS[3]:-}" == "$BACKEND_IMAGE" ]] \
+		|| die "RELEASE.json backend image does not match release.env"
+	[[ "${ARCHIVE_FIELDS[4]:-}" == "$LIQUIDSOAP_IMAGE" ]] \
+		|| die "RELEASE.json Liquidsoap image does not match release.env"
+fi
 
 command -v docker >/dev/null 2>&1 || die "docker not found"
 docker info >/dev/null 2>&1 || die "Docker daemon did not answer"
+command -v gh >/dev/null 2>&1 || die "gh not found — install GitHub CLI to verify attestations"
+gh attestation verify --help >/dev/null 2>&1 \
+	|| die "gh does not support attestation verification — upgrade GitHub CLI"
 
 declare -A COMPOSER_IDS=()
+declare -A COMPOSER_NAMES=()
 for channel in "${CHANNELS[@]}"; do
 	[[ "$channel" =~ ^[a-z0-9][a-z0-9-]{0,30}$ ]] || die "invalid channel name: $channel"
 	[[ -z "${COMPOSER_IDS[$channel]+set}" ]] || die "duplicate channel: $channel"
+	COMPOSER_IDS[$channel]=""
+done
+
+for channel in "${CHANNELS[@]}"; do
 	liquidsoap="${channel}-liquidsoap"
-	composer="${channel}-composer"
 	[[ "$(docker inspect -f '{{.State.Running}}' "$liquidsoap" 2>/dev/null || true)" == true ]] \
 		|| die "$liquidsoap is not running — refusing to start a stopped channel"
+	mapfile -t running_composers < <(docker ps \
+		--filter "label=com.docker.compose.service=${channel}-composer" \
+		--filter status=running --format '{{.Names}}')
+	[[ "${#running_composers[@]}" == 1 ]] \
+		|| die "expected one running composer for $channel, found ${#running_composers[@]}"
+	composer="${running_composers[0]}"
+	[[ "$composer" == "${channel}-composer" || "$composer" == "${channel}-composer-next" ]] \
+		|| die "unexpected active composer name for $channel: $composer"
 	[[ "$(docker inspect -f '{{.State.Running}}' "$composer" 2>/dev/null || true)" == true ]] \
 		|| die "$composer is not running — refusing a partial channel rollout"
+	COMPOSER_NAMES[$channel]="$composer"
 	COMPOSER_IDS[$channel]="$(docker inspect -f '{{.Id}}' "$composer")"
 done
 
@@ -123,6 +181,14 @@ log "verifying image source and revision labels"
 verify_image_identity "$BACKEND_IMAGE" backend
 verify_image_identity "$LIQUIDSOAP_IMAGE" Liquidsoap
 ok "both image identities match $RELEASE_REPOSITORY@$COMMIT"
+
+log "verifying GitHub build attestations"
+SIGNER_WORKFLOW="${RELEASE_REPOSITORY}/.github/workflows/release.yml"
+gh attestation verify "oci://$BACKEND_IMAGE" --repo "$RELEASE_REPOSITORY" \
+	--signer-workflow "$SIGNER_WORKFLOW" --source-digest "$COMMIT" >/dev/null
+gh attestation verify "oci://$LIQUIDSOAP_IMAGE" --repo "$RELEASE_REPOSITORY" \
+	--signer-workflow "$SIGNER_WORKFLOW" --source-digest "$COMMIT" >/dev/null
+ok "both image attestations verified against $RELEASE_REPOSITORY@$COMMIT"
 
 # Process environment has higher Compose precedence than root/channel env files.
 # Export the already-validated digests so neither a shell variable nor a
@@ -173,7 +239,7 @@ fi
 
 for channel in "${CHANNELS[@]}"; do
 	liquidsoap="${channel}-liquidsoap"
-	composer="${channel}-composer"
+	composer="${COMPOSER_NAMES[$channel]}"
 	before_id="${COMPOSER_IDS[$channel]}"
 
 	log "rendering $channel compose file with the release image override"
