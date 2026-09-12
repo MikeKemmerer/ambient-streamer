@@ -150,9 +150,44 @@ def test_restart_renames_the_replacement_container(repo: Path, docker: FakeDocke
 
 def test_restart_leaves_liquidsoap_alone(repo: Path, docker: FakeDocker) -> None:
     asyncio.run(supervisor(repo, docker).restart("lofi"))
-    liquidsoap = [c for c in docker.compose_calls() if c[-1] == "lofi-liquidsoap"]
-    assert liquidsoap and liquidsoap[0][-3:-1] == ["-d", "--no-deps"]
-    assert not any("rm" in c and c[-1] == "lofi-liquidsoap" for c in docker.compose_calls())
+    assert not any("lofi-liquidsoap" in call for call in docker.compose_calls())
+
+
+def test_restart_disables_outgoing_restart_policy_before_takeover(
+    repo: Path, docker: FakeDocker
+) -> None:
+    docker.states["lofi-composer"] = RUNNING_STATE
+    asyncio.run(supervisor(repo, docker).restart("lofi"))
+
+    disable = next(
+        index for index, call in enumerate(docker.calls)
+        if call[1:] == ["update", "--restart=no", "lofi-composer"]
+    )
+    replacement = next(
+        index for index, call in enumerate(docker.calls)
+        if "compose" in call and "--force-recreate" in call
+    )
+    assert disable < replacement
+
+
+def test_failed_takeover_restores_outgoing_restart_policy(
+    repo: Path, docker: FakeDocker
+) -> None:
+    class FailedTakeover(Supervisor):
+        async def _await_takeover(self, *args, **kwargs):
+            raise SupervisorError("replacement never advanced")
+
+    docker.states["lofi-composer"] = RUNNING_STATE
+    sup = FailedTakeover(workspace=load_workspace(repo), runner=docker)
+
+    with pytest.raises(SupervisorError, match="never advanced"):
+        asyncio.run(sup.restart("lofi"))
+
+    assert docker.calls_matching("update", "--restart=no", "lofi-composer")
+    assert docker.calls_matching(
+        "update", "--restart=unless-stopped", "lofi-composer"
+    )
+    assert any("rm" in call and "--force" in call for call in docker.compose_calls())
 
 
 def test_restart_alternates_slots(repo: Path, docker: FakeDocker) -> None:

@@ -735,20 +735,39 @@ class Supervisor:
             incoming = self.composer_container(name, slot_next=to_next)
 
             await self._announce(name, ChannelState.STARTING, phase="make-before-break")
-            # Liquidsoap stays in the canonical project: audio lives behind
-            # Icecast and must not be disturbed by a compositor swap.
-            await self.compose(name, ["up", "-d", "--no-deps", f"{name}{LIQUIDSOAP_SUFFIX}"])
-
-            with _override_file(name, incoming) as override:
-                (
+            # A relay takeover breaks the outgoing publisher's sockets. Disable
+            # Docker's restart policy first or both slots repeatedly respawn and
+            # displace one another before cleanup can run.
+            (await self.docker_argv(["update", "--restart=no", outgoing])).check()
+            try:
+                with _override_file(name, incoming) as override:
+                    (
+                        await self.compose(
+                            name,
+                            [
+                                "up", "-d", "--no-deps", "--force-recreate",
+                                f"{name}{COMPOSER_SUFFIX}",
+                            ],
+                            slot_next=to_next,
+                            extra_files=[override] if to_next else [],
+                        )
+                    ).check()
+                    claimed = await self._await_takeover(name, incoming, slot_next=to_next)
+            except Exception:
+                with _override_file(name, incoming) as incoming_override:
                     await self.compose(
                         name,
-                        ["up", "-d", "--no-deps", "--force-recreate", f"{name}{COMPOSER_SUFFIX}"],
+                        ["rm", "--stop", "--force", f"{name}{COMPOSER_SUFFIX}"],
                         slot_next=to_next,
-                        extra_files=[override] if to_next else [],
+                        extra_files=[incoming_override] if to_next else [],
                     )
-                ).check()
-                claimed = await self._await_takeover(name, incoming, slot_next=to_next)
+                (await self.docker_argv(
+                    ["update", "--restart=unless-stopped", outgoing]
+                )).check()
+                state = await self.inspect(outgoing)
+                if not state.running:
+                    (await self.docker_argv(["start", outgoing])).check()
+                raise
 
             with _override_file(name, outgoing) as outgoing_override:
                 await self.compose(
