@@ -107,7 +107,7 @@ const state = {
   resolutionDraft: null,
   // Same, for the visualization on/off toggle: an unapplied tick must survive a refresh.
   vizEnabledDraft: null,
-  // Null means "no pending edit"; an array is a staged hot set awaiting Apply.
+  // Null means "no pending edit"; an array is a staged preloaded set awaiting Apply.
   hotSetDraft: null,
   // Keyed by plugin name, so tuning one does not discard another's edits.
   paramDraft: {},
@@ -1512,7 +1512,7 @@ function renderLookTab() {
 
   const known = new Set(state.plugins.map((p) => p.name));
   const rows = [...state.plugins];
-  // A hot plugin the backend does not report as installed is the one genuinely
+  // A preloaded plugin the backend does not report as installed is the one genuinely
   // broken case here: the graph names a branch that cannot be built.
   for (const plugin of hot) if (!known.has(plugin)) rows.push({ name: plugin, display_name: plugin, missing: true });
 
@@ -1531,16 +1531,16 @@ function renderLookTab() {
       : missing
         ? { tone: 'bad', text: 'not installed' }
         : isHot
-          ? { tone: 'ok', text: 'instant' }
-          : { tone: 'warn', text: live ? 'restarts' : 'on next start' };
+          ? { tone: 'ok', text: 'live switch' }
+          : { tone: 'warn', text: live ? 'restart required' : 'on next start' };
 
     const where = !enabled
-      ? (isHot ? 'in hot set \u2014 costs nothing while the visualization is off' : 'installed, not instantiated')
+      ? (isHot ? 'preloaded \u2014 costs nothing while the visualization is off' : 'installed, not preloaded')
       : missing
-        ? 'in hot_set but not installed \u2014 this channel cannot build that branch'
+        ? 'preloaded but not installed \u2014 this channel cannot build that branch'
         : isHot
-          ? `hot set \u00B7 always rendering${cost ? ` \u00B7 ${cost}` : ''}`
-          : `installed, not instantiated${cost ? ` \u00B7 ${cost}` : ''}`;
+          ? `preloaded \u00B7 live switch${cost ? ` \u00B7 ${cost}` : ''}`
+          : `installed, restart required${cost ? ` \u00B7 ${cost}` : ''}`;
 
     list.append(el('li', { class: 'plugin', dataset: { hot: String(isHot), active: String(isActive), missing: String(missing && enabled) } }, [
       el('div', { class: 'pmeta' }, [
@@ -1569,16 +1569,20 @@ function renderLookTab() {
             disabled: missing || isActive,
             onchange: (event) => toggleHotSet(plugin.name, event.target.checked),
           }),
-          'hot',
+          'preload',
         ]),
         el('span', { class: 'chip', dataset: { tone: tag.tone }, text: tag.text }),
         isActive
           ? el('span', { class: 'chip', dataset: { tone: 'info' }, text: enabled ? 'on air' : 'selected' })
           : el('button', {
               type: 'button',
-              disabled: missing || !enabled,
-              title: enabled ? '' : 'The visualization is off; switch it on to change what renders.',
-              text: isHot || !live ? 'Switch' : 'Switch \u2014 restarts',
+              disabled: missing || !enabled || (live && !isHot),
+              title: !enabled
+                ? 'The visualization is off; switch it on to change what renders.'
+                : live && !isHot
+                  ? 'Stop the channel or preload this branch during planned maintenance.'
+                  : '',
+              text: live && !isHot ? 'Not preloaded' : 'Switch',
               onclick: () => switchVisualization(plugin.name, isHot || !live),
             }),
       ]),
@@ -1785,7 +1789,7 @@ async function applyParameters(plugin, specs) {
   scheduleRefresh();
 }
 
-/** Membership is a CPU budget, so it is staged and applied, never live per click. */
+/** Preloaded membership is a CPU budget, so it is staged and applied, never live per click. */
 function toggleHotSet(plugin, wanted) {
   const current = state.hotSetDraft || hotSet(state.selected);
   const next = wanted
@@ -1814,12 +1818,13 @@ function syncHotSet() {
   const note = $('hot-set-state');
   const chip = $('hot-set-cores');
 
-  $('btn-hot-set-apply').disabled = !dirty || !draft.length;
+  const running = (state.channels.get(name) || {}).state !== 'stopped';
+  $('btn-hot-set-apply').disabled = !dirty || !draft.length || running;
   $('btn-hot-set-revert').disabled = !dirty;
 
   if (!draft.length) {
     note.textContent = 'A channel needs at least one branch. Switch the visualization off instead '
-      + 'of emptying the hot set.';
+      + 'of emptying the preloaded set.';
     note.dataset.tone = 'bad';
     chip.hidden = true;
     return;
@@ -1836,10 +1841,9 @@ function syncHotSet() {
   chip.textContent = `${delta >= 0 ? '+' : ''}${delta.toFixed(2)} cores`;
   chip.dataset.tone = delta > 0 ? 'warn' : 'ok';
   note.dataset.tone = 'warn';
-  const running = (state.channels.get(name) || {}).state !== 'stopped';
   note.textContent = vizEnabled(name) && running
-    ? 'Not applied. Changing which branches exist rebuilds the graph, so Apply restarts the '
-      + 'compositor \u2014 about a 1s gap and a new YouTube ingest session.'
+    ? 'Not applied. Stop the channel before changing preloaded branches; this release will not '
+      + 'restart the compositor from this panel.'
     : 'Not applied. Applies on the next start; nothing is drawing these branches right now.';
 }
 
@@ -1853,11 +1857,11 @@ async function applyHotSet() {
   // Dropping the branch on air needs a replacement named, or the backend refuses.
   if (!draft.includes(active)) body.active = draft[0];
 
-  const result = await guard('hot set', () => api.setHotSet(name, body), 'accepted');
+  const result = await guard('preloaded set', () => api.setHotSet(name, body), 'accepted');
   if (result === undefined) return;
 
   state.hotSetDraft = null;
-  toast('ok', 'hot set', result.detail || 'saved');
+  toast('ok', 'preloaded set', result.detail || 'saved');
   await loadChannelDetail(name);
   scheduleRefresh();
 }
@@ -1895,6 +1899,7 @@ async function applyVizVisible(visible) {
 }
 
 async function switchVisualization(plugin, instant) {
+  const name = state.selected;
   if (!name) return;
   const live = (state.channels.get(name) || {}).state !== 'stopped';
   const error = $('viz-error');
@@ -1904,11 +1909,11 @@ async function switchVisualization(plugin, instant) {
     const label = (state.plugins.find((p) => p.name === plugin) || {}).display_name || plugin;
     const ok = await confirmRestart({
       title: `Switch ${name} to ${label}?`,
-      body: `${label} is installed but is not in this channel's hot set, so its branch was never `
+      body: `${label} is installed but is not preloaded for this channel, so its branch was never `
         + 'built. An FFmpeg filtergraph is fixed at launch, so there is nothing running to cut to.',
       cost: 'The channel restarts make-before-break: roughly a 1s gap on air, and a new YouTube '
         + 'ingest session.',
-      note: 'To make this switch instant in future, add the plugin to hot_set \u2014 at the cost of '
+      note: 'To make this switch instant in future, preload the plugin \u2014 at the cost of '
         + 'about 0.28 cores per idle branch at 720p, measured, whether or not it is on screen.',
       okText: 'Restart and switch',
     });
@@ -1916,7 +1921,7 @@ async function switchVisualization(plugin, instant) {
   }
 
   try {
-    await api.setVisualization(name, plugin);
+    await api.setVisualization(name, plugin, !live);
     if (!instant) {
       toast('warn', 'visualization', `${plugin} \u2014 staged; the channel is restarting`);
       scheduleRefresh(800);
@@ -1930,10 +1935,10 @@ async function switchVisualization(plugin, instant) {
     if (err instanceof ApiError && err.error === 'not_in_hot_set') {
       error.hidden = false;
       error.textContent =
-        `The control plane refused to switch to “${plugin}”: it is not in this channel's hot set, `
-        + 'and this build of the API will not stage a restart for you. Add it to hot_set and restart '
+        `The control plane refused to switch to “${plugin}”: it is not preloaded for this channel, `
+        + 'and this build of the API will not stage a restart for you. Preload it and restart '
         + 'the channel deliberately.';
-      toast('warn', 'not_in_hot_set', plugin);
+      toast('warn', 'not preloaded', plugin);
       return;
     }
     report('visualization', err);
@@ -1966,9 +1971,9 @@ async function applyPreset() {
     if (err instanceof ApiError && err.error === 'not_in_hot_set') {
       error.hidden = false;
       error.textContent =
-        `Preset “${preset}” selects a visualization outside this channel's hot set, so it was rejected ` +
-        'rather than silently promoted. Add that plugin to hot_set and restart the channel first.';
-      toast('warn', 'not_in_hot_set', preset);
+        `Preset “${preset}” selects a visualization outside this channel's preloaded set, so it was rejected ` +
+        'rather than silently promoted. Preload that plugin during planned maintenance first.';
+      toast('warn', 'not preloaded', preset);
       return;
     }
     report('preset', err);

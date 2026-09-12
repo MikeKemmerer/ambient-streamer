@@ -489,11 +489,11 @@
               <span class="small muted" id="viz-visible-note"></span>
             </div>
             <p class="small muted">
-              A plugin can only be switched to instantly if it is already rendering. An FFmpeg
-              filtergraph is fixed at launch, so every plugin in this channel's hot set draws frames
-              whether or not it is on screen — which is exactly why hot set membership costs CPU,
-              roughly 0.28 cores per idle branch at 720p, measured. Anything outside the hot set is
-              staged: the channel restarts make&#8209;before&#8209;break, about a 1s gap.
+              A plugin can only switch live if its branch was preloaded when this compositor started.
+              Every preloaded branch draws frames even when it is off screen, costing roughly
+              0.28 cores per idle branch at 720p. Other installed plugins require a planned
+              make&#8209;before&#8209;break compositor restart; isolated visualization switching is
+              proven but is not part of this release.
             </p>
             <ul class="plugin-list" id="plugin-list"></ul>
             <div class="row hot-set-bar" id="hot-set-bar">
@@ -501,7 +501,7 @@
               <span class="spacer"></span>
               <span class="chip num" data-tone="info" id="hot-set-cores" hidden></span>
               <button id="btn-hot-set-revert" type="button" disabled>Revert</button>
-              <button id="btn-hot-set-apply" type="button" disabled>Apply hot set</button>
+              <button id="btn-hot-set-apply" type="button" disabled>Apply preloaded set</button>
             </div>
             <p class="inline-error" id="viz-error" hidden></p>
           </div>
@@ -541,7 +541,7 @@
               <button id="btn-preset-apply" type="button" class="primary">Apply preset</button>
             </div>
             <p class="small muted" id="preset-description"></p>
-            <p class="small muted">A preset never restarts the stream. One whose visualization is outside the hot set is rejected.</p>
+            <p class="small muted">A preset never restarts the stream. One whose visualization is not preloaded is rejected.</p>
           </div>
         </div>
       </div>
@@ -662,7 +662,7 @@
       </label>
     </div>
     <fieldset class="hotset">
-      <legend>hot set — every branch costs CPU whether or not it is on screen</legend>
+      <legend>preloaded visualizations — every branch costs CPU whether or not it is on screen</legend>
       <div id="create-hotset"></div>
     </fieldset>
     <p class="small muted">
