@@ -162,6 +162,29 @@ def test_restart_alternates_slots(repo: Path, docker: FakeDocker) -> None:
     assert result["incoming"] == "lofi-composer"
 
 
+def test_reverse_restart_removes_the_outgoing_next_container(
+    repo: Path, docker: FakeDocker
+) -> None:
+    class CapturingDocker(FakeDocker):
+        removed_container = ""
+
+        async def __call__(self, argv, timeout=None):
+            args = list(argv)
+            if "rm" in args and "ambient-lofi-next" in args:
+                files = [args[index + 1] for index, value in enumerate(args[:-1]) if value == "--file"]
+                document = yaml.safe_load(Path(files[-1]).read_text(encoding="utf-8"))
+                self.removed_container = document["services"]["lofi-composer"]["container_name"]
+            return await super().__call__(args, timeout)
+
+    runner = CapturingDocker()
+    runner.states.update(docker.states)
+    runner.states["lofi-composer-next"] = RUNNING_STATE
+
+    asyncio.run(supervisor(repo, runner).restart("lofi"))
+
+    assert runner.removed_container == "lofi-composer-next"
+
+
 # --------------------------------------------------------------------------
 # Isolated visualizer
 # --------------------------------------------------------------------------
@@ -402,7 +425,7 @@ def test_the_probe_runs_inside_the_composer_image(repo: Path, docker: FakeDocker
     assert result.available is True
     argv = docker.calls_matching("run")[0]
     assert argv[:3] == ["docker", "run", "--rm"]
-    assert "ambient-composer:dev" in argv
+    assert sup.composer_image in argv
     assert "-f" in argv and "null" in argv
 
 

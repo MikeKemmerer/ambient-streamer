@@ -749,11 +749,13 @@ class Supervisor:
                     )
                 ).check()
                 claimed = await self._await_takeover(name, incoming, slot_next=to_next)
+
+            with _override_file(name, outgoing) as outgoing_override:
                 await self.compose(
                     name,
                     ["rm", "--stop", "--force", f"{name}{COMPOSER_SUFFIX}"],
                     slot_next=from_next,
-                    extra_files=[override] if from_next else [],
+                    extra_files=[outgoing_override] if from_next else [],
                 )
 
             await self._announce(name, ChannelState.RUNNING, phase="restarted")
