@@ -700,7 +700,7 @@ def test_system_probes_encoders_inside_the_composer_image(api) -> None:
     docker.runs["h264_qsv"] = CommandResult((), 125, "", "docker: no such device /dev/dri")
 
     body = client.get("/api/system", headers=AUTH).json()
-    assert body["encoder_probe_image"] == "ambient-composer:dev"
+    assert body["encoder_probe_image"] == state.supervisor.composer_image
     probes = {p["encoder"]: p for p in body["encoders"]}
     assert probes["h264_nvenc"]["available"] is False
     assert "OpenEncodeSessionEx failed" in probes["h264_nvenc"]["detail"]
@@ -709,7 +709,7 @@ def test_system_probes_encoders_inside_the_composer_image(api) -> None:
 
     runs = [c for c in docker.calls if c[1:2] == ["run"]]
     assert any("--gpus" in c for c in runs)
-    assert any("ambient-composer:dev" in c for c in runs)
+    assert any(state.supervisor.composer_image in c for c in runs)
 
 
 def test_system_caches_probes_until_refresh_is_asked_for(api) -> None:
