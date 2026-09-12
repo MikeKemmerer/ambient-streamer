@@ -409,8 +409,8 @@ def load_channel(
             )
 
     registry = plugin_registry.load_registry(workspace.plugins_dir)
-    check = plugin_registry.check_hot_set(
-        config.visualization.hot_set,
+    check = plugin_registry.check_visualization(
+        config.visualization.active,
         registry,
         width,
         height,
@@ -470,7 +470,7 @@ def load_channel(
         cores_breakdown={
             "pipeline": round(check.pipeline_cores, 3),
             "preview": round(check.preview_cores, 3),
-            "branches": round(check.branch_cores, 3),
+            "visualizer": round(check.branch_cores, 3),
         },
         warnings=warnings,
     )

@@ -21,10 +21,10 @@
 # GENERATED — do not edit. Source: docker/compose.channel.yml.j2
 # Channel: {{ channel }}
 #
-# Two containers. Liquidsoap owns audio and may restart freely; Icecast's
-# fallback mount absorbs it. The compositor must NOT restart — its filtergraph
-# is fixed at launch, and every live-editable feature routes around that
-# (image2pipe for slides, zmq for color, streamselect for plugins).
+# Three containers. Liquidsoap owns audio and may restart freely; Icecast's
+# fallback mount absorbs it. The visualizer is also restartable and feeds one
+# capped raw-video layer through the compositor's framekeeper. The compositor
+# must NOT restart — its filtergraph is fixed at launch.
 
 name: ambient-{{ channel }}
 
@@ -80,6 +80,55 @@ services:
           memory: ${LIQUIDSOAP_MEMORY_LIMIT:-512m}
 
   # ---------------------------------------------------------------------------
+  # Restartable visualization child. One plugin at a time renders from the
+  # Icecast audio and connects to the compositor-owned framekeeper socket.
+  # ---------------------------------------------------------------------------
+  {{ channel }}-visualizer:
+    <<: *channel-common
+    container_name: {{ channel }}-visualizer
+    image: ${AMBIENT_COMPOSER_IMAGE:-ambient-composer:{{ image_tag | default('dev') }}}
+    build:
+      context: {{ repo_root }}
+      dockerfile: docker/Dockerfile.composer
+    command: ["/opt/ambient/visualizer-entrypoint.sh"]
+{%- if visualizer_enabled == 'off' %}
+    profiles: [visualization-disabled]
+{%- endif %}
+    environment:
+      CHANNEL_NAME: {{ channel }}
+      CHANNEL_MOUNT: ${CHANNEL_MOUNT:-/{{ channel }}}
+      ICECAST_HOST: icecast
+      ICECAST_PORT: ${AMBIENT_ICECAST_PORT:-8081}
+      PLUGIN_NAME: "{{ active_plugin }}"
+      PLUGIN_PARAMS: '{{ plugin_parameters }}'
+      WIDTH: "{{ width }}"
+      HEIGHT: "{{ height }}"
+      FPS: "{{ fps }}"
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      TZ: ${TZ:-UTC}
+{%- if color_mode == 'manual' %}
+      ACCENT: "{{ color_accent }}"
+{%- endif %}
+    volumes:
+      - {{ repo_root }}/ffmpeg:/opt/ambient:ro
+      - {{ repo_root }}/plugins:/plugins:ro
+      - {{ common_dir }}:/media/common:ro
+      - {{ channel_dir }}:/media/channel:ro
+      - {{ log_dir }}:/var/log/ambient
+      - {{ run_dir }}:/run/ambient
+    deploy:
+      resources:
+        limits:
+          cpus: "${VISUALIZER_CPU_LIMIT:-1.0}"
+          memory: ${VISUALIZER_MEMORY_LIMIT:-768m}
+    depends_on:
+      {{ channel }}-liquidsoap:
+        condition: service_started
+      {{ channel }}-composer:
+        condition: service_started
+
+  # ---------------------------------------------------------------------------
   # Compositor. Reads audio from Icecast, slides from a Python producer on
   # image2pipe, and publishes RTMP to the MediaMTX relay.
   #
@@ -88,7 +137,7 @@ services:
   {{ channel }}-composer:
     <<: *channel-common
     container_name: {{ channel }}-composer
-    image: ambient-composer:{{ image_tag | default('dev') }}
+    image: ${AMBIENT_COMPOSER_IMAGE:-ambient-composer:{{ image_tag | default('dev') }}}
     build:
       context: {{ repo_root }}
       dockerfile: docker/Dockerfile.composer
@@ -101,19 +150,12 @@ services:
       # to YouTube, so it has no reason to hold the credential — and holding it
       # would expose it through `docker inspect` on every channel container.
       ENCODER: ${ENCODER:-{{ encoder | default('libx264') }}}
-      # Without these the entrypoint falls back to a single hardcoded plugin and
-      # the channel's whole visualization selection is silently ignored.
-      ACTIVE_PLUGIN: "{{ active_plugin }}"
-      HOT_SET: "{{ hot_set }}"
-      # Off skips the plugin branches, the selector and the composite entirely.
-      # Measured on a live 1080p30 channel: 0.999x realtime with it off against
-      # 0.415x with it on — by far
-      # the largest lever a channel has.
-      VISUALIZATION: "{{ visualization }}"
       # Standby: the overlay's timeline switch, flipped live over zmq. Unlike
-      # VISUALIZATION the branches still render, so this costs what on costs.
+      # stopping the child, this keeps the active child rendering.
       VIZ_VISIBLE: "{{ viz_visible }}"
-      PLUGIN_PARAMS: '{{ plugin_parameters }}'
+      # Alpha multiplier for the isolated layer. Commandable live through
+      # lut@vizop; this value is the launch-time baseline.
+      VIZ_OPACITY: "{{ viz_opacity }}"
       # Without the mode the producer cannot tell a manual color from one it
       # derived, and overwrites the operator's choice at the next slide.
       COLOR_MODE: "{{ color_mode }}"

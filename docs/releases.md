@@ -1,8 +1,8 @@
 # Releases
 
 Tagged releases publish source plus immutable runtime images so production never builds on the
-streaming host. The first image set is deliberately limited to the control plane and audio
-engine; composer, MediaMTX and Icecast remain on their existing deployment paths.
+streaming host. Backend, Liquidsoap, and the composer/visualizer runtime are published; MediaMTX
+and Icecast remain on their existing deployment paths.
 
 ## Published artifacts
 
@@ -13,12 +13,13 @@ Each `vX.Y.Z` release contains:
 - `release.env` — the same digest references in the format consumed by
   `scripts/deploy-release.sh`;
 - an amd64/arm64 backend image identified by digest in both manifests;
-- an amd64/arm64 Liquidsoap image identified by digest in both manifests.
+- an amd64/arm64 Liquidsoap image identified by digest in both manifests;
+- an amd64/arm64 composer image used by both stable compositor and restartable visualizer.
 
 Builds use unique `run-<run-id>-<attempt>` staging tags; no SemVer or floating `latest` image tag
 is published. Production records and pulls only the `@sha256:...` references from `release.env`.
-Both images carry BuildKit SBOM/provenance and source/revision labels.
-Public repositories also publish GitHub build-provenance attestations for both image digests.
+All images carry BuildKit SBOM/provenance and source/revision labels.
+Public repositories also publish GitHub build-provenance attestations for every image digest.
 
 GHCR packages may be private when first created. Make them public in the package settings, or
 run `docker login ghcr.io` on the production host with a token that has `read:packages`.
@@ -36,8 +37,8 @@ Install it from <https://github.com/cli/cli/blob/trunk/docs/install_linux.md>, t
    git push origin v1.2.0
    ```
 
-3. Wait for **Publish Release** to finish both multi-architecture builds and attestations.
-4. Confirm the GitHub release contains all three files and both GHCR packages show the expected
+3. Wait for **Publish Release** to finish all multi-architecture builds and attestations.
+4. Confirm the GitHub release contains all three files and all GHCR packages show the expected
    digest.
 
 `workflow_dispatch` is available for release candidates. Its version must still match `VERSION`
@@ -77,12 +78,12 @@ git fetch --tags origin
 git checkout v1.2.0
 gh release download v1.2.0 --pattern release.env
 
-# Pull both digests and write only AMBIENT_BACKEND_IMAGE and
-# AMBIENT_LIQUIDSOAP_IMAGE into the existing root .env. No container changes.
+# Pull all digests and record AMBIENT_BACKEND_IMAGE, AMBIENT_LIQUIDSOAP_IMAGE,
+# and AMBIENT_COMPOSER_IMAGE in the existing root .env. No container changes.
 scripts/deploy-release.sh release.env
 ```
 
-The helper parses the manifest rather than sourcing it, validates both GHCR digest references,
+The helper parses the manifest rather than sourcing it, validates all GHCR digest references,
 checks every requested channel before pulling, verifies each pulled image's source and revision
 labels and GitHub attestation against the exact release commit, and preserves the `.env` file's
 mode and every secret.
@@ -123,6 +124,11 @@ scripts/deploy-release.sh release.env --backend \
 ```
 
 There is intentionally no composer option.
+
+Releases that change the stable compositor architecture require a separately reviewed,
+make-before-break migration after image preparation. The release helper never performs that
+high-impact step implicitly. Once the new composer is stable, visualization changes recreate only
+the capped visualizer child and leave the compositor and YouTube ingest session untouched.
 
 ## Rollback
 

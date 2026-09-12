@@ -21,6 +21,7 @@ SPEC.loader.exec_module(upgrade_release)
 COMMIT = "a" * 40
 BACKEND = "ghcr.io/mikekemmerer/ambient-streamer-backend@sha256:" + "b" * 64
 LIQUIDSOAP = "ghcr.io/mikekemmerer/ambient-streamer-liquidsoap@sha256:" + "c" * 64
+COMPOSER = "ghcr.io/mikekemmerer/ambient-streamer-composer@sha256:" + "d" * 64
 
 
 def add_file(archive: tarfile.TarFile, name: str, content: bytes, mode: int = 0o644) -> None:
@@ -37,7 +38,8 @@ def release_files(tmp_path: Path) -> tuple[Path, Path]:
         f"AMBIENT_RELEASE_COMMIT={COMMIT}\n"
         "AMBIENT_RELEASE_REPOSITORY=MikeKemmerer/ambient-streamer\n"
         f"AMBIENT_BACKEND_IMAGE={BACKEND}\n"
-        f"AMBIENT_LIQUIDSOAP_IMAGE={LIQUIDSOAP}\n",
+        f"AMBIENT_LIQUIDSOAP_IMAGE={LIQUIDSOAP}\n"
+        f"AMBIENT_COMPOSER_IMAGE={COMPOSER}\n",
         encoding="utf-8",
     )
     manifest = json.dumps(
@@ -45,7 +47,7 @@ def release_files(tmp_path: Path) -> tuple[Path, Path]:
             "tag": "v1.2.3",
             "commit": COMMIT,
             "repository": "MikeKemmerer/ambient-streamer",
-            "images": {"backend": BACKEND, "liquidsoap": LIQUIDSOAP},
+            "images": {"backend": BACKEND, "liquidsoap": LIQUIDSOAP, "composer": COMPOSER},
         }
     ).encode()
     archive_path = tmp_path / "ambient-streamer-v1.2.3.tar.gz"

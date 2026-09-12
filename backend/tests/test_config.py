@@ -91,11 +91,17 @@ def test_missing_ambient_yaml_falls_back_to_defaults(tmp_path: Path) -> None:
     assert any("ambient.yaml" in w for w in workspace.warnings)
 
 
-def test_active_must_be_in_hot_set(tmp_path: Path) -> None:
-    bad = CHANNEL_YAML.replace("active: showfreqs-bars", "active: showwaves-classic")
-    workspace = load_workspace(make_repo(tmp_path, config=bad))
-    with pytest.raises(ConfigError, match="hot_set"):
-        load_channel(workspace, "lofi")
+def test_active_need_not_be_in_legacy_hot_set(tmp_path: Path) -> None:
+    config = CHANNEL_YAML.replace("hot_set: [showfreqs-bars]", "hot_set: [legacy-plugin]")
+    channel = load_channel(load_workspace(make_repo(tmp_path, config=config)), "lofi")
+    assert channel.active_plugin == "showfreqs-bars"
+    assert channel.hot_set == ["legacy-plugin"]
+
+
+def test_hot_set_may_be_absent_during_legacy_migration(tmp_path: Path) -> None:
+    config = CHANNEL_YAML.replace("  hot_set: [showfreqs-bars]\n", "")
+    channel = load_channel(load_workspace(make_repo(tmp_path, config=config)), "lofi")
+    assert channel.hot_set == []
 
 
 def test_empty_audio_result_is_fatal(tmp_path: Path) -> None:

@@ -20,6 +20,7 @@ them requires re-running the spike that produced them.
 | [slideshow.md](slideshow.md) | producer → compositor over `image2pipe` | media-pipeline, backend-api |
 | [zmq-control.md](zmq-control.md) | runtime filter commands | backend-api, media-pipeline |
 | [plugin.md](plugin.md) | visualization plugin package | media-pipeline, backend-api |
+| [visualization-runtime.md](visualization-runtime.md) | framekeeper, visualizer child, switching lifecycle | media-pipeline, backend-api, frontend |
 | [media-selection.md](media-selection.md) | `playlist.m3u`, `images.list`, shared vs per-channel | backend-api, media-pipeline |
 | [on-disk.md](on-disk.md) | paths, color profiles, HLS, logs, runtime state | all |
 | [rest-api.md](rest-api.md) | REST + SSE | backend-api, frontend |
@@ -39,7 +40,7 @@ Phase 0 measured what each hatch actually costs:
 | Track / playlist order | Liquidsoap owns audio in its own process | 0 s |
 | Image set / order | producer feeds `image2pipe` | 0 s, FFmpeg PID unchanged |
 | Colors | `zmq` runtime commands | one frame |
-| Visualization plugin | `streamselect` between hot graphs | one frame, clean cut |
+| Visualization plugin | restartable child → framekeeper → stable layer input | transparent fallback, FFmpeg PID unchanged |
 | Liquidsoap restart | Icecast fallback mount | 0 s, 0.00 % silence |
 | Anything needing a real FFmpeg restart | MediaMTX relay | **seconds, and a new YouTube ingest session** |
 

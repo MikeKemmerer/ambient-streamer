@@ -142,6 +142,8 @@ def test_the_requested_fps_actually_reaches_the_composer(api, repo) -> None:
     emitted `FPS: ${FPS:-30}` - a compose interpolation of a variable nothing ever
     defines. Every channel encoded at 30 and the API reported success.
     """
+    import yaml
+
     from ambient.supervisor import compose_context
 
     client, state = api
@@ -153,13 +155,11 @@ def test_the_requested_fps_actually_reaches_the_composer(api, repo) -> None:
 
     client.post("/api/channels/lofi/restart", headers=AUTH)
     rendered = (repo / "channels" / "lofi" / "docker-compose.yml").read_text(encoding="utf-8")
-    fps_lines = [
-        line.split(":", 1)[1].strip()
-        for line in rendered.splitlines()
-        if line.strip().startswith("FPS:")
-    ]
-    assert fps_lines == ['"24"'], rendered
-    assert "$" not in fps_lines[0], "an interpolation nothing sets always wins its default"
+    document = yaml.safe_load(rendered)
+    for service in ("lofi-composer", "lofi-visualizer"):
+        fps = document["services"][service]["environment"]["FPS"]
+        assert fps == "24", service
+        assert "$" not in fps, "an interpolation nothing sets always wins its default"
 
 
 def test_the_endpoint_requires_a_token(api) -> None:

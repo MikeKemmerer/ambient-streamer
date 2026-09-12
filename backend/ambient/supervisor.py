@@ -48,6 +48,7 @@ TEMPLATE_NAME = "compose.channel.yml.j2"
 
 COMPOSER_SUFFIX = "-composer"
 LIQUIDSOAP_SUFFIX = "-liquidsoap"
+VISUALIZER_SUFFIX = "-visualizer"
 # The replacement slot used by a make-before-break restart.
 NEXT_SUFFIX = "-next"
 
@@ -70,6 +71,7 @@ RUN_DIR = "/run/ambient"
 # tell the incoming composer's frames from the outgoing one's.
 PROGRESS_LIVE = "progress"
 PROGRESS_NEXT = "progress-next"
+VISUALIZATION_STATUS = "visualization-status.json"
 
 
 def progress_name(slot_next: bool) -> str:
@@ -129,7 +131,12 @@ def compose_context(workspace: Workspace, channel: ResolvedChannel) -> dict[str,
         "active_plugin": channel.active_plugin,
         "hot_set": ",".join(channel.hot_set),
         "visualization": "on" if channel.visualization_enabled else "off",
+        "visualizer_enabled": "on" if channel.visualization_enabled else "off",
+        "visualizer_width": str(min(channel.width, 1280)),
+        "visualizer_height": str(min(channel.height, 720)),
+        "visualizer_fps": str(min(channel.fps, 30)),
         "viz_visible": "on" if channel.config.visualization.visible else "off",
+        "viz_opacity": f"{channel.config.visualization.opacity:g}",
         # Compact JSON on one line: it is a YAML scalar in the rendered compose file.
         "plugin_parameters": json.dumps(
             channel.config.visualization.parameters, separators=(",", ":"), sort_keys=True
@@ -304,6 +311,27 @@ class ChannelContainers:
 
 
 @dataclass(frozen=True)
+class VisualizerReadiness:
+    ready: bool = False
+    fallback: bool = True
+    emitted: int = 0
+    received: int = 0
+    fallbacks: int = 0
+    reconnects: int = 0
+    last_frame_age_seconds: float | None = None
+    updated_at: int | None = None
+
+
+@dataclass(frozen=True)
+class VisualizerAction:
+    action: str
+    generation: int
+    applied: bool
+    container: str
+    composer_id: str
+
+
+@dataclass(frozen=True)
 class LogTail:
     text: str
     source: str
@@ -361,6 +389,7 @@ class Supervisor:
     )
     _locks: dict[str, asyncio.Lock] = field(default_factory=dict, repr=False)
     _probes: dict[str, ProbeResult] = field(default_factory=dict, repr=False)
+    _visualizer_generations: dict[str, int] = field(default_factory=dict, repr=False)
 
     # ---------------------------------------------------------------- naming
 
@@ -373,8 +402,17 @@ class Supervisor:
     def liquidsoap_container(self, name: str) -> str:
         return f"{name}{LIQUIDSOAP_SUFFIX}"
 
+    def visualizer_container(self, name: str) -> str:
+        return f"{name}{VISUALIZER_SUFFIX}"
+
     def lock(self, name: str) -> asyncio.Lock:
         return self._locks.setdefault(name, asyncio.Lock())
+
+    def next_visualizer_generation(self, name: str) -> int:
+        channel_directory(self.workspace, name)
+        generation = self._visualizer_generations.get(name, 0) + 1
+        self._visualizer_generations[name] = generation
+        return generation
 
     # -------------------------------------------------------------- plumbing
 
@@ -491,6 +529,35 @@ class Supervisor:
             liquidsoap=await self.inspect(self.liquidsoap_container(name)),
         )
 
+    async def visualizer_status(self, name: str) -> ContainerInfo:
+        channel_directory(self.workspace, name)
+        return await self.inspect(self.visualizer_container(name))
+
+    async def visualizer_readiness(self, name: str) -> VisualizerReadiness:
+        text = await self.read_run_file(name, VISUALIZATION_STATUS)
+        try:
+            value = json.loads(text.strip() or "{}")
+        except json.JSONDecodeError:
+            return VisualizerReadiness()
+        if not isinstance(value, dict):
+            return VisualizerReadiness()
+
+        def count(key: str) -> int:
+            candidate = value.get(key, 0)
+            return candidate if isinstance(candidate, int) and candidate >= 0 else 0
+
+        age = value.get("last_frame_age_seconds")
+        return VisualizerReadiness(
+            ready=value.get("ready") is True,
+            fallback=value.get("fallback") is not False,
+            emitted=count("emitted"),
+            received=count("received"),
+            fallbacks=count("fallbacks"),
+            reconnects=count("reconnects"),
+            last_frame_age_seconds=float(age) if isinstance(age, (int, float)) else None,
+            updated_at=count("updated_at") or None,
+        )
+
     async def cpu_usage(self, containers: Sequence[str]) -> dict[str, float]:
         """One `docker stats` for every container we care about, in cores."""
         if not containers:
@@ -589,6 +656,70 @@ class Supervisor:
             result = (await self.compose(name, ["down", "--remove-orphans"])).check()
             await self._announce(name, ChannelState.STOPPED)
             return result
+
+    async def start_visualizer(
+        self, name: str, *, generation: int | None = None
+    ) -> VisualizerAction:
+        return await self._visualizer_action(name, "start", generation)
+
+    async def stop_visualizer(
+        self, name: str, *, generation: int | None = None
+    ) -> VisualizerAction:
+        return await self._visualizer_action(name, "stop", generation)
+
+    async def recreate_visualizer(
+        self, name: str, *, generation: int | None = None
+    ) -> VisualizerAction:
+        return await self._visualizer_action(name, "recreate", generation)
+
+    async def _visualizer_action(
+        self, name: str, action: str, generation: int | None
+    ) -> VisualizerAction:
+        requested = generation or self.next_visualizer_generation(name)
+        container = self.visualizer_container(name)
+        async with self.lock(name):
+            if requested != self._visualizer_generations.get(name):
+                return VisualizerAction(action, requested, False, container, "")
+
+            composer, composer_id = await self._running_composer_identity(name)
+            if not composer_id:
+                raise ChannelBusy(
+                    f"channel {name!r} has no running composer/framekeeper for its visualizer"
+                )
+
+            service = self.visualizer_container(name)
+            if action == "start":
+                args = ["up", "-d", "--no-deps", service]
+            elif action == "stop":
+                args = ["stop", service]
+            elif action == "recreate":
+                args = ["up", "-d", "--no-deps", "--force-recreate", service]
+            else:  # pragma: no cover - only the public methods call this
+                raise ValueError(f"unknown visualizer action {action!r}")
+
+            (await self.compose(name, args)).check()
+            after = await self._container_id(composer)
+            state = await self.inspect(composer)
+            if after != composer_id or not state.running:
+                raise SupervisorError(
+                    f"channel {name!r}: composer changed during visualizer {action}"
+                )
+            return VisualizerAction(action, requested, True, container, composer_id)
+
+    async def _running_composer_identity(self, name: str) -> tuple[str, str]:
+        slot_next = await self.live_slot(name)
+        container = self.composer_container(name, slot_next=slot_next)
+        state = await self.inspect(container)
+        if not state.running:
+            return container, ""
+        return container, await self._container_id(container)
+
+    async def _container_id(self, container: str) -> str:
+        result = await self.docker_argv(
+            ["inspect", "--type", "container", "--format", "{{.Id}}", container],
+            timeout=20.0,
+        )
+        return result.stdout.strip() if result.ok else ""
 
     async def restart(self, name: str) -> dict[str, object]:
         """Make-before-break: the replacement claims the relay path first.

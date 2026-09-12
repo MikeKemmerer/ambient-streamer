@@ -13,6 +13,7 @@ import pytest
 
 BACKEND = "ghcr.io/mikekemmerer/ambient-streamer-backend@sha256:" + "a" * 64
 LIQUIDSOAP = "ghcr.io/mikekemmerer/ambient-streamer-liquidsoap@sha256:" + "b" * 64
+COMPOSER = "ghcr.io/mikekemmerer/ambient-streamer-composer@sha256:" + "c" * 64
 
 
 def executable(path: Path, text: str) -> None:
@@ -95,7 +96,8 @@ esac
         f"AMBIENT_RELEASE_COMMIT={commit}\n"
         f"AMBIENT_RELEASE_REPOSITORY=MikeKemmerer/ambient-streamer\n"
         f"AMBIENT_BACKEND_IMAGE={BACKEND}\n"
-        f"AMBIENT_LIQUIDSOAP_IMAGE={LIQUIDSOAP}\n",
+        f"AMBIENT_LIQUIDSOAP_IMAGE={LIQUIDSOAP}\n"
+        f"AMBIENT_COMPOSER_IMAGE={COMPOSER}\n",
         encoding="utf-8",
         newline="\n",
     )
@@ -124,8 +126,10 @@ def run_deploy(
         "GH_LOG": str(root / "gh.log"),
         "BACKEND_IMAGE": BACKEND,
         "LIQUIDSOAP_IMAGE": LIQUIDSOAP,
+        "COMPOSER_IMAGE": COMPOSER,
         "AMBIENT_BACKEND_IMAGE": "ghcr.io/hostile/wrong-backend@sha256:" + "c" * 64,
         "AMBIENT_LIQUIDSOAP_IMAGE": "ghcr.io/hostile/wrong-liquidsoap@sha256:" + "d" * 64,
+        "AMBIENT_COMPOSER_IMAGE": "ghcr.io/hostile/wrong-composer@sha256:" + "e" * 64,
         "FAKE_LIQ_RUNNING": "true" if running else "false",
         "FAKE_COMPOSER_RUNNING": "true" if composer_running else "false",
         "FAKE_COMPOSER_NAME": composer_name,
@@ -152,17 +156,19 @@ def test_prepare_pulls_and_records_digests_without_recreating(deploy_repo) -> No
     env = (root / ".env").read_text(encoding="utf-8")
     assert f"AMBIENT_BACKEND_IMAGE={BACKEND}" in env
     assert f"AMBIENT_LIQUIDSOAP_IMAGE={LIQUIDSOAP}" in env
+    assert f"AMBIENT_COMPOSER_IMAGE={COMPOSER}" in env
     assert stat.S_IMODE((root / ".env").stat().st_mode) == 0o600
     log = docker_log.read_text(encoding="utf-8")
-    assert f"pull {BACKEND}" in log and f"pull {LIQUIDSOAP}" in log
-    assert "compose" not in log
+    assert all(f"pull {image}" in log for image in (BACKEND, LIQUIDSOAP, COMPOSER))
+    assert "compose --project-name" not in log
     assert not channel_log.exists()
-    assert log.count("org.opencontainers.image.revision") == 2
-    assert log.count("org.opencontainers.image.source") == 2
+    assert log.count("org.opencontainers.image.revision") == 3
+    assert log.count("org.opencontainers.image.source") == 3
     attestations = (root / "gh.log").read_text(encoding="utf-8")
     assert f"attestation verify oci://{BACKEND}" in attestations
     assert f"attestation verify oci://{LIQUIDSOAP}" in attestations
-    assert attestations.count("--source-digest ") == 2
+    assert f"attestation verify oci://{COMPOSER}" in attestations
+    assert attestations.count("--source-digest ") == 3
 
 
 def test_selected_rollout_never_recreates_the_composer(deploy_repo) -> None:
@@ -242,7 +248,7 @@ def test_wrong_image_revision_stops_before_env_or_container_changes(deploy_repo)
     assert result.returncode != 0
     assert "image revision" in result.stderr
     assert (root / ".env").read_bytes() == original_env
-    assert "compose" not in docker_log.read_text(encoding="utf-8")
+    assert "compose --project-name" not in docker_log.read_text(encoding="utf-8")
     assert not channel_log.exists()
 
 
@@ -253,7 +259,7 @@ def test_failed_attestation_stops_before_env_or_container_changes(deploy_repo) -
 
     assert result.returncode != 0
     assert (root / ".env").read_bytes() == original_env
-    assert "compose" not in docker_log.read_text(encoding="utf-8")
+    assert "compose --project-name" not in docker_log.read_text(encoding="utf-8")
     assert not channel_log.exists()
 
 
@@ -290,6 +296,7 @@ def test_extracted_release_identity_is_accepted_without_git(deploy_repo) -> None
                 "images": {
                     "backend": release_values["AMBIENT_BACKEND_IMAGE"],
                     "liquidsoap": release_values["AMBIENT_LIQUIDSOAP_IMAGE"],
+                    "composer": release_values["AMBIENT_COMPOSER_IMAGE"],
                 },
             }
         ),
@@ -310,7 +317,11 @@ def test_mismatched_extracted_release_is_rejected_before_docker(deploy_repo) -> 
                 "tag": "v1.2.3",
                 "commit": "0" * 40,
                 "repository": "MikeKemmerer/ambient-streamer",
-                "images": {"backend": BACKEND, "liquidsoap": LIQUIDSOAP},
+                "images": {
+                    "backend": BACKEND,
+                    "liquidsoap": LIQUIDSOAP,
+                    "composer": COMPOSER,
+                },
             }
         ),
         encoding="utf-8",

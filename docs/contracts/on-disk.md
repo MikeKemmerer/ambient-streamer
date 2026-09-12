@@ -135,6 +135,9 @@ process is doing now, never a source of truth.
 | `health.json` | backend | last watchdog verdict and timestamp |
 | `color-mode` | backend | `manual` or `auto`, read live by the slideshow producer |
 | `slide-position` | composer | the slide on screen, so a rebuilt graph resumes there |
+| `visualization.pipe` | composer | framekeeper raw-video output into the stable FFmpeg graph |
+| `visualization.sock` | framekeeper | Unix socket for the current visualizer writer |
+| `visualization-status.json` | framekeeper | emitted/received/fallback/reconnect counters and readiness |
 
 `slide-position` exists because applying most settings replaces the compositor,
 and the producer goes with it. Audio survives that — Liquidsoap is a separate
@@ -154,10 +157,9 @@ image until the composer restarted — the one operation the design avoids. The
 backend replaces the file atomically; the producer polls a `stat()` token and
 re-opens it, so the switch lands in well under a second with no restart.
 
-`now.json` deliberately does **not** carry the active plugin. A `streamselect`
-switch does not restart the composer, so any copy written at boot is frozen and
-will disagree with reality the moment the operator changes visualization. The
-channel config is the source of truth for that.
+`now.json` deliberately does **not** carry the active plugin. The isolated
+visualizer changes without restarting the composer, so the channel config and
+framekeeper status are the runtime sources of truth.
 
 ### Why `progress` is the primary signal
 
@@ -172,11 +174,9 @@ at ≥0.97. **Any** compositor exit is a fault regardless of exit code. `drop` a
 
 ## Restarts
 
-These changes require a compositor restart, because a filtergraph is fixed at
-launch: `visualization.enabled`, `visualization.hot_set`,
-`visualization.parameters`, `resolution`, and anything in `.env`. All of them go
-make-before-break — start the replacement, let it claim the relay path, then
-stop the old one.
+Visualization plugin, enabled state, and plugin parameters never restart the
+compositor. They start, stop, or replace only `<channel>-visualizer`. Resolution
+and anything in `.env` still require a compositor replacement.
 
 `visualization.visible` is the exception. It rides the composite overlay's
 timeline `enable` over zmq, lands in one frame, and was confirmed on a running

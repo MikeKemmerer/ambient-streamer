@@ -3,11 +3,13 @@
 #
 # This process must run for the life of the channel. A restart is a new YouTube
 # ingest session, so nothing here may depend on relaunching FFmpeg: images
-# arrive on image2pipe, colors change over zmq, plugins switch via streamselect.
+# arrive on image2pipe, colors change over zmq, and visualization frames arrive
+# through a framekeeper-owned rawvideo pipe.
 #
 # See docs/contracts/{audio-transport,slideshow,plugin,zmq-control}.md and the
 # youtube-ingest skill. Encoder flags are verbatim from that skill.
 set -euo pipefail
+umask 077
 
 RED=$'\033[0;31m'; GRN=$'\033[0;32m'; YLW=$'\033[0;33m'; BLU=$'\033[0;34m'; NC=$'\033[0m'
 log()  { printf '%s[..]%s composer %s\n' "$BLU" "$NC" "$*" >&2; }
@@ -18,11 +20,22 @@ die()  { printf '%s[XX]%s composer %s\n' "$RED" "$NC" "$*" >&2; exit 1; }
 # ---------------------------------------------------------------- environment
 CHANNEL_NAME="${CHANNEL_NAME:-}"
 [[ -n "$CHANNEL_NAME" ]] || die "CHANNEL_NAME is required"
+[[ "$CHANNEL_NAME" =~ ^[a-z0-9][a-z0-9-]*$ ]] \
+  || die "CHANNEL_NAME must contain only lowercase letters, digits and hyphens"
 
 WIDTH="${WIDTH:-1280}"
 HEIGHT="${HEIGHT:-720}"
 FPS="${FPS:-30}"
 PRODUCER_FPS="${PRODUCER_FPS:-10}"
+for dimension in WIDTH HEIGHT FPS PRODUCER_FPS; do
+  value="${!dimension}"
+  [[ "$value" =~ ^[1-9][0-9]*$ ]] || die "$dimension must be a positive integer"
+done
+(( WIDTH % 2 == 0 && HEIGHT % 2 == 0 )) \
+  || die "WIDTH and HEIGHT must be even for yuv420p"
+LAYER_WIDTH=$(( WIDTH < 1280 ? WIDTH : 1280 ))
+LAYER_HEIGHT=$(( HEIGHT < 720 ? HEIGHT : 720 ))
+LAYER_FPS=$(( FPS < 30 ? FPS : 30 ))
 ENCODER="${ENCODER:-libx264}"
 PRESET="${X264_PRESET:-veryfast}"
 
@@ -57,20 +70,10 @@ if [[ -z "$PUBLISH_VIDEO" ]]; then
   if [[ "$PUBLISH_PROGRAM" == "off" ]]; then PUBLISH_VIDEO=on; else PUBLISH_VIDEO=off; fi
 fi
 
-PLUGIN_DIR="${PLUGIN_DIR:-/plugins}"
-HOT_SET="${HOT_SET:-showfreqs-bars}"
-ACTIVE_PLUGIN="${ACTIVE_PLUGIN:-}"
-# `off` skips the plugin branches, the selector and the composite. Anything
-# other than exactly "off" leaves the visualization on, so a typo cannot
-# silently blank a channel's look.
-VISUALIZATION="${VISUALIZATION:-on}"
-[[ "$VISUALIZATION" == "off" ]] || VISUALIZATION=on
-# Standby. Unlike VISUALIZATION this is only the overlay's timeline switch, so
-# the backend can flip it on the running graph; the branches render either way.
+# Standby is the overlay's timeline switch. The framekeeper keeps the stable
+# layer alive whether or not a visualizer child exists.
 VIZ_VISIBLE="${VIZ_VISIBLE:-on}"
 if [[ "$VIZ_VISIBLE" == "off" ]]; then VIZ_ENABLE=0; else VIZ_ENABLE=1; fi
-# Per-plugin knobs as JSON, keyed by plugin name. See plugin_params.py.
-PLUGIN_PARAMS="${PLUGIN_PARAMS:-{\}}"
 ACCENT="${ACCENT:-#4FC3F7}"
 VIZ_OPACITY="${VIZ_OPACITY:-0.65}"
 
@@ -126,44 +129,62 @@ LIQ_TELNET_PORT="${LIQ_TELNET_PORT:-1234}"
 ZMQ_BIND_HOST="${ZMQ_BIND_HOST:-127.0.0.1}"
 ZMQ_BIND_PORT="${ZMQ_BIND_PORT:-5555}"
 
-RUN_DIR="${RUN_DIR:-/run/ambient/${CHANNEL_NAME}}"
+RUN_ROOT="${RUN_ROOT:-/run/ambient}"
+[[ "$RUN_ROOT" == /* && ! -L "$RUN_ROOT" ]] || die "RUN_ROOT must be an absolute real directory"
+EXPECTED_RUN_DIR="${RUN_ROOT%/}/${CHANNEL_NAME}"
+RUN_DIR="${RUN_DIR:-$EXPECTED_RUN_DIR}"
+[[ "$RUN_DIR" == "$EXPECTED_RUN_DIR" ]] || die "RUN_DIR must be $EXPECTED_RUN_DIR"
+mkdir -p -- "$RUN_DIR"
+[[ -d "$RUN_DIR" && ! -L "$RUN_DIR" ]] || die "RUN_DIR must be a real directory"
+chmod 700 "$RUN_DIR"
 PROGRESS_FILE="${PROGRESS_FILE:-${RUN_DIR}/${PROGRESS_NAME:-progress}}"
 NOW_FILE="${NOW_FILE:-${RUN_DIR}/now.json}"
 GRAPH_FILE="${RUN_DIR}/filtergraph.txt"
-FIFO="${RUN_DIR}/slides.pipe"
+SLIDES_FIFO="${RUN_DIR}/slides.pipe"
+VIZ_FIFO="${RUN_DIR}/visualization.pipe"
+VIZ_SOCKET="${RUN_DIR}/visualization.sock"
+VIZ_STATUS="${RUN_DIR}/visualization-status.json"
 
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 SLIDESHOW_BIN="${SLIDESHOW_BIN:-$(dirname "$0")/slideshow.py}"
-PLUGIN_PARAMS_BIN="${PLUGIN_PARAMS_BIN:-$(dirname "$0")/plugin_params.py}"
+FRAMEKEEPER_BIN="${FRAMEKEEPER_BIN:-$(dirname "$0")/framekeeper.py}"
 FFMPEG_BIN="${FFMPEG_BIN:-ffmpeg}"
 FFMPEG_LOGLEVEL="${FFMPEG_LOGLEVEL:-level+warning}"
 
 PRODUCER_PID=""
+FRAMEKEEPER_PID=""
 FFMPEG_PID=""
 
 cleanup() {
   local rc=$?
   trap - EXIT INT TERM
-  for pid in "$FFMPEG_PID" "$PRODUCER_PID"; do
+  for pid in "$FFMPEG_PID" "$PRODUCER_PID" "$FRAMEKEEPER_PID"; do
     [[ -n "$pid" ]] || continue
     kill -INT "$pid" 2>/dev/null || true
   done
   for _ in $(seq 1 20); do
     local live=0
-    for pid in "$FFMPEG_PID" "$PRODUCER_PID"; do
+    for pid in "$FFMPEG_PID" "$PRODUCER_PID" "$FRAMEKEEPER_PID"; do
       [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null && live=1
     done
     [[ "$live" == 0 ]] && break
     sleep 0.25
   done
-  for pid in "$FFMPEG_PID" "$PRODUCER_PID"; do
+  for pid in "$FFMPEG_PID" "$PRODUCER_PID" "$FRAMEKEEPER_PID"; do
     [[ -n "$pid" ]] && kill -9 "$pid" 2>/dev/null || true
   done
-  [[ -p "$FIFO" ]] && unlink "$FIFO" 2>/dev/null || true
+  [[ -p "$SLIDES_FIFO" ]] && unlink "$SLIDES_FIFO" 2>/dev/null || true
+  [[ -p "$VIZ_FIFO" ]] && unlink "$VIZ_FIFO" 2>/dev/null || true
+  [[ -S "$VIZ_SOCKET" ]] && unlink "$VIZ_SOCKET" 2>/dev/null || true
   log "cleaned up (rc=$rc)"
   exit "$rc"
 }
 trap cleanup EXIT INT TERM
+
+SOURCE_REVISION="${SOURCE_REVISION:-${IMAGE_REVISION:-unknown}}"
+[[ "$SOURCE_REVISION" =~ ^[A-Za-z0-9._-]{1,128}$ ]] || SOURCE_REVISION=unknown
+ok "runtime source=ffmpeg/entrypoint.sh revision=$SOURCE_REVISION"
+ok "visualization layer=${LAYER_WIDTH}x${LAYER_HEIGHT}@${LAYER_FPS} stale=350ms"
 
 # ------------------------------------------------------------- bitrate ladder
 # youtube-ingest skill. Bufsize is always 2x video bitrate.
@@ -255,70 +276,6 @@ DELIVERS=()
 (( ${#DELIVERS[@]} )) || die "no delivery target: set at least one of PUBLISH_PROGRAM, PUBLISH_VIDEO, PUBLISH_AUDIO"
 ok "delivery: ${DELIVERS[*]} (+ preview ${PREVIEW_ENCODER}@${P_RATE})"
 
-# --------------------------------------------------------------------- plugins
-# ffmpeg takes colors as 0xRRGGBB; '#' is a filtergraph escaping problem.
-ACCENT_FF="0x${ACCENT#\#}"
-
-PLUGINS=()
-ACTIVE_INDEX=0
-VIZ_FRAGMENTS=""
-VIZ_LABELS=""
-
-if [[ "$VISUALIZATION" == "off" ]]; then
-  ok "visualization: off (no plugin branches instantiated)"
-else
-
-IFS=',' read -r -a PLUGINS <<<"$HOT_SET"
-(( ${#PLUGINS[@]} > 0 )) || die "HOT_SET is empty"
-
-AVAILABLE_FILTERS="$("$FFMPEG_BIN" -hide_banner -loglevel error -filters </dev/null | awk '{print $2}')"
-
-for i in "${!PLUGINS[@]}"; do
-  name="${PLUGINS[$i]}"
-  frag="${PLUGIN_DIR}/${name}/viz.ffmpeg"
-  manifest="${PLUGIN_DIR}/${name}/config.json"
-  [[ -f "$frag" ]] || die "plugin '$name' has no viz.ffmpeg at $frag"
-  [[ -f "$manifest" ]] || die "plugin '$name' has no config.json"
-
-  # The exact-size rule: FFmpeg silently corrupts a mis-sized branch, exit 0,
-  # no error. A fragment that does not take its size from the channel cannot
-  # be proven correct, so refuse it.
-  grep -q '\${WIDTH}' "$frag" && grep -q '\${HEIGHT}' "$frag" \
-    || die "plugin '$name' does not derive its size from \${WIDTH}x\${HEIGHT}"
-
-  while read -r required; do
-    [[ -n "$required" ]] || continue
-    grep -qx "$required" <<<"$AVAILABLE_FILTERS" \
-      || die "plugin '$name' requires filter '$required', absent from this build"
-  done < <("$PYTHON_BIN" -c 'import json,sys;print("\n".join(json.load(open(sys.argv[1])).get("requires_filters",[])))' "$manifest")
-
-  [[ "$name" == "$ACTIVE_PLUGIN" ]] && ACTIVE_INDEX="$i"
-
-  body="$(tr '\n' ' ' < "$frag" | sed 's/  */ /g; s/^ //; s/ $//')"
-  body="${body//\$\{WIDTH\}/$WIDTH}"
-  body="${body//\$\{HEIGHT\}/$HEIGHT}"
-  body="${body//\$\{FPS\}/$FPS}"
-  body="${body//\$\{ACCENT\}/$ACCENT_FF}"
-  body="${body//\$\{OUT\}/viz$i}"
-
-  # Manifest-declared knobs. The resolver clamps and fills defaults, so every
-  # declared token has a value; an unsubstituted ${TOKEN} would reach FFmpeg as
-  # a literal and render the branch wrong at exit 0.
-  while IFS='=' read -r token value; do
-    [[ -n "$token" ]] || continue
-    body="${body//\$\{$token\}/$value}"
-  done < <("$PYTHON_BIN" "$PLUGIN_PARAMS_BIN" "$manifest" "$PLUGIN_PARAMS")
-
-  if grep -q '\${' <<<"$body"; then
-    die "plugin '$name' has unsubstituted tokens: $(grep -o '\${[A-Z_]*}' <<<"$body" | sort -u | tr '\n' ' ')"
-  fi
-  VIZ_FRAGMENTS+="${body};"
-  VIZ_LABELS+="[viz$i]"
-done
-ok "plugins: ${HOT_SET} (active index ${ACTIVE_INDEX}, ${#PLUGINS[@]} hot branches)"
-
-fi
-
 # ------------------------------------------------------------- delivery fan-out
 # The tap lists drive both the filtergraph's split/asplit and the output list,
 # so the two can never disagree about how many branches exist. The operator
@@ -348,41 +305,22 @@ AUDIO_BRANCHES=${#AUDIO_TAPS[@]}
 #              color could only ever tint the photograph *behind* the
 #              visualization, and the visualization is the brightest element in
 #              the frame — which is why the channel looked stuck.
-mkdir -p "$RUN_DIR"
 {
-  # Input 0 is audio so a plugin fragment's literal [0:a] is correct as written.
   printf '%s' "[1:v]fps=${FPS}:start_time=0,realtime,"
   printf '%s' "zmq@ctl=bind_address=tcp\\\\://${ZMQ_BIND_HOST}\\\\:${ZMQ_BIND_PORT},"
   printf '%s' "format=yuv420p,setsar=1[base];"
-if [[ "$VISUALIZATION" == "off" ]]; then
-  # Nothing is instantiated: no plugin branches, no selector, no composite.
-  # A live 1080p30 channel measured 0.999x realtime without it and 0.415x with
-  # it, so this is not a small saving.
-  printf '%s' "[base]"
-else
-  printf '%s' "$VIZ_FRAGMENTS"
-  # streamselect rejects inputs=1 (range is 2..INT_MAX), so a single hot plugin
-  # has no selector — there is nothing to switch to. See the report to the lead.
-  if (( ${#PLUGINS[@]} > 1 )); then
-    printf '%s' "${VIZ_LABELS}streamselect@sel=inputs=${#PLUGINS[@]}:map=${ACTIVE_INDEX},"
-  else
-    printf '%s' "[viz0]"
-  fi
-  # One instance downstream of the selector, so it survives a plugin switch.
-  # hue carries h, s and b, which is every grade the visualization needs.
+  printf '%s' "[2:v]scale=${WIDTH}:${HEIGHT}:flags=fast_bilinear,fps=${FPS},realtime,"
   printf '%s' "hue@viz=h=${INIT_VIZ_HUE}:s=${INIT_VIZ_SATURATION},split=2[vizc][vizm];"
   # The visualization draws on black, so its own luma is its coverage. Turning
   # that into a real alpha channel is what lets a bar be the accent color rather
   # than merely tint whatever is behind it: measured, an additive chroma blend
   # rendered green bars over orange artwork as brighter orange, because adding a
   # chroma offset cannot replace the chroma already there.
-  printf '%s' "[vizm]format=gray,lut@vizop=y='val*${VIZ_OPACITY}'[vizalpha];"
+  printf '%s' "[vizm]format=gray,lut@vizop=y='(val-16)*1.16438356*${VIZ_OPACITY}'[vizalpha];"
   printf '%s' "[vizc][vizalpha]alphamerge[vizrgba];"
   # enable is timeline, so the backend can bypass the overlay on the running
-  # graph in one frame. Standby: the branches still render and still cost, but
-  # the visualization can be taken off and put back with no restart.
+  # graph in one frame.
   printf '%s' "[base][vizrgba]overlay@viz=eof_action=pass:format=auto:enable=${VIZ_ENABLE},"
-fi
   # eval=frame is not commandable, so it can only be set here.
   printf '%s' "eq@eq=eval=frame:contrast=1:brightness=${INIT_BRIGHTNESS}:saturation=${INIT_SATURATION}"
   printf '%s' ":gamma_r=${INIT_GAMMA_R}:gamma_g=${INIT_GAMMA_G}:gamma_b=${INIT_GAMMA_B},"
@@ -405,23 +343,30 @@ fi
   for label in "${AUDIO_TAPS[@]}"; do printf '[%s]' "$label"; done
 } > "$GRAPH_FILE"
 log "filtergraph -> $GRAPH_FILE ($(wc -c < "$GRAPH_FILE") bytes)"
-# The accent is baked into the plugins at launch, so a live change has to be a
-# rotation away from this value. Publishing it is what lets the backend compute
-# that delta without guessing what the graph was built with.
+# The active visualizer bakes this accent at its own launch. Publishing the
+# baseline lets the backend compute live hue rotation without guessing.
 printf '%s\n' "$ACCENT" > "${RUN_DIR}/viz-accent"
 ok "color: ${COLOR_MODE} (composite hue=${INIT_HUE} saturation=${INIT_SATURATION} brightness=${INIT_BRIGHTNESS} gamma=${INIT_GAMMA_R}/${INIT_GAMMA_G}/${INIT_GAMMA_B}; viz hue=${INIT_VIZ_HUE} saturation=${INIT_VIZ_SATURATION})"
 
 # -------------------------------------------------------------------- producer
 # The producer also writes now.json: it owns the current slide, and it is the
-# only long-lived Python process here, so it merges Liquidsoap's track state
-# and the active plugin into one file for the control plane. See nowstate.py.
-[[ -p "$FIFO" ]] || mkfifo "$FIFO"
-PRODUCER_BAKED_ACCENT="$ACCENT"
-[[ "$VISUALIZATION" == "off" ]] && PRODUCER_BAKED_ACCENT=""
+# only long-lived Python process here, so it merges Liquidsoap's track state.
+for pipe in "$SLIDES_FIFO" "$VIZ_FIFO"; do
+  [[ ! -e "$pipe" ]] || unlink "$pipe"
+  mkfifo -m 600 "$pipe"
+done
+
+"$PYTHON_BIN" "$FRAMEKEEPER_BIN" \
+  --input "$VIZ_SOCKET" \
+  --width "$LAYER_WIDTH" --height "$LAYER_HEIGHT" --fps "$LAYER_FPS" \
+  --stale-seconds 0.35 --status "$VIZ_STATUS" \
+  > "$VIZ_FIFO" &
+FRAMEKEEPER_PID=$!
+ok "framekeeper pid $FRAMEKEEPER_PID -> $VIZ_FIFO"
+
 CHANNEL_NAME="$CHANNEL_NAME" \
 RUN_DIR="$RUN_DIR" \
 NOW_FILE="$NOW_FILE" \
-ACTIVE_PLUGIN="${PLUGINS[$ACTIVE_INDEX]:-none}" \
 COMPOSER_STARTED_AT="$STARTED_AT" \
 LIQ_TELNET_HOST="$LIQ_TELNET_HOST" \
 LIQ_TELNET_PORT="$LIQ_TELNET_PORT" \
@@ -429,8 +374,8 @@ LIQ_TELNET_PORT="$LIQ_TELNET_PORT" \
   --width "$WIDTH" --height "$HEIGHT" --fps "$PRODUCER_FPS" \
   --zmq-endpoint "tcp://${ZMQ_BIND_HOST}:${ZMQ_BIND_PORT}" \
   --color-mode "$COLOR_MODE" \
-  --baked-accent "$PRODUCER_BAKED_ACCENT" \
-  > "$FIFO" &
+  --baked-accent "$ACCENT" \
+  > "$SLIDES_FIFO" &
 PRODUCER_PID=$!
 ok "producer pid $PRODUCER_PID at ${PRODUCER_FPS} fps, ${WIDTH}x${HEIGHT}"
 log "now.json -> $NOW_FILE (liquidsoap ${LIQ_TELNET_HOST}:${LIQ_TELNET_PORT})"
@@ -493,9 +438,12 @@ fi
   -reconnect_delay_max 5 \
   -i "$AUDIO_URL" \
   -f image2pipe -framerate "$PRODUCER_FPS" -i pipe:0 \
+  -f rawvideo -pixel_format yuv420p \
+  -video_size "${LAYER_WIDTH}x${LAYER_HEIGHT}" -framerate "$LAYER_FPS" \
+  -i "$VIZ_FIFO" \
   -filter_complex_script "$GRAPH_FILE" \
   "${OUTPUTS[@]}" \
-  < "$FIFO" &
+  < "$SLIDES_FIFO" &
 FFMPEG_PID=$!
 ok "ffmpeg pid $FFMPEG_PID -> ${PUBLISHED[*]}"
 

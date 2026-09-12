@@ -166,18 +166,18 @@ export const api = {
   setImages: (name, slides) => request('PUT', `/api/channels/${enc(name)}/images`, { slides }),
 
   plugins: () => request('GET', '/api/plugins'),
-  setVisualization: (name, active, allowRestart = false) =>
-    request('PUT', `/api/channels/${enc(name)}/visualization${query({ allow_restart: allowRestart })}`, { active }),
-  // Not live: the filtergraph is fixed at launch, so this lands on the next start.
-  // `active` and `hot_set` are deliberately untouched, so the look comes back intact.
+  setVisualization: (name, active) =>
+    request('PUT', `/api/channels/${enc(name)}/visualization`, { active }),
+  // Starts or stops only the isolated visualizer child. The compositor and
+  // stream keep running on the framekeeper's transparent fallback.
   setVisualizationEnabled: (name, enabled) =>
     request('PATCH', `/api/channels/${enc(name)}`, { visualization: { enabled } }),
 
-  setHotSet: (name, body) =>
-    request('PUT', `/api/channels/${enc(name)}/hot-set`, body),
-
   setVisible: (name, visible) =>
     request('PUT', `/api/channels/${enc(name)}/visualization/visible`, { visible }),
+
+  setVisualizationOpacity: (name, opacity) =>
+    request('PUT', `/api/channels/${enc(name)}/visualization/opacity`, { opacity }),
 
   setPluginParameters: (name, plugin, values) =>
     request('PUT', `/api/channels/${enc(name)}/visualization/parameters`, { plugin, values }),

@@ -43,6 +43,8 @@ const PLUGINS = [
     cost: { cores_720p30: 0.21, scale_1080p: 1.9 },
     available: true,
     parameters: [
+      { name: 'thickness', label: 'Thickness', type: 'int', min: 1, max: 4, step: 1, default: 1,
+        description: 'Expands the waveform stroke from one to four pixels.' },
       { name: 'weight', label: 'Weight', type: 'enum', default: 'scale',
         choices: [{ value: 'scale', label: 'Thin trace' }, { value: 'full', label: 'Filled' }] },
       { name: 'response', label: 'Response', type: 'enum', default: 'sqrt',
@@ -57,11 +59,22 @@ const PLUGINS = [
     description: 'Stereo vectorscope; the only branch with commandable color.',
     cost: { cores_720p30: 0.25, scale_1080p: 1.9 },
     available: true,
+    parameters: [
+      { name: 'thickness', label: 'Thickness', type: 'int', min: 1, max: 4, step: 1, default: 1,
+        description: 'Expands the vectorscope stroke from one to four pixels.' },
+      { name: 'zoom', label: 'Zoom', type: 'float', min: 0.5, max: 6, step: 0.1, default: 1.4,
+        description: 'How much of the frame the figure fills.' },
+      { name: 'trail', label: 'Trail', type: 'int', min: 1, max: 60, step: 1, default: 8,
+        description: 'Fade per frame.' },
+      { name: 'stroke', label: 'Stroke', type: 'enum', default: 'aaline',
+        choices: [{ value: 'dot', label: 'Dots' }, { value: 'line', label: 'Lines' },
+                  { value: 'aaline', label: 'Smooth lines' }] },
+    ],
   },
   {
     name: 'showspectrum-waterfall',
     display_name: 'Spectrum Waterfall',
-    description: 'Scrolling spectrogram. Installed but in no channel\u2019s hot set.',
+    description: 'Scrolling spectrogram with a rolling frequency history.',
     cost: { cores_720p30: 0.31, scale_1080p: 1.9 },
     available: true,
   },
@@ -187,7 +200,7 @@ const db = new Map([
     resolution: '720p',
     audio: { tracks: [], shuffle: false, crossfade_seconds: 5.0 },
     images: { slides: [], order: 'sequential', hold_seconds: 20.0, fade_seconds: 2.0 },
-    visualization: { enabled: true, active: 'showfreqs-bars', hot_set: ['showfreqs-bars', 'showwaves-classic'] },
+    visualization: { enabled: true, visible: true, opacity: 0.65, active: 'showfreqs-bars' },
     color: { mode: 'automatic', manual: { accent: '#4FC3F7', tint: '#101820' }, transition_seconds: 2.0 },
     preset: null,
     bumpers: { enabled: false, mode: 'tracks', every_tracks: 4, every_minutes: 20, sources: [] },
@@ -226,7 +239,7 @@ const db = new Map([
     resolution: '1080p',
     audio: { tracks: [], shuffle: false, crossfade_seconds: 2.0 },
     images: { slides: [], order: 'sequential', hold_seconds: 45.0, fade_seconds: 3.0 },
-    visualization: { enabled: true, active: 'showwaves-classic', hot_set: ['showwaves-classic'] },
+    visualization: { enabled: true, visible: true, opacity: 0.65, active: 'showwaves-classic' },
     color: { mode: 'manual', manual: { accent: '#D4AF37', tint: '#2A0E0E' }, transition_seconds: 4.0 },
     preset: 'orthodox-chant',
     bumpers: { enabled: false, mode: 'tracks', every_tracks: 4, every_minutes: 20, sources: [] },
@@ -259,8 +272,7 @@ const db = new Map([
     resolution: '720p',
     audio: { tracks: [], shuffle: true, crossfade_seconds: 8.0 },
     images: { slides: [], order: 'shuffle', hold_seconds: 60.0, fade_seconds: 6.0 },
-    // starfield-particles is deliberately not in PLUGINS: the one genuine error state.
-    visualization: { enabled: true, active: 'avectorscope-lissajous', hot_set: ['avectorscope-lissajous', 'showfreqs-bars', 'starfield-particles'] },
+    visualization: { enabled: true, visible: true, opacity: 0.65, active: 'avectorscope-lissajous' },
     color: { mode: 'manual', manual: { accent: '#7A5CFF', tint: '#05060B' }, transition_seconds: 6.0 },
     preset: 'deep-space',
     bumpers: { enabled: false, mode: 'tracks', every_tracks: 4, every_minutes: 20, sources: [] },
@@ -314,12 +326,11 @@ function feedsOf(entry, name) {
   return feeds;
 }
 
-// Capacity model, following backend/ambient/plugins.py: pipeline + preview + one
-// cost per instantiated branch. Off, no branch is instantiated at all, so the
-// channel falls to the pipeline floor.
+// Capacity model: pipeline + preview + at most one active visualizer child.
+// Off stops that child, so the channel falls to the pipeline floor.
 const PIPELINE_CORES_720P30 = 1.02;
 const PREVIEW_CORES = 0.2;
-const IDLE_BRANCH_CORES_720P30 = 0.28;
+const DEFAULT_VISUALIZER_CORES_720P30 = 0.28;
 const RES_SCALE = { '480p': 0.6, '720p': 1.0, '1080p': 1.9, '1440p': 3.4, '2160p': 7.6 };
 
 function projectedCores(entry) {
@@ -327,10 +338,8 @@ function projectedCores(entry) {
   const scale = RES_SCALE[entry.config.resolution] || 1.0;
   let cores = PIPELINE_CORES_720P30 * scale + PREVIEW_CORES;
   if (viz.enabled !== false) {
-    for (const name of viz.hot_set || []) {
-      const plugin = PLUGINS.find((p) => p.name === name);
-      cores += (plugin ? plugin.cost.cores_720p30 : IDLE_BRANCH_CORES_720P30) * scale;
-    }
+    const plugin = PLUGINS.find((candidate) => candidate.name === viz.active);
+    cores += (plugin ? plugin.cost.cores_720p30 : DEFAULT_VISUALIZER_CORES_720P30) * scale;
   }
   return Number(cores.toFixed(3));
 }
@@ -340,10 +349,40 @@ function projectedCores(entry) {
 // --------------------------------------------------------------------------
 
 const subscribers = new Set();
+const visualizerGenerations = new Map();
 
 function emit(event, data) {
   const frame = `event: ${event}\ndata: ${JSON.stringify({ channel: null, at: now(), ...data })}\n\n`;
   for (const sub of subscribers) sub.push(frame);
+}
+
+function queueVisualizer(name, action, detail, eventData = {}) {
+  const generation = (visualizerGenerations.get(name) || 0) + 1;
+  visualizerGenerations.set(name, generation);
+  emit('channel.visualization', {
+    channel: name,
+    ...eventData,
+    action,
+    generation,
+    applied: false,
+    error: null,
+    detail: 'visualizer action queued',
+    state: 'queued',
+  });
+  setTimeout(() => {
+    const applied = visualizerGenerations.get(name) === generation;
+    emit('channel.visualization', {
+      channel: name,
+      ...eventData,
+      action,
+      generation,
+      applied,
+      error: null,
+      detail: applied ? detail : 'superseded by a newer visualization request',
+      state: applied ? 'applied' : 'superseded',
+    });
+  }, 450);
+  return generation;
 }
 
 // Test hook: drop every open event stream, the way a backend restart would.
@@ -690,7 +729,7 @@ async function route(url, init) {
     return json({
       channels: [...db.values()].map(summary),
       // A channel whose config will not parse is reported here, not in `channels`.
-      errors: [{ channel: 'broken-yaml', detail: "visualization.active 'nope' is not in hot_set ['showfreqs-bars']" }],
+      errors: [{ channel: 'broken-yaml', detail: "visualization.active 'nope' is not an installed plugin" }],
       // Directories under channels/ that are not channels at all.
       ignored: [
         { name: 'example', reason: 'template directory shipped with the repo' },
@@ -716,7 +755,7 @@ async function route(url, init) {
       resolution: body.resolution || '720p',
       audio: { tracks: [], shuffle: false, crossfade_seconds: 5.0 },
       images: { slides: [], order: 'sequential', hold_seconds: 20.0, fade_seconds: 2.0 },
-      visualization: body.visualization || { enabled: true, active: 'showfreqs-bars', hot_set: ['showfreqs-bars'] },
+      visualization: body.visualization || { enabled: true, visible: true, active: 'showfreqs-bars' },
       color: { mode: 'automatic', manual: { accent: '#4FC3F7', tint: '#101820' }, transition_seconds: 2.0 },
       preset: null,
       bumpers: { enabled: false, mode: 'tracks', every_tracks: 4, every_minutes: 20, sources: [] },
@@ -761,10 +800,41 @@ async function route(url, init) {
   }
 
   if (!tail && method === 'PATCH') {
+    const previousVizEnabled = entry.config.visualization.enabled !== false;
     for (const [key, value] of Object.entries(body || {})) {
       entry.config[key] = value && typeof value === 'object' && !Array.isArray(value)
         ? { ...entry.config[key], ...value }
         : value;
+    }
+    const enabledWasSent = Boolean(body && body.visualization
+      && Object.prototype.hasOwnProperty.call(body.visualization, 'enabled'));
+    if (enabledWasSent && previousVizEnabled !== (entry.config.visualization.enabled !== false)) {
+      const enabled = entry.config.visualization.enabled !== false;
+      const running = entry.status.state !== 'stopped';
+      const action = enabled ? 'start' : 'stop';
+      const generation = running
+        ? queueVisualizer(name, action,
+            `visualizer child ${action === 'start' ? 'started' : 'stopped'}; compositor and stream unchanged`,
+            { enabled })
+        : null;
+      if (!running) {
+        emit('channel.visualization', {
+          channel: name, enabled, generation: null, applied: true, error: null,
+          detail: 'saved for the next channel start', state: 'saved',
+        });
+      }
+      statusEvent(name);
+      return json({
+        accepted: true, channel: name, config: entry.config,
+        visualization_enabled: enabled,
+        visualizer_action: running ? action : null,
+        generation,
+        state: running ? 'queued' : 'saved',
+        compositor_restarted: false,
+        detail: running
+          ? `visualizer child ${action} queued; compositor and stream unchanged`
+          : 'saved for the next channel start',
+      }, running ? 202 : 200);
     }
     return json({ ...entry.status, config: entry.config }, 202);
   }
@@ -885,25 +955,30 @@ async function route(url, init) {
     }
     entry.config.visualization.active = active;
     entry.status.visualization = active;
-
-    // Outside hot_set the graph has no branch to cut to, so the channel is
-    // restarted make-before-break rather than switched.
-    if (!entry.config.visualization.hot_set.includes(active)) {
-      entry.config.visualization.hot_set.push(active);
-      entry.status.state = 'starting';
-      statusEvent(name);
-      setTimeout(() => {
-        entry.status.state = 'running';
-        entry.status.health = 'healthy';
-        entry.status.uptime_seconds = 1;
-        statusEvent(name);
-        emit('channel.visualization', { channel: name, visualization: active });
-      }, 2500);
-      return json({ visualization: active, restart: 'make-before-break' }, 202);
+    const childReplaced = entry.status.state !== 'stopped'
+      && entry.config.visualization.enabled !== false;
+    const generation = childReplaced
+      ? queueVisualizer(name, 'recreate',
+          'the isolated visualizer was replaced; composer and ingest are unchanged',
+          { active })
+      : null;
+    if (!childReplaced) {
+      emit('channel.visualization', {
+        channel: name, active, generation: null, applied: true, error: null,
+        detail: 'saved; it applies when the visualizer next starts', state: 'saved',
+      });
     }
-
-    emit('channel.visualization', { channel: name, visualization: active });
-    return json({ visualization: active }, 202);
+    return json({
+      accepted: true, channel: name, active,
+      visualizer_recreated: childReplaced,
+      generation,
+      state: childReplaced ? 'queued' : 'saved',
+      mode: childReplaced ? 'visualizer-recreate' : 'applied-on-next-start',
+      compositor_restarted: false,
+      detail: childReplaced
+        ? 'the isolated visualizer is being replaced; composer and ingest are unchanged'
+        : 'saved for the next visualizer start',
+    }, childReplaced ? 202 : 200);
   }
 
   if (tail === 'visualization/visible') {
@@ -914,11 +989,36 @@ async function route(url, init) {
     }
     viz.visible = Boolean(body && body.visible);
     const running = entry.status.state !== 'stopped';
-    emit('channel.visualization', { channel: name, visible: viz.visible });
+    const detail = running
+      ? 'switched on the running graph; one frame, no gap'
+      : 'saved; it applies when the channel next starts';
+    emit('channel.visualization', {
+      channel: name, visible: viz.visible, generation: null, applied: running,
+      error: null, detail, state: running ? 'applied' : 'saved',
+    });
     return json({
       accepted: true, channel: name, visible: viz.visible, live: running,
-      detail: running ? 'switched on the running graph; one frame, no gap'
-                      : 'saved; it applies when the channel next starts',
+      detail,
+    }, 202);
+  }
+
+  if (tail === 'visualization/opacity') {
+    const opacity = body && typeof body.opacity === 'number' ? body.opacity : NaN;
+    if (!Number.isFinite(opacity) || opacity < 0 || opacity > 1) {
+      return fail(400, 'invalid_request', 'opacity must be between 0 and 1.');
+    }
+    entry.config.visualization.opacity = opacity;
+    const running = entry.status.state !== 'stopped';
+    const detail = running
+      ? 'opacity changed on the running compositor; one frame, no gap'
+      : 'saved; it applies when the channel next starts';
+    emit('channel.visualization', {
+      channel: name, opacity, generation: null, applied: running,
+      error: null, detail, state: running ? 'applied' : 'saved',
+    });
+    return json({
+      accepted: true, channel: name, opacity, live: running,
+      detail,
     }, 202);
   }
 
@@ -931,66 +1031,41 @@ async function route(url, init) {
     if (unknown.length) {
       return fail(400, 'unknown_parameter', `${plugin} has no parameter(s) ${unknown.join(', ')}.`);
     }
+    const values = {};
+    for (const parameter of spec.parameters || []) {
+      if (!Object.prototype.hasOwnProperty.call(body.values || {}, parameter.name)) continue;
+      const value = body.values[parameter.name];
+      values[parameter.name] = ['int', 'float'].includes(parameter.type)
+        ? Math.max(parameter.min, Math.min(parameter.max, Number(value)))
+        : value;
+    }
     entry.config.visualization.parameters = entry.config.visualization.parameters || {};
-    entry.config.visualization.parameters[plugin] = { ...body.values };
+    entry.config.visualization.parameters[plugin] = values;
 
-    const drawing = entry.status.state !== 'stopped'
+    const childRestarted = entry.status.state !== 'stopped'
       && entry.config.visualization.enabled !== false
-      && entry.config.visualization.hot_set.includes(plugin);
-    if (drawing) {
-      entry.status.state = 'starting';
-      statusEvent(name);
-      setTimeout(() => {
-        entry.status.state = 'running';
-        entry.status.health = 'healthy';
-        statusEvent(name);
-      }, 2000);
+      && entry.config.visualization.active === plugin;
+    const generation = childRestarted
+      ? queueVisualizer(name, 'recreate',
+          'settings applied; visualizer child restarted, compositor and stream unchanged',
+          { plugin, values })
+      : null;
+    if (!childRestarted) {
+      emit('channel.visualization', {
+        channel: name, plugin, values, generation: null, applied: true, error: null,
+        detail: 'saved for the next time this visualization starts', state: 'saved',
+      });
     }
     return json({
-      accepted: true, channel: name, plugin, values: body.values, restarted: drawing,
-      detail: drawing ? 'the compositor is being replaced to rebuild that branch'
-                      : 'saved; it applies the next time that branch is built',
-    }, 202);
-  }
-
-  if (tail === 'hot-set') {
-    const wanted = [...new Set((body && body.hot_set) || [])];
-    if (!wanted.length) {
-      return fail(400, 'empty_hot_set', 'A channel with no branches cannot draw a visualization.');
-    }
-    const missing = wanted.filter((p) => !PLUGINS.some((x) => x.name === p));
-    if (missing.length) {
-      return fail(404, 'unknown_plugin', `Not installed: ${missing.join(', ')}.`);
-    }
-    const active = (body && body.active) || entry.config.visualization.active;
-    if (!wanted.includes(active)) {
-      return fail(409, 'active_not_in_hot_set',
-        `${active} is on air but not in the requested hot set.`);
-    }
-    const wasEnabled = entry.config.visualization.enabled !== false;
-    const running = entry.status.state !== 'stopped';
-    entry.config.visualization.hot_set = wanted;
-    entry.config.visualization.active = active;
-    entry.status.visualization = active;
-
-    if (running && wasEnabled) {
-      entry.status.state = 'starting';
-      statusEvent(name);
-      setTimeout(() => {
-        entry.status.state = 'running';
-        entry.status.health = 'healthy';
-        entry.status.uptime_seconds = 1;
-        statusEvent(name);
-      }, 2000);
-    }
-    return json({
-      accepted: true, channel: name, hot_set: wanted, active,
-      restarted: running && wasEnabled,
-      projected_cores: projectedCores(entry),
-      detail: running && wasEnabled
-        ? 'the compositor is being replaced with a graph containing exactly these branches'
-        : 'applies on the next start',
-    }, 202);
+      accepted: true, channel: name, plugin, values,
+      visualizer_recreated: childRestarted,
+      generation,
+      state: childRestarted ? 'queued' : 'saved',
+      compositor_restarted: false,
+      detail: childRestarted
+        ? 'the isolated visualizer is being replaced; composer and ingest are unchanged'
+        : 'saved for the next time this visualization starts',
+    }, childRestarted ? 202 : 200);
   }
 
   if (tail === 'resolution') {
@@ -1114,12 +1189,25 @@ async function route(url, init) {
     const preset = body && body.preset;
     const known = PRESETS.find((p) => p.name === preset);
     if (!known) return fail(404, 'unknown_preset', `No preset named ${preset}.`);
-    if (preset === 'neon-spectrum' && !entry.config.visualization.hot_set.includes('avectorscope-lissajous')) {
-      return fail(409, 'not_in_hot_set',
-        'neon-spectrum selects avectorscope-lissajous, which is not in this channel\u2019s hot set.');
+    const presetPlugin = preset === 'neon-spectrum' ? 'avectorscope-lissajous'
+      : preset === 'minimalist-line-art' ? 'showwaves-classic' : null;
+    let childReplaced = false;
+    if (presetPlugin && presetPlugin !== entry.config.visualization.active) {
+      entry.config.visualization.active = presetPlugin;
+      entry.status.visualization = presetPlugin;
+      childReplaced = entry.status.state !== 'stopped'
+        && entry.config.visualization.enabled !== false;
+      emit('channel.visualization', { channel: name, visualization: presetPlugin });
     }
     entry.config.preset = preset;
-    return json({ preset }, 202);
+    return json({
+      preset, visualization: entry.config.visualization.active,
+      visualizer_replaced: childReplaced,
+      compositor_restarted: false,
+      detail: childReplaced
+        ? 'preset applied; visualizer child replaced, compositor and stream unchanged'
+        : 'preset applied',
+    }, 202);
   }
 
   return fail(404, 'not_found', `No mock route for ${method} ${path}`);

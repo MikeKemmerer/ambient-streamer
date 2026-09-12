@@ -11,6 +11,17 @@
   },
   "parameters": [
     {
+      "name": "thickness",
+      "token": "WAVE_THICKNESS",
+      "label": "Thickness",
+      "description": "Expands the waveform stroke from one to four pixels.",
+      "type": "int",
+      "min": 1,
+      "max": 4,
+      "step": 1,
+      "default": 1
+    },
+    {
       "name": "weight",
       "token": "WAVE_DRAW",
       "label": "Weight",

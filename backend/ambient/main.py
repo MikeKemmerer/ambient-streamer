@@ -49,6 +49,7 @@ from .config import (
     load_channel,
     load_workspace,
 )
+from .compile import compile_channel
 from .events import EventHub
 from .media import MediaError
 from .presets import ColorRamp, PresetError
@@ -100,7 +101,11 @@ class AppState:
     cpu: dict[str, float] = field(default_factory=dict)
     color_ramps: dict[str, ColorRamp] = field(default_factory=dict)
     color_mode_tasks: dict[str, asyncio.Task[None]] = field(default_factory=dict)
+    visualization_locks: dict[str, asyncio.Lock] = field(default_factory=dict)
     relay_blocked_until: float = 0.0
+
+    def visualization_lock(self, name: str) -> asyncio.Lock:
+        return self.visualization_locks.setdefault(name, asyncio.Lock())
 
     # ------------------------------------------------------------ workspace
 
@@ -190,6 +195,7 @@ class AppState:
             containers.append(self.supervisor.liquidsoap_container(name))
             containers.append(self.supervisor.composer_container(name))
             containers.append(self.supervisor.composer_container(name, slot_next=True))
+            containers.append(self.supervisor.visualizer_container(name))
         self.cpu = await self.supervisor.cpu_usage(containers)
 
     def channel_cores(self, name: str) -> float:
@@ -253,7 +259,12 @@ def build_state(root: Path) -> AppState:
 
     events = EventHub()
     supervisor = Supervisor(workspace=workspace, events=events)
-    watchdog = Watchdog(workspace=workspace, supervisor=supervisor, events=events)
+    watchdog = Watchdog(
+        workspace=workspace,
+        supervisor=supervisor,
+        events=events,
+        prepare=lambda name: compile_channel(workspace, load_channel(workspace, name)),
+    )
     scheduler = Scheduler(discover=tuple, apply=_unwired_apply)
     state = AppState(
         root=root,

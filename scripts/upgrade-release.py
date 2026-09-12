@@ -19,6 +19,7 @@ REQUIRED_ENV = {
     "AMBIENT_RELEASE_REPOSITORY",
     "AMBIENT_BACKEND_IMAGE",
     "AMBIENT_LIQUIDSOAP_IMAGE",
+    "AMBIENT_COMPOSER_IMAGE",
 }
 
 
@@ -67,6 +68,8 @@ def validate_manifest(path: Path, release: dict[str, str]) -> None:
         fail("RELEASE.json backend image does not match release.env")
     if images.get("liquidsoap") != release["AMBIENT_LIQUIDSOAP_IMAGE"]:
         fail("RELEASE.json Liquidsoap image does not match release.env")
+    if images.get("composer") != release["AMBIENT_COMPOSER_IMAGE"]:
+        fail("RELEASE.json composer image does not match release.env")
 
 
 def safe_members(archive: tarfile.TarFile, prefix: str) -> list[tarfile.TarInfo]:

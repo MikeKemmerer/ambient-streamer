@@ -1,9 +1,4 @@
-"""Editing which branches the graph instantiates.
-
-Switching to a plugin can only ever grow `hot_set`, so without this endpoint the
-per-channel CPU cost is a one-way ratchet: an operator can add a 0.28-core idle
-branch by accident and has no way to give it back.
-"""
+"""Compatibility behavior for the deprecated visualization.hot_set field."""
 
 from __future__ import annotations
 
@@ -40,10 +35,9 @@ def viz_of(repo, name: str = "lofi") -> dict:
 
 
 def grow(client, repo, extra: str) -> list[str]:
-    """The fixture ships one branch; removal needs something to remove."""
     wanted = [*viz_of(repo)["hot_set"], extra]
     response = client.put("/api/channels/lofi/hot-set", headers=AUTH, json={"hot_set": wanted})
-    assert response.status_code == 202, response.text
+    assert response.status_code == 200, response.text
     return wanted
 
 
@@ -56,40 +50,39 @@ def test_a_branch_can_be_removed(api, repo) -> None:
     keep = [before["active"]]
     response = client.put("/api/channels/lofi/hot-set", headers=AUTH, json={"hot_set": keep})
 
-    assert response.status_code == 202
+    assert response.status_code == 200
     assert viz_of(repo)["hot_set"] == keep
     assert viz_of(repo)["active"] == before["active"], "the look must not change"
 
 
-def test_removing_the_branch_on_air_needs_a_replacement_named(api, repo) -> None:
+def test_active_need_not_remain_in_the_legacy_set(api, repo) -> None:
     client, _state = api
+    seed_registry(repo, "showfreqs-bars", "showwaves-classic")
     grow(client, repo, "showwaves-classic")
     before = viz_of(repo)
     others = [p for p in before["hot_set"] if p != before["active"]]
 
-    refused = client.put("/api/channels/lofi/hot-set", headers=AUTH, json={"hot_set": others})
-    assert refused.status_code == 409
-    assert refused.json()["error"] == "active_not_in_hot_set"
-    assert viz_of(repo)["hot_set"] == before["hot_set"], "a refused edit must not persist"
+    accepted = client.put("/api/channels/lofi/hot-set", headers=AUTH, json={"hot_set": others})
+    assert accepted.status_code == 200
+    assert viz_of(repo)["hot_set"] == others
+    assert viz_of(repo)["active"] == before["active"]
 
-    accepted = client.put(
+    switched = client.put(
         "/api/channels/lofi/hot-set", headers=AUTH,
-        json={"hot_set": others, "active": others[0]},
+        json={"hot_set": [], "active": others[0]},
     )
-    assert accepted.status_code == 202
+    assert switched.status_code == 200
     assert viz_of(repo)["active"] == others[0]
 
 
-def test_an_empty_hot_set_is_refused(api, repo) -> None:
-    """A graph with no branches is what `visualization.enabled=false` is for."""
+def test_an_empty_hot_set_is_accepted(api, repo) -> None:
     client, _state = api
-    before = viz_of(repo)
     response = client.put("/api/channels/lofi/hot-set", headers=AUTH, json={"hot_set": []})
-    assert response.status_code == 400
-    assert viz_of(repo)["hot_set"] == before["hot_set"]
+    assert response.status_code == 200
+    assert viz_of(repo)["hot_set"] == []
 
 
-def test_an_uninstalled_plugin_is_refused(api, repo) -> None:
+def test_uninstalled_legacy_entries_are_preserved_and_ignored(api, repo) -> None:
     client, _state = api
     seed_registry(repo, "showfreqs-bars", "showwaves-classic")
     before = viz_of(repo)
@@ -97,29 +90,52 @@ def test_an_uninstalled_plugin_is_refused(api, repo) -> None:
         "/api/channels/lofi/hot-set", headers=AUTH,
         json={"hot_set": [*before["hot_set"], "no-such-plugin"]},
     )
+    assert response.status_code == 200
+    assert viz_of(repo)["hot_set"] == [*before["hot_set"], "no-such-plugin"]
+
+
+def test_any_installed_plugin_can_become_active(api, repo) -> None:
+    client, _state = api
+    seed_registry(repo, "showfreqs-bars", "showwaves-classic")
+    response = client.put(
+        "/api/channels/lofi/visualization", headers=AUTH,
+        json={"active": "showwaves-classic"},
+    )
+    assert response.status_code == 200
+    assert viz_of(repo)["active"] == "showwaves-classic"
+    assert viz_of(repo)["hot_set"] == ["showfreqs-bars"]
+
+
+def test_an_uninstalled_active_plugin_is_refused(api, repo) -> None:
+    client, _state = api
+    seed_registry(repo, "showfreqs-bars")
+    response = client.put(
+        "/api/channels/lofi/visualization", headers=AUTH,
+        json={"active": "no-such-plugin"},
+    )
     assert response.status_code == 404
-    assert viz_of(repo)["hot_set"] == before["hot_set"]
+    assert viz_of(repo)["active"] == "showfreqs-bars"
 
 
 def test_membership_is_unverified_when_no_manifests_are_installed(api, repo) -> None:
-    """Matches check_hot_set: an absent registry is not evidence of absence."""
+    """An absent registry is not evidence that compatibility data is invalid."""
     client, _state = api
     before = viz_of(repo)
     response = client.put(
         "/api/channels/lofi/hot-set", headers=AUTH,
         json={"hot_set": [*before["hot_set"], "unverifiable"]},
     )
-    assert response.status_code == 202
+    assert response.status_code == 200
 
 
 def test_duplicates_collapse(api, repo) -> None:
-    """A branch instantiated twice costs twice and renders the same thing."""
+    """The compatibility endpoint continues its prior normalization."""
     client, _state = api
     active = viz_of(repo)["active"]
     response = client.put(
         "/api/channels/lofi/hot-set", headers=AUTH, json={"hot_set": [active, active]}
     )
-    assert response.status_code == 202
+    assert response.status_code == 200
     assert viz_of(repo)["hot_set"] == [active]
 
 
@@ -133,12 +149,12 @@ def test_an_unchanged_set_does_not_restart_the_channel(api, repo) -> None:
     assert response.json()["restarted"] is False
 
 
-def test_the_new_set_reaches_the_composer(api, repo) -> None:
-    from ambient.supervisor import compose_context
-
+def test_the_new_set_does_not_change_capacity(api, repo) -> None:
     client, state = api
+    seed_registry(repo, "showfreqs-bars")
+    before = state.channel("lofi").projected_cores
+    assert before > 0
     keep = [viz_of(repo)["active"]]
+    keep.extend(["obsolete-a", "obsolete-b"])
     client.put("/api/channels/lofi/hot-set", headers=AUTH, json={"hot_set": keep})
-
-    channel = state.channel("lofi")
-    assert compose_context(state.workspace, channel)["hot_set"] == ",".join(keep)
+    assert state.channel("lofi").projected_cores == before

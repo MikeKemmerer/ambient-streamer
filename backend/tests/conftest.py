@@ -122,7 +122,12 @@ def repo(tmp_path: Path) -> Path:
     (root / "channels" / "lofi" / "docker-compose.yml").write_text("services: {}\n", "utf-8")
     # Keep logs inside the sandbox; the default is /var/log/ambient.
     env = root / ".env"
-    env.write_text(env.read_text(encoding="utf-8") + f"AMBIENT_LOG_DIR={root / 'logs'}\n", "utf-8")
+    env.write_text(
+        env.read_text(encoding="utf-8")
+        + f"AMBIENT_LOG_DIR={root / 'logs'}\n"
+        + f"AMBIENT_RUN_DIR={root / 'run'}\n",
+        "utf-8",
+    )
     return root
 
 

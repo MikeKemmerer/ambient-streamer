@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
 <title>ambient-streamer — operator</title>
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="style.css">
 <script src="vendor/hls.js" defer></script>
 <script type="module" src="app.js"></script>
@@ -103,7 +104,7 @@
           </div>
 
           <div class="card-flat">
-            <h3>Now on air</h3>
+            <h3 id="onair-heading">Now on air</h3>
             <dl class="kv" id="onair-kv"></dl>
             <h3>Pipeline</h3>
             <dl class="kv" id="pipeline-kv"></dl>
@@ -462,47 +463,33 @@
             <div class="viz-power" id="viz-power">
               <div class="row">
                 <label class="inline"><input type="checkbox" id="viz-enabled"> visualization on</label>
-                <span class="chip" data-tone="warn">applies on next start</span>
-                <span class="spacer"></span>
-                <span class="chip num" data-tone="info" id="viz-cores" hidden></span>
-                <button id="btn-viz-apply" type="button" disabled>Apply</button>
+                <span class="chip" id="viz-power-mode" data-tone="ok">live child control</span>
               </div>
-              <p class="small muted">
-                By far the largest lever a channel has. Off removes the plugin branches, the
-                <span class="num">streamselect</span> selector and the alpha composite in one go and
-                the channel becomes a slideshow with audio. A live 1080p30 channel measured
-                <span class="num">0.999x</span> realtime with it off against
-                <span class="num">0.415x</span> with it on &mdash; it could not keep up at all. The
-                plugin choice is kept either way, so switching it back on restores exactly the same
-                look.
-              </p>
-              <p class="small muted">
-                Not a live change. The filtergraph is fixed at launch, so this reaches the compositor
-                on the channel&#8217;s next start; a running channel keeps drawing until it is
-                restarted.
+              <p class="small muted" id="viz-power-description">
+                On starts the selected visualizer child; off stops only that child. The framekeeper
+                supplies a transparent fallback throughout, so the compositor and stream continue
+                without a restart. The selected plugin is remembered while off.
               </p>
               <p class="small" id="viz-power-state"></p>
             </div>
+            <p class="small viz-action-state" id="viz-action-state" data-tone="info" hidden></p>
             <div class="row viz-standby" id="viz-standby">
-              <label class="inline"><input type="checkbox" id="viz-visible"> showing on air</label>
-              <span class="chip" data-tone="ok">live &mdash; one frame</span>
+              <label class="inline"><input type="checkbox" id="viz-visible"> <span id="viz-visible-label">showing on air</span></label>
+              <span class="chip" id="viz-visible-mode" data-tone="ok">live &mdash; one frame</span>
               <span class="small muted" id="viz-visible-note"></span>
             </div>
-            <p class="small muted">
-              A plugin can only switch live if its branch was preloaded when this compositor started.
-              Every preloaded branch draws frames even when it is off screen, costing roughly
-              0.28 cores per idle branch at 720p. Other installed plugins require a planned
-              make&#8209;before&#8209;break compositor restart; isolated visualization switching is
-              proven but is not part of this release.
+            <div class="row viz-opacity" id="viz-opacity-row">
+              <label class="inline" for="viz-opacity">opacity</label>
+              <input type="range" id="viz-opacity" min="0" max="100" step="1" value="65">
+              <span class="num small" id="viz-opacity-value">65%</span>
+              <span class="small muted" id="viz-opacity-mode">live &mdash; one frame</span>
+            </div>
+            <p class="small muted" id="viz-switch-description">
+              Every installed plugin can switch live. Switching replaces only the visualizer child;
+              the compositor PID and YouTube ingest session stay unchanged while the framekeeper
+              supplies transparent fallback during the handoff.
             </p>
             <ul class="plugin-list" id="plugin-list"></ul>
-            <div class="row hot-set-bar" id="hot-set-bar">
-              <span class="small" id="hot-set-state"></span>
-              <span class="spacer"></span>
-              <span class="chip num" data-tone="info" id="hot-set-cores" hidden></span>
-              <button id="btn-hot-set-revert" type="button" disabled>Revert</button>
-              <button id="btn-hot-set-apply" type="button" disabled>Apply preloaded set</button>
-            </div>
             <p class="inline-error" id="viz-error" hidden></p>
           </div>
 
@@ -541,7 +528,7 @@
               <button id="btn-preset-apply" type="button" class="primary">Apply preset</button>
             </div>
             <p class="small muted" id="preset-description"></p>
-            <p class="small muted">A preset never restarts the stream. One whose visualization is not preloaded is rejected.</p>
+            <p class="small muted">A preset never restarts the stream. If it changes the visualization, only the visualizer child is replaced.</p>
           </div>
         </div>
       </div>
@@ -661,10 +648,6 @@
         <select id="create-viz"></select>
       </label>
     </div>
-    <fieldset class="hotset">
-      <legend>preloaded visualizations — every branch costs CPU whether or not it is on screen</legend>
-      <div id="create-hotset"></div>
-    </fieldset>
     <p class="small muted">
       The YouTube stream key is not set here. Put it in
       <span class="num">channels/&lt;name&gt;/.env</span> as

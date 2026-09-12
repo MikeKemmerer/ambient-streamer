@@ -12,7 +12,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Request, Response
 from pydantic import Field
 
 from .. import liqctl
@@ -40,7 +40,16 @@ from ..models import (
 )
 from ..supervisor import ChannelBusy
 from ..watchdog import Verdict, parse_progress
-from .deps import Authed, parse_now_json, recompile, run_action, save_channel_config
+from .deps import (
+    Authed,
+    VisualMutation,
+    parse_now_json,
+    publish_visualization_event,
+    queue_visualizer_action,
+    recompile,
+    run_action,
+    save_channel_config,
+)
 
 router = APIRouter(prefix="/api/channels", tags=["channels"])
 
@@ -156,6 +165,7 @@ async def channel_status(
 ) -> dict[str, Any]:
     name = channel.name
     containers = await state.supervisor.containers(name)
+    visualizer = await state.supervisor.visualizer_status(name)
     verdict: Verdict | None = state.watchdog.latest.get(name)
 
     if containers.composer.running:
@@ -168,6 +178,12 @@ async def channel_status(
         sample = None
         health = Health.DISCONNECTED
         run_state = containers.state
+
+    readiness = (
+        await state.supervisor.visualizer_readiness(name)
+        if containers.composer.running and channel.visualization_enabled
+        else None
+    )
 
     now = (
         parse_now_json(await state.supervisor.read_run_file(name, "now.json"))
@@ -182,12 +198,23 @@ async def channel_status(
         "current_track": _pick(now, "current_track", "track"),
         "next_track": _pick(now, "next_track"),
         "current_slide": _pick(now, "current_slide", "slide"),
-        # From the config, not now.json: a streamselect switch deliberately does
-        # not restart the composer, so now.json's copy is frozen at boot.
+        # From config: the isolated child changes without rewriting now.json.
         "visualization": channel.config.visualization.active,
         # The selected plugin is reported either way, so this is the only field
         # that answers "is anything actually being drawn".
         "visualization_enabled": channel.visualization_enabled,
+        "visualizer_state": (
+            visualizer.status
+            if visualizer.exists
+            else ("absent" if channel.visualization_enabled else "disabled")
+        ),
+        "visualizer_ready": bool(
+            readiness
+            and readiness.ready
+            and not readiness.fallback
+            and visualizer.running
+        ),
+        "visualizer_fallback": readiness.fallback if readiness else True,
         "encoder": _pick(now, "encoder") or channel.encoder.value,
         "encoder_requested": channel.encoder.value,
         "fps": sample.fps if sample else 0.0,
@@ -372,8 +399,30 @@ async def create_channel(body: CreateChannel, state: AppState = Authed) -> dict[
 
 
 @router.patch("/{name}")
-async def patch_channel(name: str, body: PatchChannel, state: AppState = Authed) -> dict[str, Any]:
+async def patch_channel(
+    name: str, body: PatchChannel, response: Response, state: AppState = VisualMutation
+) -> dict[str, Any]:
     channel = state.channel(name, resolve_media=False)
+    running = False
+    if body.visualization is not None:
+        running = (await state.supervisor.containers(name)).composer.running
+        runtime_fields = sorted({"opacity", "visible"} & set(body.visualization))
+        if running and runtime_fields:
+            fields = ", ".join(runtime_fields)
+            raise ApiError(
+                409,
+                "visualization_runtime_endpoint",
+                f"use the visualization {fields} endpoint while {name} is running",
+            )
+    if body.visualization is not None and "active" in body.visualization:
+        active = body.visualization["active"]
+        registry = plugin_registry.load_registry(state.workspace.plugins_dir)
+        if active != channel.config.visualization.active and active not in registry:
+            raise ApiError(
+                404,
+                "unknown_plugin",
+                f"{active!r} is not installed; GET /api/plugins lists what is",
+            )
     data = channel.config.model_dump(mode="json")
     changed: list[str] = []
     for key, value in body.model_dump(exclude_none=True).items():
@@ -389,12 +438,65 @@ async def patch_channel(name: str, body: PatchChannel, state: AppState = Authed)
     if config.name != name:
         raise ApiError(400, "immutable_field", "a channel cannot be renamed")
     save_channel_config(channel.directory, config)
-    recompile(state, name)
+    try:
+        recompile(
+            state,
+            name,
+            preserve_visualizer_accent=running and body.visualization is not None,
+        )
+    except ApiError:
+        save_channel_config(channel.directory, channel.config)
+        raise
     reloaded = state.channel(name)
+    visualizer_action: str | None = None
+    generation: int | None = None
+    if body.visualization is not None:
+        before = channel.config.visualization
+        after = config.visualization
+        active_parameters_changed = (
+            before.parameters.get(after.active) != after.parameters.get(after.active)
+        )
+        if before.enabled != after.enabled:
+            visualizer_action = "start" if after.enabled else "stop"
+        elif after.enabled and (
+            before.active != after.active or active_parameters_changed
+        ):
+            visualizer_action = "recreate"
+
+        if visualizer_action is not None and running:
+            generation = queue_visualizer_action(
+                state,
+                name,
+                visualizer_action,
+                event_data={"active": after.active, "enabled": after.enabled},
+            )
+            response.status_code = 202
+        else:
+            visualizer_action = None
+            await publish_visualization_event(
+                state,
+                name,
+                event_state="saved",
+                applied=True,
+                active=after.active,
+                enabled=after.enabled,
+            )
     await state.events.publish(
-        CHANNEL_STATUS, {"state": ChannelState.RUNNING.value, "changed": changed}, channel=name
+        CHANNEL_STATUS,
+        {
+            "state": (ChannelState.RUNNING if running else ChannelState.STOPPED).value,
+            "changed": changed,
+        },
+        channel=name,
     )
-    return {"name": name, "changed": changed, "warnings": reloaded.warnings}
+    return {
+        "name": name,
+        "changed": changed,
+        "warnings": reloaded.warnings,
+        "visualizer_action": visualizer_action,
+        "generation": generation,
+        "composer_restarted": False,
+    }
 
 
 @router.delete("/{name}")

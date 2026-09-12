@@ -18,7 +18,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Callable, Protocol
 
 from .config import Workspace
 from .events import CHANNEL_PROGRESS, CHANNEL_STATUS, WATCHDOG_EVENT, EventHub
@@ -248,6 +248,7 @@ class Watchdog:
     workspace: Workspace
     supervisor: ChannelRuntime
     events: EventHub | None = None
+    prepare: Callable[[str], None] | None = None
     channels: dict[str, ChannelWatch] = field(default_factory=dict)
     latest: dict[str, Verdict] = field(default_factory=dict)
     cpu: dict[str, float] = field(default_factory=dict)
@@ -365,6 +366,8 @@ class Watchdog:
             backoff_seconds=delay,
         )
         try:
+            if self.prepare is not None:
+                self.prepare(name)
             if verdict.state is ChannelState.FAILED:
                 # Nothing is publishing, so there is no relay path to hand over.
                 await self.supervisor.start(name)

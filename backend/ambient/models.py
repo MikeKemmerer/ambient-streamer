@@ -247,33 +247,15 @@ class ImageSelection(StrictModel):
 
 
 class Visualization(StrictModel):
-    # Off is by far the cheapest a channel can be. Measured on a live 1080p30
-    # channel: 0.77 cores holding 0.999x with it off, against 0.415x — it could
-    # not hold realtime at all — with it on. `active` and `hot_set` are kept
-    # either way so
-    # turning it back on restores the same look.
     enabled: bool = True
-    # Standby. `enabled` decides whether the branches exist at all and needs a
-    # restart to change; this rides the overlay's timeline `enable` and is one
-    # frame. Off here still costs what on costs — the branches are still
-    # rendering — which is the price of being able to toggle at all.
     visible: bool = True
+    opacity: float = Field(0.65, ge=0, le=1)
     active: str
-    hot_set: list[str] = Field(min_length=1)
+    # Accepted for one compatibility release, but ignored by the runtime.
+    hot_set: list[str] = Field(default_factory=list)
     # Per plugin, so each keeps its own look across a switch. Values are checked
     # against the plugin manifest, not here: this model has no registry.
     parameters: dict[str, dict[str, float | int | bool | str]] = Field(default_factory=dict)
-
-    @model_validator(mode="after")
-    def _active_is_hot(self) -> Visualization:
-        if self.active not in self.hot_set:
-            raise ValueError(
-                f"visualization.active {self.active!r} is not in hot_set "
-                f"{self.hot_set!r}; only instantiated graphs can be switched to"
-            )
-        if len(set(self.hot_set)) != len(self.hot_set):
-            raise ValueError("visualization.hot_set contains duplicates")
-        return self
 
 
 class ManualColor(StrictModel):

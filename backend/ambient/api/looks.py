@@ -1,11 +1,4 @@
-"""Plugins, presets, visualization switching and color.
-
-A plugin in `hot_set` switches instantly: its branch is already rendering and
-`streamselect` picks it in one frame. An installed plugin that is not hot is
-still usable — it is staged into `hot_set` and the compositor is replaced
-make-before-break, which costs a real gap of seconds. Only a plugin that is not
-installed at all is an error.
-"""
+"""Plugins, presets, visualization switching and color."""
 
 from __future__ import annotations
 
@@ -22,20 +15,27 @@ from .. import colorprofile
 from .. import plugins as plugin_registry
 from .. import presets as preset_registry
 from ..config import ResolvedChannel
-from ..events import CHANNEL_VISUALIZATION
 from ..main import ApiError, AppState
 from ..models import ChannelConfig, ColorMode, ManualColor, StrictModel
 from ..watchdog import parse_progress
-from ..zmqctl import ZmqCommandError, ZmqValidationError, build_message, stream_select_message
-from .deps import Authed, parse_now_json, recompile, run_action, save_channel_config
+from ..zmqctl import ZmqCommandError, ZmqValidationError, build_message
+from .deps import (
+    Authed,
+    VisualMutation,
+    parse_now_json,
+    publish_visualization_event,
+    queue_visualizer_action,
+    recompile,
+    save_channel_config,
+)
 
 LOG = logging.getLogger("ambient.api.looks")
 
 router = APIRouter(prefix="/api", tags=["looks"])
 
-STREAMSELECT_TARGET = "streamselect@sel"
 # Timeline `enable` on the composite, which is what makes standby one frame.
 OVERLAY_TARGET = "overlay@viz"
+OPACITY_TARGET = "lut@vizop"
 COLOR_MODE_SETTLE_SECONDS = 0.6
 
 
@@ -44,13 +44,16 @@ class VisualizationBody(StrictModel):
 
 
 class HotSetBody(StrictModel):
-    hot_set: list[str] = Field(..., min_length=1)
-    # Optional: only needed when the change drops the branch currently on air.
+    hot_set: list[str]
     active: str | None = None
 
 
 class VisibleBody(StrictModel):
     visible: bool
+
+
+class OpacityBody(StrictModel):
+    opacity: float = Field(..., ge=0, le=1)
 
 
 class ParametersBody(StrictModel):
@@ -134,140 +137,83 @@ async def set_visualization(
     body: VisualizationBody,
     response: Response,
     allow_restart: bool = Query(
-        True, description="stage a plugin outside hot_set; false refuses instead"
+        True, deprecated=True, description="ignored; visualizer changes never restart composer"
     ),
-    state: AppState = Authed,
+    state: AppState = VisualMutation,
 ) -> dict[str, Any]:
     channel = state.channel(name, resolve_media=False)
-    hot_set = list(channel.config.visualization.hot_set)
-
-    if body.active in hot_set:
-        return await _switch_hot(state, channel.directory, name, channel.config, body.active)
-
     registry = plugin_registry.load_registry(state.workspace.plugins_dir)
-    if registry and body.active not in registry:
+    changed = body.active != channel.config.visualization.active
+    if changed and body.active not in registry:
         raise ApiError(
             404,
             "unknown_plugin",
             f"{body.active!r} is not installed; GET /api/plugins lists what is",
         )
-    if not allow_restart:
-        raise ApiError(
-            409,
-            "restart_required",
-            f"{body.active!r} is installed but not in hot_set on {name}; a filtergraph "
-            "is fixed at launch, so staging it needs a make-before-break restart. "
-            "Retry with allow_restart=true.",
-        )
-
-    response.status_code = 202
-    return await _stage(state, channel, body.active)
-
-
-async def _switch_hot(
-    state: AppState, directory: Path, name: str, config: ChannelConfig, active: str
-) -> dict[str, Any]:
-    """One frame, clean cut: the branch is already rendering."""
-    hot_set = list(config.visualization.hot_set)
-    if active != config.visualization.active:
-        data = config.model_dump(mode="json")
-        data["visualization"]["active"] = active
-        save_channel_config(directory, ChannelConfig.model_validate(data))
+    _ = allow_restart
+    config = channel.config
+    running = (await state.supervisor.containers(name)).composer.running
+    data = config.model_dump(mode="json")
+    data["visualization"]["active"] = body.active
+    if changed:
+        save_channel_config(channel.directory, ChannelConfig.model_validate(data))
         try:
-            message = stream_select_message(
-                STREAMSELECT_TARGET, hot_set.index(active), len(hot_set)
-            )
-        except ZmqValidationError as exc:
-            raise ApiError(400, "invalid_command", str(exc)) from exc
-        await _send(state, name, [message])
-        await state.events.publish(CHANNEL_VISUALIZATION, {"active": active}, channel=name)
+            recompile(state, name, preserve_visualizer_accent=running)
+        except ApiError:
+            save_channel_config(channel.directory, config)
+            raise
+
+    recreate = changed and running and config.visualization.enabled
+    generation = (
+        queue_visualizer_action(
+            state, name, "recreate", event_data={"active": body.active}
+        )
+        if recreate
+        else None
+    )
+    if recreate:
+        response.status_code = 202
+    else:
+        await publish_visualization_event(
+            state,
+            name,
+            event_state="saved",
+            applied=True,
+            active=body.active,
+        )
     return {
+        "accepted": changed,
         "channel": name,
-        "active": active,
-        "hot_set": hot_set,
+        "active": body.active,
+        "hot_set": list(config.visualization.hot_set),
         "staged": False,
         "restarted": False,
-        "mode": "streamselect",
-        "detail": "switched on the running filtergraph; no gap",
-    }
-
-
-async def _stage(
-    state: AppState, channel: ResolvedChannel, active: str
-) -> dict[str, Any]:
-    """Add the branch to the graph, then replace the compositor make-before-break."""
-    name = channel.name
-    config = channel.config
-    data = config.model_dump(mode="json")
-    hot_set = list(config.visualization.hot_set) + [active]
-    data["visualization"]["hot_set"] = hot_set
-    data["visualization"]["active"] = active
-
-    save_channel_config(channel.directory, ChannelConfig.model_validate(data))
-    try:
-        recompile(state, name)
-    except ApiError:
-        save_channel_config(channel.directory, config)
-        raise
-
-    reloaded = state.channel(name, resolve_media=False)
-    running = (await state.supervisor.containers(name)).composer.running
-    if running:
-        asyncio.create_task(
-            run_action(state, name, state.supervisor.restart(name), "visualization")
-        )
-    await state.events.publish(
-        CHANNEL_VISUALIZATION, {"active": active, "staged": True}, channel=name
-    )
-    return {
-        "accepted": True,
-        "channel": name,
-        "active": active,
-        "hot_set": hot_set,
-        "staged": True,
-        "restarted": running,
-        "mode": "make-before-break" if running else "applied-on-next-start",
-        "projected_cores": round(reloaded.projected_cores, 3),
+        "visualizer_recreated": recreate,
+        "generation": generation,
+        "mode": "visualizer-recreate" if recreate else "applied-on-next-start",
         "detail": (
-            f"{active!r} was not instantiated, so the compositor is being replaced with a "
-            "graph that includes it; measured ~1s of RTMP gap and a new YouTube ingest "
-            "session"
-            if running
-            else f"{active!r} was staged into hot_set; it applies on the next start"
+            "the isolated visualizer is being replaced; composer and ingest are unchanged"
+            if recreate
+            else "saved; it applies when the visualizer next starts"
         ),
     }
 
 
-@router.put("/channels/{name}/hot-set", status_code=202)
-async def set_hot_set(name: str, body: HotSetBody, state: AppState = Authed) -> dict[str, Any]:
-    """Choose which branches the graph instantiates.
-
-    Not a live change in either direction: a filtergraph is fixed at launch, so
-    both adding and removing a branch replaces the compositor. Removing is the
-    only way to give idle-branch cores back, which is why this endpoint exists
-    at all — switching a plugin in can only ever grow the set.
-    """
+@router.put("/channels/{name}/hot-set")
+async def set_hot_set(
+    name: str, body: HotSetBody, response: Response, state: AppState = VisualMutation
+) -> dict[str, Any]:
+    """Preserve the deprecated field for compatibility; it has no runtime effect."""
     channel = state.channel(name, resolve_media=False)
     config = channel.config
     requested = list(dict.fromkeys(body.hot_set))
 
     registry = plugin_registry.load_registry(state.workspace.plugins_dir)
-    if registry:
-        missing = [p for p in requested if p not in registry]
-        if missing:
-            raise ApiError(
-                404, "unknown_plugin",
-                f"not installed: {', '.join(sorted(missing))}; GET /api/plugins lists what is",
-            )
-
-    # Dropping the branch that is on air would leave `active` pointing at nothing,
-    # so the caller must say what replaces it rather than have one chosen for them.
     active = body.active or config.visualization.active
-    if active not in requested:
+    if body.active is not None and active not in registry:
         raise ApiError(
-            409, "active_not_in_hot_set",
-            f"{active!r} is on air but not in the requested hot set; pass `active` to say "
-            "which branch takes over",
+            404, "unknown_plugin",
+            f"{active!r} is not installed; GET /api/plugins lists what is",
         )
 
     if requested == list(config.visualization.hot_set) and active == config.visualization.active:
@@ -279,55 +225,67 @@ async def set_hot_set(name: str, body: HotSetBody, state: AppState = Authed) -> 
     data = config.model_dump(mode="json")
     data["visualization"]["hot_set"] = requested
     data["visualization"]["active"] = active
+    running = (await state.supervisor.containers(name)).composer.running
     save_channel_config(channel.directory, ChannelConfig.model_validate(data))
     try:
-        reloaded = state.channel(name, resolve_media=False)
-        recompile(state, name)
+        recompile(state, name, preserve_visualizer_accent=running)
     except ApiError:
         save_channel_config(channel.directory, config)
         raise
 
-    running = (await state.supervisor.containers(name)).composer.running
-    if running and config.visualization.enabled:
-        asyncio.create_task(run_action(state, name, state.supervisor.restart(name), "hot_set"))
-    await state.events.publish(
-        CHANNEL_VISUALIZATION, {"active": active, "hot_set": requested}, channel=name
+    recreate = (
+        active != config.visualization.active
+        and running
+        and config.visualization.enabled
     )
+    generation = (
+        queue_visualizer_action(
+            state,
+            name,
+            "recreate",
+            event_data={"active": active, "hot_set": requested},
+        )
+        if recreate
+        else None
+    )
+    if recreate:
+        response.status_code = 202
+    else:
+        await publish_visualization_event(
+            state,
+            name,
+            event_state="saved",
+            applied=True,
+            active=active,
+            hot_set=requested,
+        )
     return {
         "accepted": True,
         "channel": name,
         "hot_set": requested,
         "active": active,
-        # A channel drawing nothing has no branches in its graph, so changing which
-        # ones it would instantiate costs it nothing until the visualization is on.
-        "restarted": running and config.visualization.enabled,
-        "projected_cores": round(reloaded.projected_cores, 3),
+        "restarted": False,
+        "visualizer_recreated": recreate,
+        "generation": generation,
         "detail": (
-            "the compositor is being replaced with a graph containing exactly these "
-            "branches; measured ~1s of RTMP gap and a new YouTube ingest session"
-            if running and config.visualization.enabled
-            else "applies on the next start"
+            "deprecated hot_set saved; active plugin queued for visualizer replacement"
+            if recreate
+            else "deprecated hot_set saved and ignored by the runtime"
         ),
     }
 
 
 @router.put("/channels/{name}/visualization/visible", status_code=202)
-async def set_visible(name: str, body: VisibleBody, state: AppState = Authed) -> dict[str, Any]:
-    """Standby: take the visualization off air and put it back with no restart.
-
-    This is the one on/off that is live. `visualization.enabled` decides whether
-    the branches exist at all and cannot change without rebuilding the graph;
-    this rides `overlay`'s timeline `enable`, which is one frame. The branches
-    keep rendering either way, so standby costs what on costs — that is the
-    price of being able to toggle at all.
-    """
+async def set_visible(
+    name: str, body: VisibleBody, state: AppState = VisualMutation
+) -> dict[str, Any]:
+    """Take the visualization overlay off air without stopping its child."""
     channel = state.channel(name, resolve_media=False)
     config = channel.config
     if not config.visualization.enabled:
         raise ApiError(
             409, "visualization_not_built",
-            f"{name} has no visualization branches in its graph, so there is nothing to "
-            "reveal; set visualization.enabled and restart first",
+            f"{name} has no running visualizer to reveal; enable it first",
         )
 
     if body.visible != config.visualization.visible:
@@ -343,39 +301,85 @@ async def set_visible(name: str, body: VisibleBody, state: AppState = Authed) ->
             message = build_message(OVERLAY_TARGET, "enable", "1" if body.visible else "0")
         except ZmqValidationError as exc:
             raise ApiError(400, "invalid_command", str(exc)) from exc
-        await _send(state, name, [message])
-        sent = True
+        sent = await _send(state, name, [message])
 
-    await state.events.publish(
-        CHANNEL_VISUALIZATION, {"visible": body.visible}, channel=name
+    detail = (
+        "switched on the running graph; one frame, no gap"
+        if sent
+        else "saved; it applies when the channel next starts"
+    )
+    await publish_visualization_event(
+        state,
+        name,
+        event_state="applied" if sent else "saved",
+        applied=sent,
+        detail=detail,
+        visible=body.visible,
     )
     return {
         "accepted": True,
         "channel": name,
         "visible": body.visible,
         "live": sent,
-        "detail": (
-            "switched on the running graph; one frame, no gap"
-            if sent
-            else "saved; it applies when the channel next starts"
-        ),
+        "detail": detail,
+    }
+
+
+@router.put("/channels/{name}/visualization/opacity", status_code=202)
+async def set_opacity(
+    name: str, body: OpacityBody, state: AppState = VisualMutation
+) -> dict[str, Any]:
+    """Change isolated-layer opacity on the running compositor."""
+    channel = state.channel(name, resolve_media=False)
+    config = channel.config
+    if body.opacity != config.visualization.opacity:
+        data = config.model_dump(mode="json")
+        data["visualization"]["opacity"] = body.opacity
+        save_channel_config(channel.directory, ChannelConfig.model_validate(data))
+        recompile(state, name)
+
+    running = (await state.supervisor.containers(name)).composer.running
+    sent = False
+    if running:
+        expression = f"(val-16)*1.16438356*{body.opacity:g}"
+        try:
+            message = build_message(OPACITY_TARGET, "y", expression)
+        except ZmqValidationError as exc:
+            raise ApiError(400, "invalid_command", str(exc)) from exc
+        sent = await _send(state, name, [message])
+
+    detail = (
+        "opacity changed on the running compositor; one frame, no gap"
+        if sent
+        else "saved; it applies when the channel next starts"
+    )
+    await publish_visualization_event(
+        state,
+        name,
+        event_state="applied" if sent else "saved",
+        applied=sent,
+        detail=detail,
+        opacity=body.opacity,
+    )
+    return {
+        "accepted": True,
+        "channel": name,
+        "opacity": body.opacity,
+        "live": sent,
+        "detail": detail,
     }
 
 
 @router.put("/channels/{name}/visualization/parameters", status_code=202)
 async def set_parameters(
-    name: str, body: ParametersBody, state: AppState = Authed
+    name: str, body: ParametersBody, response: Response, state: AppState = VisualMutation
 ) -> dict[str, Any]:
-    """Tune one plugin's knobs.
-
-    Substituted into the fragment at launch, so this restarts a channel that is
-    actually drawing the plugin. A plugin nobody is looking at is just saved.
-    """
+    """Tune one plugin, recreating only the child when it is active."""
     channel = state.channel(name, resolve_media=False)
     config = channel.config
     registry = plugin_registry.load_registry(state.workspace.plugins_dir)
     manifest = registry.get(body.plugin)
-    if registry and manifest is None:
+    if manifest is None:
         raise ApiError(
             404, "unknown_plugin", f"{body.plugin!r} is not installed; GET /api/plugins lists what is"
         )
@@ -395,35 +399,49 @@ async def set_parameters(
             resolved = manifest.resolve_parameters({**body.values})
         except plugin_registry.PluginError as exc:
             raise ApiError(400, "invalid_parameter", str(exc)) from exc
-    else:
-        resolved = dict(body.values)
-
     data = config.model_dump(mode="json")
     parameters = dict(data["visualization"].get("parameters") or {})
     parameters[body.plugin] = resolved
     data["visualization"]["parameters"] = parameters
-    save_channel_config(channel.directory, ChannelConfig.model_validate(data))
-    recompile(state, name)
-
     running = (await state.supervisor.containers(name)).composer.running
+    save_channel_config(channel.directory, ChannelConfig.model_validate(data))
+    recompile(state, name, preserve_visualizer_accent=running)
+
     drawing = (
         running
         and config.visualization.enabled
-        and body.plugin in config.visualization.hot_set
+        and body.plugin == config.visualization.active
     )
+    generation = None
     if drawing:
-        asyncio.create_task(run_action(state, name, state.supervisor.restart(name), "parameters"))
+        generation = queue_visualizer_action(
+            state,
+            name,
+            "recreate",
+            event_data={"plugin": body.plugin, "values": resolved},
+        )
+    else:
+        response.status_code = 200
+        await publish_visualization_event(
+            state,
+            name,
+            event_state="saved",
+            applied=True,
+            plugin=body.plugin,
+            values=resolved,
+        )
     return {
         "accepted": True,
         "channel": name,
         "plugin": body.plugin,
         "values": resolved,
-        "restarted": drawing,
+        "restarted": False,
+        "visualizer_recreated": drawing,
+        "generation": generation,
         "detail": (
-            "the compositor is being replaced to rebuild that branch; measured ~1s of "
-            "RTMP gap and a new YouTube ingest session"
+            "the isolated visualizer is being replaced; composer and ingest are unchanged"
             if drawing
-            else "saved; it applies the next time that branch is built"
+            else "saved; it applies the next time that plugin is active"
         ),
     }
 
@@ -441,7 +459,9 @@ async def post_preset(name: str, body: PresetBody, state: AppState = Authed) -> 
 
 
 @router.put("/channels/{name}/color")
-async def set_color(name: str, body: ColorBody, state: AppState = Authed) -> dict[str, Any]:
+async def set_color(
+    name: str, body: ColorBody, state: AppState = VisualMutation
+) -> dict[str, Any]:
     _cancel_color_mode_task(state, name)
     channel = state.channel(name, resolve_media=False)
     previous_color = channel.config.color
@@ -717,6 +737,13 @@ def _slide_image(
 async def apply_preset_to_channel(
     state: AppState, name: str, preset_name: str
 ) -> preset_registry.PresetApplication:
+    async with state.visualization_lock(name):
+        return await _apply_preset_to_channel_locked(state, name, preset_name)
+
+
+async def _apply_preset_to_channel_locked(
+    state: AppState, name: str, preset_name: str
+) -> preset_registry.PresetApplication:
     _cancel_color_mode_task(state, name)
     channel = state.channel(name, resolve_media=False)
     was_manual = channel.config.color.mode is ColorMode.MANUAL
@@ -745,19 +772,28 @@ async def apply_preset_to_channel(
         baked_accent,
         stream_time,
     )
-    try:
-        application = preset_registry.apply_preset(
-            preset,
-            channel.config,
-            stream_time=stream_time,
-            current=current,
-            current_accent=current_accent,
-            current_viz_rotation=current_rotation,
-            baked_accent=baked_accent,
+    registry = plugin_registry.load_registry(state.workspace.plugins_dir)
+    if (
+        preset.visualization is not None
+        and preset.visualization.active != channel.config.visualization.active
+        and preset.visualization.active not in registry
+    ):
+        raise ApiError(
+            404,
+            "unknown_plugin",
+            f"{preset.visualization.active!r} is not installed; GET /api/plugins lists what is",
         )
-    except preset_registry.NotInHotSet as exc:
-        raise ApiError(409, "not_in_hot_set", str(exc)) from exc
+    application = preset_registry.apply_preset(
+        preset,
+        channel.config,
+        stream_time=stream_time,
+        current=current,
+        current_accent=current_accent,
+        current_viz_rotation=current_rotation,
+        baked_accent=baked_accent,
+    )
 
+    running = (await state.supervisor.containers(name)).composer.running
     save_channel_config(channel.directory, application.config)
     is_manual = application.config.color.mode is ColorMode.MANUAL
     target: preset_registry.ColorTargets | None = None
@@ -771,8 +807,14 @@ async def apply_preset_to_channel(
     if is_manual and not was_manual:
         _publish_color_mode(state, name, ColorMode.MANUAL)
         await asyncio.sleep(COLOR_MODE_SETTLE_SECONDS)
-    if application.rewrite_images_list:
-        recompile(state, name)
+    if application.rewrite_images_list or application.visualization is not None:
+        recompile(
+            state,
+            name,
+            preserve_visualizer_accent=(
+                running and application.visualization is not None
+            ),
+        )
 
     if was_manual and not is_manual:
         profile = await _current_slide_profile(state, channel)
@@ -795,14 +837,6 @@ async def apply_preset_to_channel(
                 )
             )
 
-    if application.visualization is not None:
-        hot_set = application.config.visualization.hot_set
-        application.messages.insert(
-            0,
-            stream_select_message(
-                STREAMSELECT_TARGET, hot_set.index(application.visualization), len(hot_set)
-            ),
-        )
     delivered = await _send(state, name, application.messages)
     if delivered and target is not None:
         _remember_color_ramp(
@@ -824,9 +858,21 @@ async def apply_preset_to_channel(
             application.config.color.transition_seconds if delivered else 0.0,
         )
     if application.visualization is not None:
-        await state.events.publish(
-            CHANNEL_VISUALIZATION, {"active": application.visualization}, channel=name
-        )
+        if running and application.config.visualization.enabled:
+            queue_visualizer_action(
+                state,
+                name,
+                "recreate",
+                event_data={"active": application.visualization},
+            )
+        else:
+            await publish_visualization_event(
+                state,
+                name,
+                event_state="saved",
+                applied=True,
+                active=application.visualization,
+            )
     return application
 
 

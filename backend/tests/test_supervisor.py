@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
@@ -45,17 +46,29 @@ def test_rendered_yaml_parses(tmp_path: Path) -> None:
     workspace, channel = resolve(make_repo(tmp_path))
     document = yaml.safe_load(render_compose(workspace, channel))
     assert document["name"] == "ambient-lofi"
-    assert set(document["services"]) == {"lofi-liquidsoap", "lofi-composer"}
+    assert set(document["services"]) == {
+        "lofi-liquidsoap",
+        "lofi-visualizer",
+        "lofi-composer",
+    }
     assert document["networks"]["ambient"]["external"] is True
 
 
 def test_image_tag_falls_back_to_the_template_default(tmp_path: Path) -> None:
     workspace, channel = resolve(make_repo(tmp_path))
     document = yaml.safe_load(render_compose(workspace, channel))
-    assert document["services"]["lofi-composer"]["image"] == "ambient-composer:dev"
+    composer_image = "${AMBIENT_COMPOSER_IMAGE:-ambient-composer:dev}"
+    assert document["services"]["lofi-composer"]["image"] == composer_image
+    assert document["services"]["lofi-visualizer"]["image"] == composer_image
     assert document["services"]["lofi-liquidsoap"]["image"] == (
         "${AMBIENT_LIQUIDSOAP_IMAGE:-ambient-liquidsoap:dev}"
     )
+
+
+def test_visualization_opacity_reaches_the_composer(tmp_path: Path) -> None:
+    workspace, channel = resolve(make_repo(tmp_path))
+    document = yaml.safe_load(render_compose(workspace, channel))
+    assert document["services"]["lofi-composer"]["environment"]["VIZ_OPACITY"] == "0.65"
 
 
 def test_encoder_default_applies_when_the_channel_env_omits_it(tmp_path: Path) -> None:
@@ -113,6 +126,36 @@ def test_manual_color_reaches_the_composer_with_its_initial_values(tmp_path: Pat
     assert float(context["color_init_brightness"]) == targets.brightness
 
 
+def test_visualizer_recompile_can_preserve_the_running_base_accent(
+    tmp_path: Path
+) -> None:
+    from ambient.api.deps import recompile
+    from ambient.main import build_state
+
+    config = CHANNEL_YAML.replace("color:\n  mode: automatic\n", MANUAL_COLOR).replace(
+        "#4FC3F7", "#FF8800"
+    )
+    root = make_repo(tmp_path, config=config)
+    env = root / ".env"
+    env.write_text(
+        env.read_text(encoding="utf-8") + f"AMBIENT_RUN_DIR={root / 'run'}\n",
+        encoding="utf-8",
+    )
+    run_dir = load_workspace(root).run_dir / "lofi"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "viz-accent").write_text("#4FC3F7\n", encoding="utf-8")
+
+    state = build_state(root)
+    recompile(state, "lofi", preserve_visualizer_accent=True)
+    document = yaml.safe_load(
+        (root / "channels" / "lofi" / "docker-compose.yml").read_text(encoding="utf-8")
+    )
+
+    visualizer = document["services"]["lofi-visualizer"]
+    assert visualizer["environment"]["ACCENT"] == "#4FC3F7"
+    assert state.channel("lofi", resolve_media=False).config.color.manual.accent == "#FF8800"
+
+
 def test_automatic_color_starts_the_graph_neutral(tmp_path: Path) -> None:
     workspace, channel = resolve(make_repo(tmp_path))
     context = compose_context(workspace, channel)
@@ -120,6 +163,49 @@ def test_automatic_color_starts_the_graph_neutral(tmp_path: Path) -> None:
     assert context["color_init_hue"] == "0"
     assert context["color_init_saturation"] == "1"
     assert context["color_init_brightness"] == "0"
+
+
+def test_visualizer_context_is_isolated_and_capped(tmp_path: Path) -> None:
+    env = CHANNEL_ENV.replace("CHANNEL_RESOLUTION=720p", "CHANNEL_RESOLUTION=1080p").replace(
+        "CHANNEL_FPS=30", "CHANNEL_FPS=60"
+    )
+    workspace, channel = resolve(make_repo(tmp_path, env=env))
+    context = compose_context(workspace, channel)
+
+    assert context["visualizer_enabled"] == "on"
+    assert context["active_plugin"] == "showfreqs-bars"
+    assert context["visualizer_width"] == "1280"
+    assert context["visualizer_height"] == "720"
+    assert context["visualizer_fps"] == "30"
+    assert json.loads(context["plugin_parameters"]) == {}
+
+
+def test_visualizer_service_uses_shared_framekeeper_state(tmp_path: Path) -> None:
+    workspace, channel = resolve(make_repo(tmp_path))
+    document = yaml.safe_load(render_compose(workspace, channel))
+    service = document["services"]["lofi-visualizer"]
+
+    assert service["container_name"] == "lofi-visualizer"
+    assert service["command"] == ["/opt/ambient/visualizer-entrypoint.sh"]
+    assert service["environment"]["PLUGIN_NAME"] == "showfreqs-bars"
+    assert service["environment"]["WIDTH"] == "1280"
+    assert service["environment"]["HEIGHT"] == "720"
+    assert service["environment"]["FPS"] == "30"
+    assert f"{workspace.run_dir}:/run/ambient" in service["volumes"]
+    assert f"{workspace.root}/plugins:/plugins:ro" in service["volumes"]
+    assert "profiles" not in service
+
+
+def test_disabled_visualizer_service_is_profile_gated(tmp_path: Path) -> None:
+    config = CHANNEL_YAML.replace(
+        "visualization:\n  active:", "visualization:\n  enabled: false\n  active:"
+    )
+    workspace, channel = resolve(make_repo(tmp_path, config=config))
+    document = yaml.safe_load(render_compose(workspace, channel))
+
+    assert document["services"]["lofi-visualizer"]["profiles"] == [
+        "visualization-disabled"
+    ]
 
 
 def test_missing_template_is_a_loud_error(tmp_path: Path) -> None:

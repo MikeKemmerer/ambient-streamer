@@ -9,7 +9,6 @@ import pytest
 from ambient.config import load_channel, load_workspace
 from ambient.models import ColorMode
 from ambient.presets import (
-    NotInHotSet,
     Preset,
     PresetError,
     apply_preset,
@@ -83,7 +82,7 @@ def test_applying_merges_over_the_channel_config(repo: Path) -> None:
     assert application.reconfigure_liquidsoap is True
 
 
-def test_a_visualization_outside_the_hot_set_is_rejected(repo: Path) -> None:
+def test_a_visualization_outside_the_legacy_hot_set_is_selected(repo: Path) -> None:
     body = (repo / "presets" / "calm-ocean.yaml").read_text(encoding="utf-8")
     (repo / "presets" / "neon.yaml").write_text(
         body.replace("name: calm-ocean", "name: neon").replace(
@@ -92,8 +91,9 @@ def test_a_visualization_outside_the_hot_set_is_rejected(repo: Path) -> None:
         encoding="utf-8",
     )
     preset = get_preset(repo / "presets", "neon")
-    with pytest.raises(NotInHotSet, match="hot_set"):
-        apply_preset(preset, channel_config(repo))
+    application = apply_preset(preset, channel_config(repo))
+    assert application.config.visualization.active == "showwaves-classic"
+    assert application.config.visualization.hot_set == ["showfreqs-bars"]
 
 
 def test_applying_the_same_preset_twice_is_idempotent(repo: Path) -> None:
