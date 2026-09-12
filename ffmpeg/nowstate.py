@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
 """Writer for ``/run/ambient/<channel>/now.json``.
 
-Three processes hold the facts this file reports and none of them can write it
-alone: Liquidsoap owns the current and next track and answers on its telnet
-socket, the slideshow producer owns the current slide, and the compositor
-entrypoint owns the active plugin. This module merges them on a daemon thread
-inside the producer — the only long-lived Python process in the compositor
-container, and the one that already holds the slide.
+Two processes hold the facts this file reports and neither can write it alone:
+Liquidsoap owns the current and next track and answers on its telnet socket,
+while the slideshow producer owns the current slide. This module merges them on
+a daemon thread inside the producer.
 
 It is telemetry, never the signal path. Every failure is logged and swallowed;
 nothing here may stop frames being produced.
@@ -125,7 +123,6 @@ def last_value(block: str) -> str:
 class NowSettings:
     path: str
     channel: str
-    active_plugin: str
     started_at: str
     liq_host: str
     liq_port: int
@@ -171,14 +168,13 @@ class NowWriter(threading.Thread):
             "current_track": self.rel(self.track),
             "next_track": self.rel(self.next_track),
             "current_slide": self.rel(slide),
-            "active_plugin": self.cfg.active_plugin or None,
             "started_at": self.cfg.started_at,
         }
 
     def run(self) -> None:
         log("start", path=self.cfg.path, liquidsoap=
             f"{self.cfg.liq_host}:{self.cfg.liq_port}",
-            interval=self.cfg.interval, active_plugin=self.cfg.active_plugin)
+            interval=self.cfg.interval)
         while True:
             try:
                 self.poll_tracks()
@@ -202,7 +198,6 @@ def settings_from_env() -> Optional[NowSettings]:
     return NowSettings(
         path=os.environ.get("NOW_FILE", "") or os.path.join(run_dir, "now.json"),
         channel=channel,
-        active_plugin=os.environ.get("ACTIVE_PLUGIN", "").strip(),
         started_at=os.environ.get("COMPOSER_STARTED_AT", "").strip() or utc_now(),
         liq_host=os.environ.get("LIQ_TELNET_HOST", "") or f"{channel}-liquidsoap",
         liq_port=port,

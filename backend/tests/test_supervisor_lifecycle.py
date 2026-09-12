@@ -12,7 +12,7 @@ import pytest
 import yaml
 
 from ambient.config import ConfigError, load_workspace
-from ambient.supervisor import Supervisor
+from ambient.supervisor import CommandResult, Supervisor, SupervisorError
 from ambient.zmqctl import ZmqValidationError
 from tests.conftest import EXITED_STATE, RUNNING_STATE, FakeDocker
 
@@ -65,6 +65,21 @@ def test_a_hostile_channel_name_never_reaches_docker(repo: Path, docker: FakeDoc
 def test_start_brings_the_project_up(repo: Path, docker: FakeDocker) -> None:
     asyncio.run(supervisor(repo, docker).start("lofi"))
     assert docker.compose_calls()[0][-3:] == ["up", "-d", "--remove-orphans"]
+
+
+def test_visualizer_service_is_managed_in_the_channel_project(
+    repo: Path, docker: FakeDocker
+) -> None:
+    sup = supervisor(repo, docker)
+    argv = sup.compose_argv(
+        "lofi", ["up", "-d", "--no-deps", "lofi-visualizer"]
+    )
+
+    assert flag_values(argv, "--project-name") == ["ambient-lofi"]
+    assert flag_values(argv, "--file") == [
+        str(repo / "channels" / "lofi" / "docker-compose.yml")
+    ]
+    assert argv[-4:] == ["up", "-d", "--no-deps", "lofi-visualizer"]
 
 
 def test_stop_takes_down_both_slots(repo: Path, docker: FakeDocker) -> None:
@@ -145,6 +160,99 @@ def test_restart_alternates_slots(repo: Path, docker: FakeDocker) -> None:
     result = asyncio.run(supervisor(repo, docker).restart("lofi"))
     assert result["outgoing"] == "lofi-composer-next"
     assert result["incoming"] == "lofi-composer"
+
+
+# --------------------------------------------------------------------------
+# Isolated visualizer
+# --------------------------------------------------------------------------
+
+
+class VisualizerDocker(FakeDocker):
+    def __init__(self) -> None:
+        super().__init__()
+        self.ids = {"lofi-composer": "composer-1"}
+
+    async def __call__(self, argv, timeout=None):
+        args = list(argv)
+        if args[1:2] == ["inspect"] and "{{.Id}}" in args:
+            self.calls.append(args)
+            container = args[-1]
+            identity = self.ids.get(container)
+            if identity is None:
+                return CommandResult(tuple(args), 1, "", "No such object")
+            return CommandResult(tuple(args), 0, identity, "")
+        return await super().__call__(args, timeout)
+
+
+def test_visualizer_lifecycle_targets_only_its_service(repo: Path) -> None:
+    docker = VisualizerDocker()
+    docker.states["lofi-composer"] = RUNNING_STATE
+    sup = supervisor(repo, docker)
+
+    started = asyncio.run(sup.start_visualizer("lofi"))
+    recreated = asyncio.run(sup.recreate_visualizer("lofi"))
+    stopped = asyncio.run(sup.stop_visualizer("lofi"))
+
+    assert started.applied and recreated.applied and stopped.applied
+    calls = docker.compose_calls()
+    assert [call[-1] for call in calls] == ["lofi-visualizer"] * 3
+    assert calls[0][-4:] == ["up", "-d", "--no-deps", "lofi-visualizer"]
+    assert "--force-recreate" in calls[1]
+    assert calls[2][-2:] == ["stop", "lofi-visualizer"]
+    assert not any("lofi-composer" in call[-1:] for call in calls)
+
+
+def test_stale_visualizer_generation_does_nothing(repo: Path) -> None:
+    docker = VisualizerDocker()
+    docker.states["lofi-composer"] = RUNNING_STATE
+    sup = supervisor(repo, docker)
+    stale = sup.next_visualizer_generation("lofi")
+    current = sup.next_visualizer_generation("lofi")
+
+    skipped = asyncio.run(sup.recreate_visualizer("lofi", generation=stale))
+    applied = asyncio.run(sup.recreate_visualizer("lofi", generation=current))
+
+    assert skipped.applied is False
+    assert applied.applied is True
+    assert len(docker.compose_calls()) == 1
+
+
+def test_visualizer_action_fails_if_the_composer_changes(repo: Path) -> None:
+    class ReplacingComposer(VisualizerDocker):
+        async def __call__(self, argv, timeout=None):
+            args = list(argv)
+            result = await super().__call__(args, timeout)
+            if args[1:2] == ["compose"]:
+                self.ids["lofi-composer"] = "composer-2"
+            return result
+
+    docker = ReplacingComposer()
+    docker.states["lofi-composer"] = RUNNING_STATE
+    with pytest.raises(SupervisorError, match="composer changed"):
+        asyncio.run(supervisor(repo, docker).recreate_visualizer("lofi"))
+
+
+def test_visualizer_status_and_framekeeper_readiness(repo: Path) -> None:
+    docker = VisualizerDocker()
+    docker.states["lofi-composer"] = RUNNING_STATE
+    docker.states["lofi-visualizer"] = RUNNING_STATE
+    docker.files[
+        "lofi-composer:/run/ambient/lofi/visualization-status.json"
+    ] = (
+        '{"ready":true,"fallback":false,"emitted":20,"received":18,'
+        '"fallbacks":2,"reconnects":1,"last_frame_age_seconds":0.02,'
+        '"updated_at":1789000000}'
+    )
+    sup = supervisor(repo, docker)
+
+    status = asyncio.run(sup.visualizer_status("lofi"))
+    readiness = asyncio.run(sup.visualizer_readiness("lofi"))
+
+    assert status.running is True
+    assert readiness.ready is True
+    assert readiness.fallback is False
+    assert readiness.received == 18
+    assert readiness.last_frame_age_seconds == 0.02
 
 
 # --------------------------------------------------------------------------

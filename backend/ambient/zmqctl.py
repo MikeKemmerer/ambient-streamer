@@ -28,7 +28,7 @@ _IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 # FFmpeg's expression grammar, restricted to what a color ramp needs.
 _ALLOWED_IDENTIFIERS = frozenset(
     {
-        "t", "n", "pos", "w", "h", "PI", "E", "PHI",
+        "t", "n", "pos", "w", "h", "val", "PI", "E", "PHI",
         "abs", "acos", "asin", "atan", "atan2", "between", "bitand", "bitor",
         "ceil", "clip", "cos", "cosh", "eq", "exp", "floor", "gauss", "gcd",
         "gt", "gte", "hypot", "if", "ifnot", "isinf", "isnan", "ld", "lerp",

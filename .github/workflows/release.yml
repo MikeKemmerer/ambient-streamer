@@ -113,6 +113,7 @@ jobs:
           echo "make_latest=$([[ "$prerelease" == true ]] && echo false || echo true)" >> "$GITHUB_OUTPUT"
           echo "backend_image=ghcr.io/${owner}/ambient-streamer-backend" >> "$GITHUB_OUTPUT"
           echo "liquidsoap_image=ghcr.io/${owner}/ambient-streamer-liquidsoap" >> "$GITHUB_OUTPUT"
+          echo "composer_image=ghcr.io/${owner}/ambient-streamer-composer" >> "$GITHUB_OUTPUT"
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@1f40c72289eff860ee54a304f1438e3cff362e0a # v4
@@ -177,6 +178,31 @@ jobs:
           subject-digest: ${{ steps.liquidsoap.outputs.digest }}
           push-to-registry: true
 
+      - name: Build and push composer
+        id: composer
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        with:
+          context: .
+          file: docker/Dockerfile.composer
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.release.outputs.composer_image }}:run-${{ github.run_id }}-${{ github.run_attempt }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ steps.release.outputs.tag }}
+          cache-from: type=gha,scope=release-composer
+          cache-to: type=gha,mode=max,scope=release-composer
+          provenance: mode=max
+          sbom: true
+
+      - name: Attest composer image
+        uses: actions/attest-build-provenance@8beda2b7ed98355c0e97c0a63bec38ae472e66c4 # v4
+        with:
+          subject-name: ${{ steps.release.outputs.composer_image }}
+          subject-digest: ${{ steps.composer.outputs.digest }}
+          push-to-registry: true
+
       - name: Build release artifacts
         id: artifacts
         env:
@@ -185,6 +211,8 @@ jobs:
           BACKEND_DIGEST: ${{ steps.backend.outputs.digest }}
           LIQUIDSOAP_IMAGE: ${{ steps.release.outputs.liquidsoap_image }}
           LIQUIDSOAP_DIGEST: ${{ steps.liquidsoap.outputs.digest }}
+          COMPOSER_IMAGE: ${{ steps.release.outputs.composer_image }}
+          COMPOSER_DIGEST: ${{ steps.composer.outputs.digest }}
         run: |
           set -euo pipefail
           repository_name="${GITHUB_REPOSITORY#*/}"
@@ -200,7 +228,8 @@ jobs:
             --arg repository "$GITHUB_REPOSITORY" \
             --arg backend "${BACKEND_IMAGE}@${BACKEND_DIGEST}" \
             --arg liquidsoap "${LIQUIDSOAP_IMAGE}@${LIQUIDSOAP_DIGEST}" \
-            '{version: $version, tag: $tag, commit: $commit, repository: $repository, images: {backend: $backend, liquidsoap: $liquidsoap}}' \
+            --arg composer "${COMPOSER_IMAGE}@${COMPOSER_DIGEST}" \
+            '{version: $version, tag: $tag, commit: $commit, repository: $repository, images: {backend: $backend, liquidsoap: $liquidsoap, composer: $composer}}' \
             > "$manifest"
 
           cat > "$release_env" <<EOF
@@ -209,6 +238,7 @@ jobs:
           AMBIENT_RELEASE_REPOSITORY=$GITHUB_REPOSITORY
           AMBIENT_BACKEND_IMAGE=${BACKEND_IMAGE}@${BACKEND_DIGEST}
           AMBIENT_LIQUIDSOAP_IMAGE=${LIQUIDSOAP_IMAGE}@${LIQUIDSOAP_DIGEST}
+          AMBIENT_COMPOSER_IMAGE=${COMPOSER_IMAGE}@${COMPOSER_DIGEST}
           EOF
 
           cp "$manifest" "$RUNNER_TEMP/RELEASE.json"

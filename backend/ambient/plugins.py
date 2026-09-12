@@ -277,8 +277,8 @@ def pipeline_cores(width: int, height: int, fps: int) -> float:
     return PIPELINE_CORES_720P30 * pixel_scale(width, height, fps, PIPELINE_SCALE_1080P)
 
 
-def check_hot_set(
-    hot_set: list[str],
+def check_visualization(
+    active: str,
     registry: dict[str, PluginManifest],
     width: int,
     height: int,
@@ -287,30 +287,28 @@ def check_hot_set(
     enabled: bool = True,
 ) -> HotSetCheck:
     check = HotSetCheck()
+    layer_width = min(width, 1280)
+    layer_height = min(height, 720)
+    layer_fps = min(fps, 30)
+    check.pipeline_cores = pipeline_cores(width, height, fps)
+    check.preview_cores = PREVIEW_CORES
     if not enabled:
-        # No branches are instantiated at all, so none of them cost anything and
-        # a missing manifest cannot matter. The pipeline still costs what it
-        # costs, so this is a floor rather than zero.
-        check.pipeline_cores = pipeline_cores(width, height, fps)
-        check.preview_cores = PREVIEW_CORES
         check.projected_cores = check.pipeline_cores + check.preview_cores
         return check
     if not registry:
         check.warnings.append(
-            "no plugin manifests found; hot_set membership and output size are unverified"
+            "no plugin manifests found; active plugin and output size are unverified"
         )
+        check.projected_cores = check.pipeline_cores + check.preview_cores
         return check
-    for name in hot_set:
-        manifest = registry.get(name)
-        if manifest is None:
-            check.errors.append(f"plugin {name!r} in hot_set does not exist in the registry")
-            continue
-        try:
-            check_output_size(manifest, width, height)
-        except PluginError as exc:
-            check.errors.append(str(exc))
-        check.branch_cores += manifest.cost_cores(width, height, fps)
-    check.pipeline_cores = pipeline_cores(width, height, fps)
-    check.preview_cores = PREVIEW_CORES
+    manifest = registry.get(active)
+    if manifest is None:
+        check.errors.append(f"active plugin {active!r} does not exist in the registry")
+        return check
+    try:
+        check_output_size(manifest, layer_width, layer_height)
+    except PluginError as exc:
+        check.errors.append(str(exc))
+    check.branch_cores = manifest.cost_cores(layer_width, layer_height, layer_fps)
     check.projected_cores = check.pipeline_cores + check.preview_cores + check.branch_cores
     return check

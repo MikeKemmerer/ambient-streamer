@@ -232,16 +232,16 @@ main {
 .card-line .glyph { color: var(--fg-mute); width: 12px; flex: none; text-align: center; }
 .card-line .val { font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .card-line .val.next { color: var(--fg-mute); }
-.hot-set-bar { margin-top: 8px; align-items: center; }
 .viz-standby { margin-top: 6px; align-items: center; gap: 8px; }
+.viz-opacity { margin-top: 6px; align-items: center; gap: 8px; }
+.viz-opacity input[type="range"] { flex: 1; min-width: 120px; max-width: 280px; }
+.viz-opacity .num { width: 38px; text-align: right; }
 .ptune { margin-top: 6px; }
 .ptune > summary { cursor: pointer; color: var(--fg-dim); }
 .ptune-row { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
 .ptune-label { flex: 0 0 96px; font-size: 12px; color: var(--fg-dim); }
 .ptune-row input[type="range"] { flex: 1; min-width: 0; }
 .ptune-value { flex: 0 0 52px; text-align: right; font-size: 12px; }
-#hot-set-state[data-tone="warn"] { color: var(--warn); }
-#hot-set-state[data-tone="bad"] { color: var(--bad); }
 /* Not a plugin name, so it should not read as one. */
 .card-line .val[data-off="true"] { color: var(--fg-mute); font-style: italic; }
 .card-line .sep { color: var(--fg-mute); flex: none; }
@@ -573,17 +573,21 @@ main {
 .viz-power p { margin: 6px 0 0; }
 .viz-power .vp-state { color: var(--fg-dim); }
 .viz-power[data-enabled="false"] .vp-state { color: #f0c674; }
+.viz-action-state {
+  color: #8ecbf5;
+  background: var(--info-bg);
+  border: 1px solid #1d4d73;
+  border-radius: var(--radius);
+  padding: 5px 7px;
+}
 
 .plugin-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 5px; }
-/* Off: the branches are not in the graph, so the list is a plan, not a control. */
-.plugin-list[data-inert="true"] { opacity: 0.5; filter: saturate(0.35); }
 .plugin {
   display: flex; align-items: flex-start; gap: 8px;
   padding: 6px 8px;
   background: var(--bg-raise); border: 1px solid var(--line); border-radius: var(--radius);
 }
 .plugin[data-active="true"] { border-color: var(--accent); background: var(--info-bg); }
-.plugin[data-hot="false"] { opacity: 0.78; }
 .plugin[data-missing="true"] { opacity: 1; border-color: #7a2c26; background: var(--bad-bg); }
 .plugin .pmeta { flex: 1 1 auto; min-width: 0; }
 .plugin .pname { font-size: 12.5px; }
@@ -651,9 +655,6 @@ dialog input[type="password"], dialog input[type="text"] { width: 100%; }
 .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; margin: 10px 0; }
 .form-grid label { display: flex; flex-direction: column; gap: 3px; font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--fg-mute); }
 .form-grid input, .form-grid select { width: 100%; }
-.hotset { border: 1px solid var(--line); border-radius: var(--radius); padding: 8px 10px; margin: 4px 0 10px; }
-.hotset legend { font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--fg-mute); padding: 0 4px; }
-.hotset div { display: flex; flex-wrap: wrap; gap: 10px; }
 
 .consequence {
   display: flex; align-items: baseline; gap: 8px;

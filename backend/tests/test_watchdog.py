@@ -177,6 +177,21 @@ def test_watchdog_restarts_a_composer_that_exited_zero(repo: Path) -> None:
     assert runtime.restarts == []
 
 
+def test_watchdog_prepares_current_config_before_recovery(repo: Path) -> None:
+    runtime = FakeRuntime(composer=EXITED_OK)
+    prepared: list[str] = []
+    watchdog = Watchdog(
+        workspace=load_workspace(repo),
+        supervisor=runtime,
+        prepare=lambda name: prepared.append(name),
+    )
+
+    asyncio.run(watchdog.poll_once(["lofi"], now=100.0))
+
+    assert prepared == ["lofi"]
+    assert runtime.starts == ["lofi"]
+
+
 def test_watchdog_swaps_a_stalled_but_living_composer(repo: Path) -> None:
     runtime = FakeRuntime(progress=progress_block(5_000_000, 0.44))
     watchdog = make_watchdog(repo, runtime)

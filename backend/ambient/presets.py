@@ -3,7 +3,7 @@
 A preset must never require a restart, so the model simply has no field for
 anything that would: not `hot_set`, not resolution/fps/encoder, not media
 selection. What it can reach is what the escape hatches reach — zmq commands,
-`streamselect`, and the generated lists.
+the isolated visualizer lifecycle, and the generated lists.
 
 Color is emitted as a self-animating `eq`/`hue` expression rather than a
 command stream. Measured: the zmq filter ceilings at ~31.5 commands/s because
@@ -49,12 +49,7 @@ class PresetError(ValueError):
     """The preset is malformed, unknown, or not applicable to this channel."""
 
 
-class NotInHotSet(PresetError):
-    """The preset's visualization is not instantiated on this channel."""
-
-
 class PresetVisualization(StrictModel):
-    # No hot_set: changing it means a new filtergraph, which means a restart.
     active: str
 
 
@@ -359,11 +354,6 @@ def apply_preset(
 
     if preset.visualization is not None:
         active = preset.visualization.active
-        if active not in config.visualization.hot_set:
-            raise NotInHotSet(
-                f"preset {preset.name!r} wants {active!r}, which is not in this "
-                f"channel's hot_set; promoting it would need a restart"
-            )
         if active != config.visualization.active:
             data["visualization"]["active"] = active
             application.visualization = active
@@ -427,7 +417,6 @@ __all__ = [
     "HEX_COLOR",
     "ColorTargets",
     "ColorRamp",
-    "NotInHotSet",
     "Preset",
     "PresetApplication",
     "PresetError",

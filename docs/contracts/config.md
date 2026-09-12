@@ -107,11 +107,8 @@ images:
   fade_seconds: 2.0
 
 visualization:
-  # Off removes the plugin branches, the selector and the composite together. A
-  # live 1080p30 channel measured 0.999x realtime with it off and 0.415x with it
-  # on — it could not keep up at all. It is the largest lever a channel has.
-  # `active` and `hot_set` are kept either way, so switching it back on restores
-  # the same look. Applies on the next start.
+  # Off stops only the restartable visualizer child. The stable compositor keeps
+  # receiving transparent fallback from its framekeeper.
   enabled: true
   # Standby, and the only visualization on/off that is live. `enabled` decides
   # whether the branches exist and needs the graph rebuilt; this rides the
@@ -119,10 +116,12 @@ visualization:
   # running channel without replacing the composer. The branches keep rendering
   # either way, so standby costs what on costs.
   visible: true
+  # Alpha multiplier for the visualization layer. Live: one command to the
+  # stable compositor, with no visualizer or compositor restart.
+  opacity: 0.65
   active: showfreqs-bars
-  # Every plugin in hot_set is instantiated at launch and can be switched to
-  # with no restart. Idle branches are NOT free — roughly 0.28 cores each
-  # at 720p30. This list is a budget, not a wish list. See plugin.md.
+  # Deprecated compatibility field. Accepted for one release, but ignored by
+  # the isolated visualization runtime and capacity planning.
   hot_set: [showfreqs-bars, showwaves-classic, avectorscope-lissajous]
   # Per plugin, so each keeps its own look across a switch. Names and ranges come
   # from the plugin's config.json; values outside a declared range are clamped
@@ -166,8 +165,7 @@ these are hard errors, not warnings:
 | every path in `audio.tracks` / `images.slides` exists and is under `common/` or this channel's directory | a path outside both trees is not mounted into the container and will silently fail to open |
 | globs are validated on their **expanded results**, not the pattern | a pattern is not a path; `**` or a symlinked subdirectory can match outside the intended tree |
 | `audio.tracks` resolves to at least one file | a channel with no audio cannot stream. An empty *glob* is only a warning; an empty *result* is fatal |
-| `visualization.active` ∈ `visualization.hot_set` | you cannot switch to a graph that was not instantiated |
-| every plugin in `hot_set` exists and declares the channel's output size | a size mismatch silently corrupts output — FFmpeg does not check. See plugin.md |
+| `visualization.active` names an installed plugin | the restartable visualizer must have a valid fragment to launch |
 | `bumpers.sources` non-empty when `bumpers.enabled` | otherwise the rotate operator starves |
 | projected core cost + running channels ≤ cores − `reserved_cores` | prevents oversubscribing the host into a stream that cannot hold 1.0x |
 | `CHANNEL_MOUNT` unique across channels | two channels sharing an Icecast mount would fight |
@@ -182,13 +180,14 @@ depends on the field:
 | `audio.tracks` | `playlist.m3u` rewritten; Liquidsoap picks it up. No restart |
 | `images.slides` | `images.list` rewritten; the producer stats it and re-reads. No restart |
 | **file added to a watched folder** | list rewritten automatically. No restart, no config edit |
-| `visualization.active` | `streamselect` command. One frame |
+| `visualization.active` | replace only the isolated visualizer child; compositor unchanged |
 | `visualization.visible` | `overlay@viz enable` command. One frame. Saves nothing — the branches keep rendering |
+| `visualization.opacity` | `lut@vizop y` command. One frame. No process restart |
 | `color.*` | zmq commands. One frame |
 | `images.hold_seconds`, `fade_seconds` | launch-time environment, converted to frame counts once at producer start. **Applies on the next start** |
-| `visualization.enabled` | **requires a compositor restart** — with it off the graph has no branches at all |
-| `visualization.hot_set` | **requires a compositor restart** — the graph is fixed at launch |
-| `visualization.parameters` | **requires a restart** when that plugin is being drawn; otherwise just saved |
+| `visualization.enabled` | start or stop only the isolated visualizer child |
+| `visualization.hot_set` | deprecated compatibility field; preserved and ignored |
+| `visualization.parameters` | replace only the isolated visualizer child when active; otherwise just saved |
 | `resolution` | **requires a compositor restart** |
 | anything in `.env` | requires the container to be recreated |
 
@@ -199,5 +198,6 @@ any bumper field, so the change has no effect at all. See bumpers.md.
 A folder is watched when its channel selected it by glob or by leaving the list
 empty. Explicit lists are not watched — see media-selection.md.
 
-Everything from `images.hold_seconds` down interrupts the stream. All of it goes
-make-before-break; see [on-disk.md](on-disk.md) for what that actually costs.
+Only fields explicitly naming a compositor restart interrupt the stream. The
+isolated visualizer operations above leave the compositor and ingest session
+unchanged; see [visualization-runtime.md](visualization-runtime.md).

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -14,6 +15,8 @@ from ambient.events import (
     WATCHDOG_EVENT,
     EventHub,
 )
+from ambient.api.deps import run_visualizer_action
+from ambient.supervisor import VisualizerAction
 
 
 def run(coro):
@@ -138,3 +141,53 @@ def test_unknown_event_names_are_rejected() -> None:
 
     with pytest.raises(ValueError, match="unknown event name"):
         run(scenario())
+
+
+def test_visualizer_queued_and_superseded_events_have_complete_state() -> None:
+    async def scenario() -> list[dict]:
+        hub = EventHub()
+        state = SimpleNamespace(events=hub)
+
+        async def superseded() -> VisualizerAction:
+            return VisualizerAction("recreate", 7, False, "lofi-visualizer", "")
+
+        async with hub.subscribe() as subscriber:
+            await run_visualizer_action(
+                state,
+                "lofi",
+                superseded(),
+                "recreate",
+                7,
+                event_data={"active": "showwaves-classic"},
+            )
+            return [parse(subscriber.queue.get_nowait())[1] for _ in range(2)]
+
+    queued, superseded = run(scenario())
+    for event in (queued, superseded):
+        assert {"generation", "applied", "error", "detail", "state"} <= event.keys()
+        assert event["generation"] == 7
+        assert event["active"] == "showwaves-classic"
+    assert queued["state"] == "queued"
+    assert superseded["state"] == "superseded"
+    assert superseded["applied"] is False
+
+
+def test_visualizer_failure_event_keeps_the_reserved_generation() -> None:
+    async def scenario() -> dict:
+        hub = EventHub()
+        state = SimpleNamespace(events=hub)
+
+        async def fail() -> None:
+            raise RuntimeError("scripted failure")
+
+        async with hub.subscribe() as subscriber:
+            await run_visualizer_action(state, "lofi", fail(), "start", 11)
+            subscriber.queue.get_nowait()
+            return parse(subscriber.queue.get_nowait())[1]
+
+    failed = run(scenario())
+    assert failed["generation"] == 11
+    assert failed["applied"] is False
+    assert failed["error"] == "visualizer_action_failed"
+    assert failed["detail"] == "scripted failure"
+    assert failed["state"] == "failed"

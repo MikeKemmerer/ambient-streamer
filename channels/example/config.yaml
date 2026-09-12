@@ -37,16 +37,15 @@ images:
   fade_seconds: 2.0
 
 visualization:
+  enabled: true
+  visible: true
+  opacity: 0.65
   active: showfreqs-bars
-
-  # Every plugin listed here is instantiated at launch so it can be switched to
-  # with no restart. Idle branches cost ~0.28 cores each at 720p, so this
-  # is a CPU budget rather than a list of preferences.
-  #
-  # CHANGING hot_set REQUIRES A COMPOSITOR RESTART — the filtergraph is fixed
-  # at launch. Changing `active` does not.
+  # Deprecated compatibility field. The isolated runtime ignores it and runs
+  # only `active` in the restartable visualizer child.
   hot_set:
     - showfreqs-bars
+  parameters: {}
 
 color:
   mode: automatic             # automatic | manual

@@ -241,21 +241,12 @@ selector.
 
 `astreamselect` behaves identically for audio. It is not currently used.
 
-### `blend` — the composite
+### `overlay` and `lut` — the composite
 
-```
-[base][viz]blend=all_mode=screen:all_opacity=0.65
-```
-
-`screen` lightens: black in the visualization is transparent, bright areas add to the image.
-That is what makes a visualiser readable over arbitrary photography without a mask.
-
-Opacity comes from `VIZ_OPACITY` (default `0.65`) and is a **launch-time** value — `blend` is
-not commandable, so changing it needs a new graph. To make a visualiser fade live, drive `eq`
-on the composite instead.
-
-`blend` requires both inputs at the same size. This is the second place a mis-sized plugin
-branch does damage.
+The isolated layer is converted to alpha from its luma by `lut@vizop`, then
+composited with `overlay@viz`. `visualization.opacity` defaults to `0.65` and
+changes live by replacing the `lut` expression over ZMQ. `visible` remains the
+separate one-frame timeline switch on `overlay@viz`.
 
 ### `split` and `scale` — the preview
 

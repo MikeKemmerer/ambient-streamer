@@ -95,20 +95,17 @@ Every path is validated against the two-tree rule in
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/api/plugins` | installed plugins + manifests |
-| PUT | `/api/channels/{name}/visualization` | switch active plugin (must be in `hot_set`) |
+| PUT | `/api/channels/{name}/visualization` | replace the isolated visualizer child with an installed plugin |
+| PUT | `/api/channels/{name}/visualization/opacity` | change layer opacity live, 0 through 1 |
 | GET | `/api/presets` | available presets |
 | POST | `/api/channels/{name}/preset` | apply a preset |
 | PUT | `/api/channels/{name}/color` | set mode and manual colors |
 
-Switching to a plugin **in** `hot_set` returns `200` and switches in one frame.
-
-Switching to an installed plugin **outside** `hot_set` returns `202`: the plugin
-is staged into the running configuration and the channel performs a
-make-before-break restart, which costs a real gap of seconds (see on-disk.md). An
-installed plugin is always *usable* — it simply cannot switch instantly,
-because an FFmpeg filtergraph is fixed at launch and a switchable branch has to
-already be rendering. Callers that will not accept a restart pass
-`?allow_restart=false` and get `409 restart_required` instead.
+Switching to any installed plugin returns `202` while the channel is running:
+only `<channel>-visualizer` is replaced. The program compositor and YouTube
+ingest session remain unchanged; its framekeeper emits transparent fallback
+during the child handoff. A stopped channel records the choice for its next
+start and returns `200`.
 
 A plugin that is not installed at all returns `404 unknown_plugin`.
 
@@ -182,6 +179,10 @@ questions, and only one of them saves anything:
 | `enabled: true, visible: false` | yes | same as on | one frame |
 | `enabled: true, visible: true` | yes | same as on | — |
 
+`PUT /api/channels/{name}/visualization/opacity` with `{"opacity": 0.4}` changes
+the layer alpha on the stable compositor through `lut@vizop`. It lands in one
+frame and does not restart the visualizer child, compositor, or ingest session.
+
 ## Tuning a plugin
 
 `PUT /api/channels/{name}/visualization/parameters` with
@@ -194,16 +195,18 @@ ignores it, and renders the branch wrong at exit 0, so refusing would be the onl
 way an operator learned about it and clamping is the safer failure. An
 *undeclared* name is refused, since it can only be a mistake.
 
-Substituted into the fragment at launch, so this restarts a channel that is
-actually drawing that plugin; tuning one nobody is looking at is just saved.
+Substituted into the fragment at launch. Tuning the active plugin replaces only
+the isolated visualizer child; tuning an inactive plugin is just saved. The
+waveform and vectorscope plugins expose 1–4 pixel thickness through RGB-space
+dilation passes in addition to their filter-native settings.
 
 ## Turning the visualization off
 
 `PATCH /api/channels/{name}` with `{"visualization": {"enabled": false}}`.
 
-Not a live change — the filtergraph is fixed at launch, so it applies on the
-next start. `active` and `hot_set` are deliberately left alone, so switching it
-back on restores the same look.
+Live child control: off stops only `<channel>-visualizer`; on starts it again.
+The stable compositor keeps receiving transparent fallback, and `active` is
+left alone so switching it back on restores the same look.
 
 Off is the largest lever a channel has, because it removes the plugin branches,
 the selector and the alpha composite together. Measured on a live 1080p30

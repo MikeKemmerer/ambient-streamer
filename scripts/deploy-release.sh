@@ -19,7 +19,7 @@ usage() {
 	cat >&2 <<-EOF
 	usage: scripts/deploy-release.sh <release.env> [--backend] [--liquidsoap <channel>]...
 
-	Pulls the release's immutable backend and Liquidsoap images and records their
+	Pulls the release's immutable backend, Liquidsoap, and composer images and records their
 	digest references in the root .env. With no service flags, no container is
 	recreated. --liquidsoap refuses stopped channels and verifies that the
 	composer container ID did not change.
@@ -67,6 +67,7 @@ COMMIT="$(release_value AMBIENT_RELEASE_COMMIT)"
 RELEASE_REPOSITORY="$(release_value AMBIENT_RELEASE_REPOSITORY)"
 BACKEND_IMAGE="$(release_value AMBIENT_BACKEND_IMAGE)"
 LIQUIDSOAP_IMAGE="$(release_value AMBIENT_LIQUIDSOAP_IMAGE)"
+COMPOSER_IMAGE="$(release_value AMBIENT_COMPOSER_IMAGE)"
 
 [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] \
 	|| die "invalid release tag: $TAG"
@@ -79,6 +80,8 @@ RELEASE_OWNER="${RELEASE_OWNER,,}"
 	|| die "invalid backend image digest reference: $BACKEND_IMAGE"
 [[ "$LIQUIDSOAP_IMAGE" =~ ^ghcr\.io/${RELEASE_OWNER}/ambient-streamer-liquidsoap@sha256:[0-9a-f]{64}$ ]] \
 	|| die "invalid Liquidsoap image digest reference: $LIQUIDSOAP_IMAGE"
+[[ "$COMPOSER_IMAGE" =~ ^ghcr\.io/${RELEASE_OWNER}/ambient-streamer-composer@sha256:[0-9a-f]{64}$ ]] \
+	|| die "invalid composer image digest reference: $COMPOSER_IMAGE"
 
 GIT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || true)"
 if [[ "$GIT_ROOT" == "$REPO_ROOT" ]]; then
@@ -104,7 +107,7 @@ for key in ("tag", "commit", "repository"):
 images = data.get("images")
 if not isinstance(images, dict):
     raise SystemExit("invalid images in RELEASE.json")
-for key in ("backend", "liquidsoap"):
+for key in ("backend", "liquidsoap", "composer"):
     value = images.get(key)
     if not isinstance(value, str) or "\n" in value or "\r" in value:
         raise SystemExit(f"invalid {key} image in RELEASE.json")
@@ -113,6 +116,7 @@ print(data["commit"])
 print(data["repository"])
 print(images["backend"])
 print(images["liquidsoap"])
+print(images["composer"])
 PY
 )" || die "could not parse $RELEASE_JSON"
 	mapfile -t ARCHIVE_FIELDS <<< "$archive_identity"
@@ -124,6 +128,8 @@ PY
 		|| die "RELEASE.json backend image does not match release.env"
 	[[ "${ARCHIVE_FIELDS[4]:-}" == "$LIQUIDSOAP_IMAGE" ]] \
 		|| die "RELEASE.json Liquidsoap image does not match release.env"
+	[[ "${ARCHIVE_FIELDS[5]:-}" == "$COMPOSER_IMAGE" ]] \
+		|| die "RELEASE.json composer image does not match release.env"
 fi
 
 command -v docker >/dev/null 2>&1 || die "docker not found"
@@ -166,6 +172,7 @@ fi
 log "pulling $TAG images"
 docker pull "$BACKEND_IMAGE"
 docker pull "$LIQUIDSOAP_IMAGE"
+docker pull "$COMPOSER_IMAGE"
 
 verify_image_identity() {
 	local image="$1" name="$2" revision source
@@ -180,7 +187,8 @@ verify_image_identity() {
 log "verifying image source and revision labels"
 verify_image_identity "$BACKEND_IMAGE" backend
 verify_image_identity "$LIQUIDSOAP_IMAGE" Liquidsoap
-ok "both image identities match $RELEASE_REPOSITORY@$COMMIT"
+verify_image_identity "$COMPOSER_IMAGE" composer
+ok "all image identities match $RELEASE_REPOSITORY@$COMMIT"
 
 log "verifying GitHub build attestations"
 SIGNER_WORKFLOW="${RELEASE_REPOSITORY}/.github/workflows/release.yml"
@@ -188,19 +196,22 @@ gh attestation verify "oci://$BACKEND_IMAGE" --repo "$RELEASE_REPOSITORY" \
 	--signer-workflow "$SIGNER_WORKFLOW" --source-digest "$COMMIT" >/dev/null
 gh attestation verify "oci://$LIQUIDSOAP_IMAGE" --repo "$RELEASE_REPOSITORY" \
 	--signer-workflow "$SIGNER_WORKFLOW" --source-digest "$COMMIT" >/dev/null
-ok "both image attestations verified against $RELEASE_REPOSITORY@$COMMIT"
+gh attestation verify "oci://$COMPOSER_IMAGE" --repo "$RELEASE_REPOSITORY" \
+	--signer-workflow "$SIGNER_WORKFLOW" --source-digest "$COMMIT" >/dev/null
+ok "all image attestations verified against $RELEASE_REPOSITORY@$COMMIT"
 
 # Process environment has higher Compose precedence than root/channel env files.
 # Export the already-validated digests so neither a shell variable nor a
 # channel-local .env can substitute another image during rollout.
 export AMBIENT_BACKEND_IMAGE="$BACKEND_IMAGE"
 export AMBIENT_LIQUIDSOAP_IMAGE="$LIQUIDSOAP_IMAGE"
+export AMBIENT_COMPOSER_IMAGE="$COMPOSER_IMAGE"
 
 umask 077
 TMP_ENV="$(mktemp "${ENV_FILE}.release.XXXXXX")"
 trap 'rm -f "$TMP_ENV"' EXIT
-awk -v backend="$BACKEND_IMAGE" -v liquidsoap="$LIQUIDSOAP_IMAGE" '
-	BEGIN { have_backend = 0; have_liquidsoap = 0 }
+awk -v backend="$BACKEND_IMAGE" -v liquidsoap="$LIQUIDSOAP_IMAGE" -v composer="$COMPOSER_IMAGE" '
+	BEGIN { have_backend = 0; have_liquidsoap = 0; have_composer = 0 }
 	/^AMBIENT_BACKEND_IMAGE=/ {
 		if (!have_backend) print "AMBIENT_BACKEND_IMAGE=" backend
 		have_backend = 1
@@ -211,10 +222,16 @@ awk -v backend="$BACKEND_IMAGE" -v liquidsoap="$LIQUIDSOAP_IMAGE" '
 		have_liquidsoap = 1
 		next
 	}
+	/^AMBIENT_COMPOSER_IMAGE=/ {
+		if (!have_composer) print "AMBIENT_COMPOSER_IMAGE=" composer
+		have_composer = 1
+		next
+	}
 	{ print }
 	END {
 		if (!have_backend) print "AMBIENT_BACKEND_IMAGE=" backend
 		if (!have_liquidsoap) print "AMBIENT_LIQUIDSOAP_IMAGE=" liquidsoap
+		if (!have_composer) print "AMBIENT_COMPOSER_IMAGE=" composer
 	}
 ' "$ENV_FILE" > "$TMP_ENV"
 chmod --reference="$ENV_FILE" "$TMP_ENV"

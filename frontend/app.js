@@ -105,10 +105,6 @@ const state = {
   slides: { saved: [], draft: [], watched: [] },
   // Held apart from the config so the 1 Hz progress render cannot reset the picker.
   resolutionDraft: null,
-  // Same, for the visualization on/off toggle: an unapplied tick must survive a refresh.
-  vizEnabledDraft: null,
-  // Null means "no pending edit"; an array is a staged preloaded set awaiting Apply.
-  hotSetDraft: null,
   // Keyed by plugin name, so tuning one does not discard another's edits.
   paramDraft: {},
   // The channel the delivery form is filled in for; null until its detail lands.
@@ -122,6 +118,11 @@ const state = {
   scheduleRows: [],
   jobs: new Map(),
   configErrors: new Map(),
+  vizActions: new Map(),
+  vizGenerations: new Map(),
+  vizCompletions: new Map(),
+  vizPowerDesired: new Map(),
+  vizPowerRequests: new Set(),
   booted: false,
 };
 
@@ -389,11 +390,6 @@ function config(name) {
   return detail.config && typeof detail.config === 'object' ? detail.config : detail;
 }
 
-function hotSet(name) {
-  const viz = config(name).visualization;
-  return Array.isArray(viz && viz.hot_set) ? viz.hot_set : [];
-}
-
 /**
  * Absent means on: an older config that predates the switch still draws. Read from
  * the config rather than the status field, which lags a save by one refresh and
@@ -402,6 +398,43 @@ function hotSet(name) {
 function vizEnabled(name) {
   const viz = config(name).visualization || {};
   return viz.enabled !== false;
+}
+
+function channelIsRunning(name) {
+  return ['starting', 'running', 'degraded'].includes((state.channels.get(name) || {}).state);
+}
+
+function responseGeneration(result) {
+  const generation = Number(result && result.generation);
+  return Number.isInteger(generation) && generation > 0 ? generation : null;
+}
+
+function queueVizCompletion(name, result, action) {
+  const generation = responseGeneration(result);
+  if (generation === null) return false;
+  const latest = state.vizGenerations.get(name) || 0;
+  if (generation < latest) return true;
+  state.vizGenerations.set(name, generation);
+  state.vizActions.set(name, { ...action, generation, state: 'queued' });
+  const key = `${name}:${generation}`;
+  const completion = state.vizCompletions.get(key);
+  if (completion) {
+    state.vizCompletions.delete(key);
+    queueMicrotask(() => handleVisualizationEvent(name, completion));
+  }
+  if (state.selected === name) renderLookTab();
+  return true;
+}
+
+function renderVizActionState() {
+  const note = $('viz-action-state');
+  if (!note) return;
+  const pending = state.vizActions.get(state.selected);
+  note.hidden = !pending;
+  note.dataset.tone = pending && pending.state === 'failed' ? 'bad' : 'info';
+  note.textContent = pending
+    ? `${pending.label} · generation ${pending.generation} · ${pending.state}`
+    : '';
 }
 
 // --------------------------------------------------------------------------
@@ -452,8 +485,6 @@ function selectChannel(name) {
   stopSoundPreview();
   state.soundboard = { clips: [], selected: null };
   state.resolutionDraft = null;
-  state.vizEnabledDraft = null;
-  state.hotSetDraft = null;
   state.paramDraft = {};
   resetDeliveryForm();
   renderDetail();
@@ -529,6 +560,10 @@ function renderDetail() {
 }
 
 function renderOverview(ch, cfg) {
+  const running = channelIsRunning(state.selected);
+  const heading = $('onair-heading');
+  if (heading) heading.textContent = running ? 'Now on air' : 'Configured content';
+  $('btn-preview-start').disabled = !running;
   // The status field reports the selected plugin whether or not it is being drawn.
   const vizOff = state.selected && !vizEnabled(state.selected);
   renderKv($('onair-kv'), [
@@ -1387,6 +1422,7 @@ function summarize(kind, stored) {
   const dirs = watchedDirs(kind);
   const targets = [...new Set(stored.map((entry) => entry.target))];
   const live = targets.filter((target) => dirs.some((dir) => target === dir || target.startsWith(dir)));
+  const running = channelIsRunning(state.selected);
   const noun = stored.length === 1 ? UPLOAD[kind].noun : `${UPLOAD[kind].noun}s`;
   const where = `${stored.length} ${noun} stored in ${targets.join(', ')}.`;
 
@@ -1395,15 +1431,21 @@ function summarize(kind, stored) {
   if (stored.some((entry) => entry.destination === 'channel' && entry.channel !== state.selected)) return where;
 
   if (live.length === targets.length) {
-    return `${where} That folder is directory-watched for this channel, so the upload is already `
-      + 'live \u2014 the list was rewritten in place and there is nothing further to save.';
+    return running
+      ? `${where} That folder is directory-watched for this channel, so the upload is already `
+        + 'live \u2014 the list was rewritten in place and there is nothing further to save.'
+      : `${where} That folder is directory-watched, so it is ready for the next channel start `
+        + 'and there is nothing further to save.';
   }
   if (!live.length) {
     return `${where} This channel selects ${kind === 'audio' ? 'tracks' : 'slides'} explicitly, so `
       + 'nothing changes on air until you add them on the left and Save.';
   }
-  return `${where} Some of it landed in a watched folder and is already live; the rest needs adding `
-    + 'on the left and saving.';
+  return running
+    ? `${where} Some of it landed in a watched folder and is already live; the rest needs adding `
+      + 'on the left and saving.'
+    : `${where} Some of it landed in a watched folder and is ready for the next start; the rest `
+      + 'needs adding on the left and saving.';
 }
 
 async function finishBatch(kind) {
@@ -1499,50 +1541,40 @@ function renderLookTab() {
   if (!name) return;
   const cfg = config(name);
   const active = (state.channels.get(name) || {}).visualization || (cfg.visualization || {}).active || '';
-  const hot = hotSet(name);
-  const live = (state.channels.get(name) || {}).state !== 'stopped';
   const enabled = vizEnabled(name);
+  const running = channelIsRunning(name);
+  const pending = state.vizActions.get(name);
 
   syncVizPower();
+  renderVizActionState();
 
   const list = $('plugin-list');
   clear(list);
-  list.dataset.inert = String(!enabled);
-  const draftHot = state.hotSetDraft || hot;
+  if (!state.plugins.length) list.append(el('li', { class: 'muted small', text: 'no plugins reported' }));
 
-  const known = new Set(state.plugins.map((p) => p.name));
-  const rows = [...state.plugins];
-  // A preloaded plugin the backend does not report as installed is the one genuinely
-  // broken case here: the graph names a branch that cannot be built.
-  for (const plugin of hot) if (!known.has(plugin)) rows.push({ name: plugin, display_name: plugin, missing: true });
-
-  if (!rows.length) list.append(el('li', { class: 'muted small', text: 'no plugins reported' }));
-
-  for (const plugin of rows) {
-    const isHot = hot.includes(plugin.name);
+  for (const plugin of state.plugins) {
     const isActive = plugin.name === active;
-    const missing = Boolean(plugin.missing) || plugin.available === false;
+    const missing = plugin.available === false;
     const cost = plugin.cost && typeof plugin.cost.cores_720p30 === 'number'
       ? `${plugin.cost.cores_720p30.toFixed(2)} cores @720p30`
       : '';
 
-    const tag = !enabled
-      ? { tone: 'warn', text: 'not rendering' }
-      : missing
+    const pluginPending = pending && pending.plugin === plugin.name;
+    const tag = missing
         ? { tone: 'bad', text: 'not installed' }
-        : isHot
-          ? { tone: 'ok', text: 'live switch' }
-          : { tone: 'warn', text: live ? 'restart required' : 'on next start' };
+        : pluginPending
+          ? { tone: 'info', text: pending.state }
+        : isActive
+          ? { tone: enabled && running ? 'ok' : 'info', text: enabled && running ? 'active' : 'selected' }
+          : { tone: 'idle', text: 'installed' };
 
-    const where = !enabled
-      ? (isHot ? 'preloaded \u2014 costs nothing while the visualization is off' : 'installed, not preloaded')
-      : missing
-        ? 'preloaded but not installed \u2014 this channel cannot build that branch'
-        : isHot
-          ? `preloaded \u00B7 live switch${cost ? ` \u00B7 ${cost}` : ''}`
-          : `installed, restart required${cost ? ` \u00B7 ${cost}` : ''}`;
+    const where = missing
+      ? 'reported unavailable by the control plane'
+      : `${isActive
+          ? running && enabled ? 'active visualization' : 'selected for the next start'
+          : running ? 'available for live switching' : 'available; switching applies on the next start'}${cost ? ` \u00B7 ${cost}` : ''}`;
 
-    list.append(el('li', { class: 'plugin', dataset: { hot: String(isHot), active: String(isActive), missing: String(missing && enabled) } }, [
+    list.append(el('li', { class: 'plugin', dataset: { active: String(isActive), missing: String(missing) } }, [
       el('div', { class: 'pmeta' }, [
         el('div', { class: 'pname' }, [
           plugin.display_name || plugin.name,
@@ -1553,37 +1585,18 @@ function renderLookTab() {
         pluginTuner(plugin),
       ]),
       el('div', { class: 'pactions' }, [
-        // Hot set membership is the CPU budget, and switching a plugin in can only
-        // ever grow it, so removal has to be explicit rather than implied.
-        el('label', {
-          class: 'inline small',
-          title: missing
-            ? 'not installed, so it cannot be instantiated'
-            : isActive
-              ? 'on air \u2014 switch to another plugin before dropping this one'
-              : 'instantiate this branch at launch so it can be switched to instantly',
-        }, [
-          el('input', {
-            type: 'checkbox',
-            checked: draftHot.includes(plugin.name),
-            disabled: missing || isActive,
-            onchange: (event) => toggleHotSet(plugin.name, event.target.checked),
-          }),
-          'preload',
-        ]),
         el('span', { class: 'chip', dataset: { tone: tag.tone }, text: tag.text }),
         isActive
-          ? el('span', { class: 'chip', dataset: { tone: 'info' }, text: enabled ? 'on air' : 'selected' })
+          ? null
           : el('button', {
               type: 'button',
-              disabled: missing || !enabled || (live && !isHot),
-              title: !enabled
-                ? 'The visualization is off; switch it on to change what renders.'
-                : live && !isHot
-                  ? 'Stop the channel or preload this branch during planned maintenance.'
-                  : '',
-              text: live && !isHot ? 'Not preloaded' : 'Switch',
-              onclick: () => switchVisualization(plugin.name, isHot || !live),
+              disabled: missing,
+              'aria-label': `Switch visualization to ${plugin.display_name || plugin.name}`,
+              title: missing
+                ? 'This plugin is not available on the control plane.'
+                : running ? 'Replace only the visualizer child.' : 'Save this visualization for the next start.',
+              text: 'Switch',
+              onclick: () => switchVisualization(plugin.name),
             }),
       ]),
     ]));
@@ -1591,8 +1604,8 @@ function renderLookTab() {
 
   const color = cfg.color || {};
   const manual = color.manual || {};
-  syncHotSet();
   syncVizVisible();
+  syncVizOpacity();
   for (const radio of document.querySelectorAll('input[name="color-mode"]')) {
     radio.checked = radio.value === (color.mode || 'automatic');
   }
@@ -1623,81 +1636,112 @@ function showPresetDescription() {
   $('preset-description').textContent = preset ? preset.description || '' : '';
 }
 
-/**
- * The on/off switch above the plugin list. Off is the cheapest a channel can be —
- * a live 1080p30 channel held 0.999x realtime without it and only 0.415x with it —
- * and it is not a live change, so it follows the resolution card's dirty-then-Apply
- * shape rather than firing on the tick.
- */
 function syncVizPower() {
   const name = state.selected;
   const box = $('viz-enabled');
-  const apply = $('btn-viz-apply');
-  const chip = $('viz-cores');
   const note = $('viz-power-state');
   note.className = 'small vp-state';
 
   if (!name) {
     box.checked = true;
-    apply.disabled = true;
-    chip.hidden = true;
+    box.disabled = true;
     note.textContent = '';
     return;
   }
 
   const saved = vizEnabled(name);
-  const shown = state.vizEnabledDraft === null ? saved : state.vizEnabledDraft;
-  if (document.activeElement !== box) box.checked = shown;
-  apply.disabled = shown === saved;
-  $('viz-power').dataset.enabled = String(shown);
+  const desired = state.vizPowerDesired.has(name) ? state.vizPowerDesired.get(name) : saved;
+  const pending = state.vizActions.get(name);
+  const running = channelIsRunning(name);
+  if (document.activeElement !== box) box.checked = desired;
+  box.disabled = false;
+  $('viz-power').dataset.enabled = String(desired);
 
-  const projected = (state.details.get(name) || {}).projected_cores;
-  chip.hidden = typeof projected !== 'number';
-  if (typeof projected === 'number') chip.textContent = `projects ${projected.toFixed(2)} cores`;
+  const mode = $('viz-power-mode');
+  if (mode) {
+    mode.textContent = running ? 'live child control' : 'applies next start';
+    mode.dataset.tone = running ? 'ok' : 'info';
+  }
+  const description = $('viz-power-description');
+  if (description) {
+    description.textContent = running
+      ? 'On starts the selected visualizer child; off stops only that child. The framekeeper supplies a transparent fallback throughout, so the compositor and stream continue without a restart. The selected plugin is remembered while off.'
+      : 'Choose whether the selected visualizer starts with the channel. This setting is saved now and applies on the next start.';
+  }
+
+  if (pending && pending.kind === 'power') {
+    note.textContent = `${desired ? 'On' : 'Off'} requested. Waiting for generation ${pending.generation} to finish.`;
+    return;
+  }
 
   const active = (config(name).visualization || {}).active || '';
-  const running = (state.channels.get(name) || {}).state !== 'stopped';
-
-  if (shown !== saved) {
-    const when = running
-      ? 'the channel is running, so it takes effect when you restart it'
-      : 'it takes effect on the next start';
-    note.textContent = shown
-      ? `Not applied. Apply puts the branches back in the graph \u2014 ${when}.`
-      : `Not applied. Apply keeps ${active || 'the current plugin'} selected and stops rendering it `
-        + `\u2014 ${when}.`;
+  if (!desired) {
+    note.textContent = running
+      ? `Off. ${active || 'The selected visualization'} is remembered; switching on starts only its visualizer child.`
+      : `Off. ${active || 'The selected visualization'} is remembered for the next start.`;
     return;
   }
-  if (!saved) {
-    note.textContent = `Off. The list below is what will come back, not what is on air — `
-      + `${active || 'the selected plugin'} is still chosen and returns unchanged when this is `
-      + 'switched on.';
-    return;
-  }
-  note.textContent = '';
+  note.textContent = running
+    ? 'On. The selected visualizer child is running independently of the compositor.'
+    : 'On. The selected visualizer child will start with the channel.';
 }
 
-async function applyVizEnabled() {
+async function applyVizEnabled(target) {
   const name = state.selected;
-  if (!name || state.vizEnabledDraft === null) return;
-  const target = state.vizEnabledDraft;
-  if (target === vizEnabled(name)) return;
+  if (!name) return;
+  state.vizPowerDesired.set(name, target);
+  syncVizPower();
+  drainVizPower(name);
+}
 
-  const running = (state.channels.get(name) || {}).state !== 'stopped';
-  const result = await guard(`visualization ${target ? 'on' : 'off'}`,
-    () => api.setVisualizationEnabled(name, target));
-  if (result === undefined) return;
+async function drainVizPower(name) {
+  if (state.vizPowerRequests.has(name)) return;
+  state.vizPowerRequests.add(name);
+  try {
+    while (state.vizPowerDesired.has(name)) {
+      const target = state.vizPowerDesired.get(name);
+      if (target === vizEnabled(name)) break;
 
-  toast('ok', `visualization ${target ? 'on' : 'off'}`,
-    running ? 'saved \u2014 restart the channel to put it on air' : 'saved \u2014 applies on the next start');
-  state.vizEnabledDraft = null;
-  await loadChannelDetail(name);
-  scheduleRefresh();
+      let result;
+      try {
+        result = await api.setVisualizationEnabled(name, target);
+      } catch (err) {
+        report(`visualization ${target ? 'on' : 'off'}`, err);
+        state.vizPowerDesired.set(name, vizEnabled(name));
+        break;
+      }
+
+      const cfg = config(name);
+      cfg.visualization = { ...(cfg.visualization || {}), enabled: target };
+      state.channels.set(name, {
+        ...(state.channels.get(name) || { name }),
+        visualization_enabled: target,
+      });
+
+      const queued = queueVizCompletion(name, result, {
+        kind: 'power',
+        target,
+        label: `visualization ${target ? 'on' : 'off'}`,
+        success: target
+          ? 'visualizer child started; compositor and stream unchanged'
+          : 'visualizer child stopped; compositor and stream unchanged',
+      });
+      if (!queued) {
+        toast('ok', `visualization ${target ? 'on' : 'off'}`,
+          `saved \u2014 visualizer will ${target ? 'start' : 'stay off'} on the next channel start`);
+      }
+      if (state.selected === name) renderLookTab();
+      updateCard(name);
+    }
+  } finally {
+    state.vizPowerRequests.delete(name);
+    if (state.vizPowerDesired.get(name) !== vizEnabled(name)) drainVizPower(name);
+  }
 }
 
 /**
- * A plugin's own knobs. Substituted into its fragment at launch, so applying
- * them rebuilds the graph — staged behind a button rather than fired per drag.
+ * A plugin's own knobs. Applying settings to the active plugin replaces only
+ * the isolated visualizer child, so changes remain staged behind a button.
  */
 function pluginTuner(plugin) {
   const specs = Array.isArray(plugin.parameters) ? plugin.parameters : [];
@@ -1754,7 +1798,11 @@ function pluginTuner(plugin) {
     el('div', { class: 'row' }, [
       el('span', {
         class: 'small muted',
-        text: dirty ? 'Applies by rebuilding the branch.' : '',
+        text: dirty
+          ? channelIsRunning(name) && (config(name).visualization || {}).active === plugin.name
+            ? 'Apply restarts only the active visualizer child; the compositor and stream continue.'
+            : 'Apply saves these settings for the next time this visualization starts.'
+          : '',
       }),
       el('span', { class: 'spacer' }),
       el('button', {
@@ -1780,96 +1828,31 @@ async function applyParameters(plugin, specs) {
   }
 
   const result = await guard(`tune ${plugin.name}`,
-    () => api.setPluginParameters(name, plugin.name, values), 'accepted');
+    () => api.setPluginParameters(name, plugin.name, values));
   if (result === undefined) return;
 
   delete state.paramDraft[plugin.name];
-  toast('ok', plugin.display_name || plugin.name, result.detail || 'saved');
-  await loadChannelDetail(name);
-  scheduleRefresh();
-}
-
-/** Preloaded membership is a CPU budget, so it is staged and applied, never live per click. */
-function toggleHotSet(plugin, wanted) {
-  const current = state.hotSetDraft || hotSet(state.selected);
-  const next = wanted
-    ? [...current, plugin]
-    : current.filter((p) => p !== plugin);
-  state.hotSetDraft = next;
-  renderLookTab();
-}
-
-function estimateHotSetCores(names) {
-  const scale = { '480p': 0.6, '720p': 1.0, '1080p': 1.9, '1440p': 3.4, '2160p': 7.6 };
-  const factor = scale[resolutionOf(state.selected)] || 1;
-  let cores = 0;
-  for (const name of names) {
-    const plugin = state.plugins.find((p) => p.name === name);
-    cores += (plugin && plugin.cost ? plugin.cost.cores_720p30 : 0.28) * factor;
+  const active = (config(name).visualization || {}).active === plugin.name;
+  const running = channelIsRunning(name);
+  const queued = queueVizCompletion(name, result, {
+    kind: 'parameters',
+    plugin: plugin.name,
+    label: `${plugin.display_name || plugin.name} settings`,
+    success: 'settings applied; visualizer child restarted, compositor and stream unchanged',
+  });
+  if (!queued) {
+    toast('ok', plugin.display_name || plugin.name,
+      active && running && vizEnabled(name)
+        ? 'settings applied'
+        : 'settings saved for the next time this visualization starts');
   }
-  return cores;
-}
-
-function syncHotSet() {
-  const name = state.selected;
-  const saved = hotSet(name);
-  const draft = state.hotSetDraft || saved;
-  const dirty = draft.length !== saved.length || draft.some((p) => !saved.includes(p));
-  const note = $('hot-set-state');
-  const chip = $('hot-set-cores');
-
-  const running = (state.channels.get(name) || {}).state !== 'stopped';
-  $('btn-hot-set-apply').disabled = !dirty || !draft.length || running;
-  $('btn-hot-set-revert').disabled = !dirty;
-
-  if (!draft.length) {
-    note.textContent = 'A channel needs at least one branch. Switch the visualization off instead '
-      + 'of emptying the preloaded set.';
-    note.dataset.tone = 'bad';
-    chip.hidden = true;
-    return;
-  }
-  if (!dirty) {
-    note.textContent = '';
-    note.dataset.tone = '';
-    chip.hidden = true;
-    return;
-  }
-
-  const delta = estimateHotSetCores(draft) - estimateHotSetCores(saved);
-  chip.hidden = false;
-  chip.textContent = `${delta >= 0 ? '+' : ''}${delta.toFixed(2)} cores`;
-  chip.dataset.tone = delta > 0 ? 'warn' : 'ok';
-  note.dataset.tone = 'warn';
-  note.textContent = vizEnabled(name) && running
-    ? 'Not applied. Stop the channel before changing preloaded branches; this release will not '
-      + 'restart the compositor from this panel.'
-    : 'Not applied. Applies on the next start; nothing is drawing these branches right now.';
-}
-
-async function applyHotSet() {
-  const name = state.selected;
-  const draft = state.hotSetDraft;
-  if (!name || !draft || !draft.length) return;
-
-  const active = (config(name).visualization || {}).active;
-  const body = { hot_set: draft };
-  // Dropping the branch on air needs a replacement named, or the backend refuses.
-  if (!draft.includes(active)) body.active = draft[0];
-
-  const result = await guard('preloaded set', () => api.setHotSet(name, body), 'accepted');
-  if (result === undefined) return;
-
-  state.hotSetDraft = null;
-  toast('ok', 'preloaded set', result.detail || 'saved');
   await loadChannelDetail(name);
   scheduleRefresh();
 }
 
 /**
- * Standby. The only visualization on/off that is live: it rides the overlay's
- * timeline `enable`, so it costs one frame instead of a restart. The branches
- * keep rendering, so this saves nothing — `enabled` is the one that does.
+ * Standby rides the compositor overlay's timeline `enable`, so it lands in one
+ * frame. The visualizer child keeps rendering; `enabled` is what stops it.
  */
 function syncVizVisible() {
   const name = state.selected;
@@ -1877,13 +1860,23 @@ function syncVizVisible() {
   const note = $('viz-visible-note');
   const built = vizEnabled(name);
   const visible = (config(name).visualization || {}).visible !== false;
+  const running = channelIsRunning(name);
 
   $('viz-standby').hidden = !built;
   if (document.activeElement !== box) box.checked = visible;
   box.disabled = !built;
+  const label = $('viz-visible-label');
+  if (label) label.textContent = running ? 'showing on air' : 'show on next start';
+  const mode = $('viz-visible-mode');
+  if (mode) {
+    mode.textContent = running ? 'live · one frame' : 'applies next start';
+    mode.dataset.tone = running ? 'ok' : 'info';
+  }
   note.textContent = visible
     ? ''
-    : 'On standby: the branches are still rendering and still costing cores.';
+    : running
+      ? 'On standby: the visualizer child is still rendering and using CPU.'
+      : 'Hidden when the channel next starts.';
 }
 
 async function applyVizVisible(visible) {
@@ -1898,49 +1891,75 @@ async function applyVizVisible(visible) {
   await loadChannelDetail(name);
 }
 
-async function switchVisualization(plugin, instant) {
+
+function syncVizOpacity() {
+  const name = state.selected;
+  const slider = $('viz-opacity');
+  const value = $('viz-opacity-value');
+  const opacity = Number((config(name).visualization || {}).opacity ?? 0.65);
+  const percent = Math.round(Math.max(0, Math.min(1, opacity)) * 100);
+  if (document.activeElement !== slider) slider.value = String(percent);
+  value.textContent = `${slider.value}%`;
+  const mode = $('viz-opacity-mode');
+  if (mode) {
+    const running = channelIsRunning(name);
+    mode.textContent = running ? 'live · one frame' : 'applies next start';
+  }
+  const description = $('viz-switch-description');
+  if (description) {
+    description.textContent = channelIsRunning(name)
+      ? 'Every installed plugin can switch while the channel runs. Switching replaces only the visualizer child; the compositor PID and YouTube ingest session stay unchanged while the framekeeper supplies transparent fallback during the handoff.'
+      : 'Choose any installed plugin for the next start. The saved selection does not start a stopped channel.';
+  }
+}
+
+
+async function applyVizOpacity() {
   const name = state.selected;
   if (!name) return;
-  const live = (state.channels.get(name) || {}).state !== 'stopped';
+  const opacity = Number($('viz-opacity').value) / 100;
+  const result = await guard(
+    'visualization opacity', () => api.setVisualizationOpacity(name, opacity), 'accepted');
+  if (result === undefined) {
+    await loadChannelDetail(name);
+    return;
+  }
+  const cfg = config(name);
+  cfg.visualization = { ...(cfg.visualization || {}), opacity };
+  $('viz-opacity-value').textContent = `${Math.round(opacity * 100)}%`;
+  toast('ok', 'visualization opacity', result.detail || 'saved');
+}
+
+
+async function switchVisualization(plugin) {
+  const name = state.selected;
+  if (!name) return;
+  const live = channelIsRunning(name);
+  const enabled = vizEnabled(name);
   const error = $('viz-error');
   error.hidden = true;
 
-  if (!instant) {
-    const label = (state.plugins.find((p) => p.name === plugin) || {}).display_name || plugin;
-    const ok = await confirmRestart({
-      title: `Switch ${name} to ${label}?`,
-      body: `${label} is installed but is not preloaded for this channel, so its branch was never `
-        + 'built. An FFmpeg filtergraph is fixed at launch, so there is nothing running to cut to.',
-      cost: 'The channel restarts make-before-break: roughly a 1s gap on air, and a new YouTube '
-        + 'ingest session.',
-      note: 'To make this switch instant in future, preload the plugin \u2014 at the cost of '
-        + 'about 0.28 cores per idle branch at 720p, measured, whether or not it is on screen.',
-      okText: 'Restart and switch',
-    });
-    if (!ok) return;
-  }
-
   try {
-    await api.setVisualization(name, plugin, !live);
-    if (!instant) {
-      toast('warn', 'visualization', `${plugin} \u2014 staged; the channel is restarting`);
-      scheduleRefresh(800);
-    } else if (live) {
-      toast('ok', 'visualization', `${plugin} \u2014 switched on the running graph`);
-    } else {
+    const result = await api.setVisualization(name, plugin);
+    const cfg = config(name);
+    cfg.visualization = { ...(cfg.visualization || {}), active: plugin };
+    state.channels.set(name, { ...(state.channels.get(name) || { name }), visualization: plugin });
+    updateCard(name);
+    const display = (state.plugins.find((entry) => entry.name === plugin) || {}).display_name || plugin;
+    const queued = queueVizCompletion(name, result, {
+      kind: 'switch',
+      plugin,
+      label: `switch to ${display}`,
+      success: `${display} applied; visualizer replaced live; compositor and stream unchanged`,
+    });
+    if (!queued && live && !enabled) {
+      toast('ok', 'visualization', `${plugin} selected; visualizer remains off`);
+    } else if (!queued) {
       toast('ok', 'visualization', `${plugin} \u2014 will be on air at the next start`);
-      scheduleRefresh(400);
     }
+    renderLookTab();
+    scheduleRefresh(400);
   } catch (err) {
-    if (err instanceof ApiError && err.error === 'not_in_hot_set') {
-      error.hidden = false;
-      error.textContent =
-        `The control plane refused to switch to “${plugin}”: it is not preloaded for this channel, `
-        + 'and this build of the API will not stage a restart for you. Preload it and restart '
-        + 'the channel deliberately.';
-      toast('warn', 'not preloaded', plugin);
-      return;
-    }
     report('visualization', err);
   }
 }
@@ -1968,14 +1987,6 @@ async function applyPreset() {
     toast('ok', 'preset', preset);
     loadChannelDetail(name);
   } catch (err) {
-    if (err instanceof ApiError && err.error === 'not_in_hot_set') {
-      error.hidden = false;
-      error.textContent =
-        `Preset “${preset}” selects a visualization outside this channel's preloaded set, so it was rejected ` +
-        'rather than silently promoted. Preload that plugin during planned maintenance first.';
-      toast('warn', 'not preloaded', preset);
-      return;
-    }
     report('preset', err);
   }
 }
@@ -2206,7 +2217,13 @@ function setStreamState(status) {
   pill.dataset.tone = STREAM_TONE[status] || 'idle';
   if (status === 'connected') {
     // No event log exists upstream, so a reconnect re-reads rather than replays.
+    state.vizActions.clear();
+    state.vizGenerations.clear();
+    state.vizCompletions.clear();
+    state.vizPowerRequests.clear();
+    state.vizPowerDesired.clear();
     refreshChannels();
+    if (state.selected) loadChannelDetail(state.selected);
   }
   if (status === 'unauthorized') openTokenDialog('The event stream rejected that token.');
 }
@@ -2256,9 +2273,7 @@ function handleEvent(name, payload) {
       mergeStatus(channel, { current_slide: data.current_slide || data.slide });
       break;
     case 'channel.visualization':
-      mergeStatus(channel, { visualization: data.visualization || data.active });
-      if (state.selected === channel) renderLookTab();
-      logEvent({ tone: 'info', channel, at: data.at, text: `visualization ${data.visualization || data.active || ''}` });
+      handleVisualizationEvent(channel, data);
       break;
     case 'watchdog.event':
       logEvent({
@@ -2281,6 +2296,66 @@ function handleEvent(name, payload) {
     default:
       logEvent({ tone: 'idle', channel, at: data.at, text: `${name} ${describe(data, [])}` });
   }
+}
+
+function handleVisualizationEvent(channel, data) {
+  const generation = Number(data.generation);
+  const hasGeneration = Number.isInteger(generation) && generation > 0;
+  const latest = state.vizGenerations.get(channel) || 0;
+  if (hasGeneration && generation < latest) return;
+  if (hasGeneration && generation > latest) state.vizGenerations.set(channel, generation);
+
+  const active = data.visualization || data.active;
+  if (active) mergeStatus(channel, { visualization: active });
+  const enabled = data.visualization_enabled !== undefined
+    ? data.visualization_enabled
+    : data.enabled;
+  if (enabled !== undefined) mergeStatus(channel, { visualization_enabled: enabled });
+  const cfg = config(channel);
+  if (cfg.visualization) {
+    if (active) cfg.visualization.active = active;
+    if (enabled !== undefined) cfg.visualization.enabled = enabled;
+    if (data.visible !== undefined) cfg.visualization.visible = data.visible;
+    if (data.opacity !== undefined) cfg.visualization.opacity = data.opacity;
+  }
+
+  const pending = state.vizActions.get(channel);
+  const matches = pending && hasGeneration && generation === pending.generation;
+  const eventState = String(data.state || '').toLowerCase();
+  const failed = Boolean(data.error) || ['error', 'failed', 'failure'].includes(eventState);
+  const succeeded = data.applied === true
+    || ['applied', 'complete', 'completed', 'succeeded', 'success'].includes(eventState);
+  const terminal = failed || succeeded
+    || ['superseded', 'canceled', 'cancelled'].includes(eventState);
+  if (matches) {
+    if (terminal) {
+      state.vizActions.delete(channel);
+      if (failed) {
+        toast('bad', pending.label, data.detail || data.error || 'visualizer action failed');
+      } else if (succeeded) {
+        toast('ok', pending.label, data.detail || pending.success);
+      }
+      scheduleRefresh();
+    } else {
+      pending.state = eventState || 'pending';
+    }
+  } else if (hasGeneration && terminal) {
+    state.vizCompletions.set(`${channel}:${generation}`, data);
+    for (const key of state.vizCompletions.keys()) {
+      const [savedChannel, savedGeneration] = key.split(':');
+      if (savedChannel === channel && Number(savedGeneration) < generation) {
+        state.vizCompletions.delete(key);
+      }
+    }
+  }
+
+  if (state.selected === channel) renderLookTab();
+  logEvent({
+    tone: data.error ? 'bad' : data.applied === true ? 'ok' : 'info',
+    channel,
+    at: data.at,
+    text: data.detail || `visualization ${active || data.action || data.state || ''}`,
+  });
 }
 
 function describe(data, keys) {
@@ -2391,17 +2466,9 @@ function confirmRestart({ title, body, cost, note, okText }) {
 
 function openCreateDialog() {
   const viz = $('create-viz');
-  const hotset = $('create-hotset');
   clear(viz);
-  clear(hotset);
   for (const plugin of state.plugins) {
     viz.append(el('option', { value: plugin.name, text: plugin.display_name || plugin.name }));
-    const box = el('input', { type: 'checkbox', value: plugin.name });
-    box.checked = state.plugins.indexOf(plugin) === 0;
-    hotset.append(el('label', { class: 'inline' }, [box, plugin.name]));
-  }
-  if (!state.plugins.length) {
-    hotset.append(el('span', { class: 'muted small', text: 'no plugins reported by /api/plugins' }));
   }
   $('create-error').hidden = true;
   $('create-dialog').showModal();
@@ -2410,8 +2477,6 @@ function openCreateDialog() {
 async function submitCreate() {
   const name = $('create-name').value.trim();
   const active = $('create-viz').value;
-  const hot = [...$('create-hotset').querySelectorAll('input:checked')].map((box) => box.value);
-  if (active && !hot.includes(active)) hot.push(active);
 
   const body = {
     name,
@@ -2419,7 +2484,7 @@ async function submitCreate() {
     resolution: $('create-resolution').value,
     fps: Number($('create-fps').value),
     encoder: $('create-encoder').value,
-    visualization: { active, hot_set: hot },
+    visualization: { enabled: true, active },
   };
 
   try {
@@ -2503,11 +2568,7 @@ function wire() {
     syncResolution();
   });
   $('btn-resolution-apply').addEventListener('click', () => applyResolution());
-  $('viz-enabled').addEventListener('change', (event) => {
-    state.vizEnabledDraft = event.target.checked;
-    syncVizPower();
-  });
-  $('btn-viz-apply').addEventListener('click', () => applyVizEnabled());
+  $('viz-enabled').addEventListener('change', (event) => applyVizEnabled(event.target.checked));
 
   for (const id of DELIVERY_INPUTS) {
     $(id).addEventListener('input', () => syncDelivery());
@@ -2524,12 +2585,11 @@ function wire() {
     if (state.selected) preview.start(state.selected);
   });
   $('btn-preview-stop').addEventListener('click', () => preview.stop());
-  $('btn-hot-set-apply').addEventListener('click', () => applyHotSet());
   $('viz-visible').addEventListener('change', (event) => applyVizVisible(event.target.checked));
-  $('btn-hot-set-revert').addEventListener('click', () => {
-    state.hotSetDraft = null;
-    renderLookTab();
+  $('viz-opacity').addEventListener('input', (event) => {
+    $('viz-opacity-value').textContent = `${event.target.value}%`;
   });
+  $('viz-opacity').addEventListener('change', () => applyVizOpacity());
   $('preview-audio').addEventListener('change', (event) => preview.setAudio(event.target.checked));
   $('preview-video').addEventListener('click', () => $('preview-video').play().catch(() => {}));
 

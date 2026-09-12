@@ -46,7 +46,7 @@ Because only size is unguarded, the backend validates it before launch.
 
 ## Required tail
 
-Every branch ends:
+Every visualizer output ends:
 
 ```
 ,fps=$OUT_FPS,format=yuv420p,setsar=1
@@ -68,8 +68,8 @@ Placeholders are substituted at launch.
 
 | Placeholder | Substituted with |
 |---|---|
-| `${WIDTH}` `${HEIGHT}` | channel output geometry |
-| `${FPS}` | channel output frame rate |
+| `${WIDTH}` `${HEIGHT}` | channel geometry capped at 1280x720; never upscaled |
+| `${FPS}` | channel frame rate capped at 30 fps |
 | `${ACCENT}` | current accent color |
 | `${OUT}` | the branch label the compositor assigns |
 
@@ -111,19 +111,9 @@ come from `eq`/`hue` downstream, not from the plugin itself.
 
 ## Switching
 
-All plugins in a channel's `hot_set` are instantiated at launch and fed to
-`streamselect`. Switching is `streamselect@sel map N`, where N is the plugin's
-index in `hot_set`. The backend owns that mapping.
-
-**Measured:** switching is frame-exact — six switches, zero frame error,
-including two 200 ms apart. The cut is clean: frame N−1 is entirely the old
-branch, frame N entirely the new one. No blended, torn or black frame,
-`drop=0 dup=0`.
-
-Invalid commands are safe: `map 9`, `map -1`, `map abc` and a bare `map` all
-return `22 Invalid argument` and the graph keeps running.
-
-`astreamselect` behaves identically for audio.
+One plugin runs in `<channel>-visualizer`. Switching replaces that child only.
+The stable compositor receives the fixed framekeeper layer and must not contain
+plugin filters or `streamselect`.
 
 ## Idle branches are not free
 
@@ -138,9 +128,8 @@ return `22 Invalid argument` and the graph keeps running.
 
 Roughly **0.28 cores per idle branch at 720p**, scaling ~1.9× at 1080p.
 
-`hot_set` is a CPU budget, not a preference list. The backend refuses a
-`hot_set` whose projected cost would oversubscribe the host — see
-[config.md](config.md).
+Only the active capped plugin counts toward capacity. Deprecated `hot_set`
+entries do not consume runtime CPU.
 
 ### What a whole channel actually costs
 

@@ -438,9 +438,9 @@ the configuration does reach the compositor.
 | `CHANNEL_FALLBACK_MOUNT` | Validated, then unused. Icecast derives the fallback from the channel name in `mounts.list` |
 | `POST /api/channels` | Creates the directory, `config.yaml` and `.env`, but does **not** add the Icecast mount or generate a fallback file. Step 7 is still manual |
 | `bumpers.*` and `POST .../bumpers/generate` | The model, the API and `docs/contracts/bumpers.md` all exist; **nothing in the media pipeline reads any of it**. No Liquidsoap operator, no TTS container. Setting `bumpers.enabled` with unresolvable sources will fail the channel's config load for a feature that cannot run |
-| `visualization.visible: false` | Takes the visualization off air in one frame, but the branches keep rendering and keep costing. Only `visualization.enabled: false` gives the cores back, and that needs a restart |
+| `visualization.visible: false` | Takes the visualization off air in one frame; the isolated visualizer child keeps rendering. `enabled: false` stops only that child |
 | `images.hold_seconds`, `images.fade_seconds` | Reach the producer as launch-time environment. Changing them on a running channel does nothing until it restarts |
-| `VIZ_OPACITY` | A real knob in the filtergraph (`lut@vizop`), pinned to 0.65. No config field and no API reach it |
+| `visualization.opacity` | Live 0–1 alpha control through `lut@vizop`; no process restart |
 
 `audio.tracks`, `images.slides`, `audio.shuffle`, `audio.crossfade_seconds` and the encoder
 selection **do** take effect — they travel through the generated `playlist.m3u`, `images.list`

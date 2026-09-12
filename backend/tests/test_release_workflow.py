@@ -9,15 +9,15 @@ ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
 
 
-def test_release_builds_only_backend_and_liquidsoap_for_both_platforms() -> None:
-    assert WORKFLOW.count("platforms: linux/amd64,linux/arm64") == 2
+def test_release_builds_all_runtime_images_for_both_platforms() -> None:
+    assert WORKFLOW.count("platforms: linux/amd64,linux/arm64") == 3
     assert "file: docker/Dockerfile.backend" in WORKFLOW
     assert "file: docker/Dockerfile.liquidsoap" in WORKFLOW
-    assert "file: docker/Dockerfile.composer" not in WORKFLOW
+    assert "file: docker/Dockerfile.composer" in WORKFLOW
     assert "file: docker/Dockerfile.mediamtx" not in WORKFLOW
 
 
-def test_release_pins_actions_and_attests_both_images() -> None:
+def test_release_pins_actions_and_attests_all_images() -> None:
     for action in (
         "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
         "docker/setup-qemu-action@1f40c72289eff860ee54a304f1438e3cff362e0a",
@@ -28,9 +28,9 @@ def test_release_pins_actions_and_attests_both_images() -> None:
         "softprops/action-gh-release@5113cdc90fd4d541c801c55356214017bf5ae34b",
     ):
         assert action in WORKFLOW
-    assert WORKFLOW.count("provenance: mode=max") == 2
-    assert WORKFLOW.count("sbom: true") == 2
-    assert WORKFLOW.count("push-to-registry: true") == 2
+    assert WORKFLOW.count("provenance: mode=max") == 3
+    assert WORKFLOW.count("sbom: true") == 3
+    assert WORKFLOW.count("push-to-registry: true") == 3
     assert "packages: write" in WORKFLOW
     assert "id-token: write" in WORKFLOW
     assert "attestations: write" in WORKFLOW
@@ -39,9 +39,11 @@ def test_release_pins_actions_and_attests_both_images() -> None:
 def test_release_never_publishes_a_floating_latest_tag() -> None:
     assert "ambient-streamer-backend }}:latest" not in WORKFLOW
     assert "ambient-streamer-liquidsoap }}:latest" not in WORKFLOW
+    assert "ambient-streamer-composer }}:latest" not in WORKFLOW
     assert "AMBIENT_BACKEND_IMAGE=${BACKEND_IMAGE}@${BACKEND_DIGEST}" in WORKFLOW
     assert "AMBIENT_LIQUIDSOAP_IMAGE=${LIQUIDSOAP_IMAGE}@${LIQUIDSOAP_DIGEST}" in WORKFLOW
-    assert WORKFLOW.count(":run-${{ github.run_id }}-${{ github.run_attempt }}") == 2
+    assert "AMBIENT_COMPOSER_IMAGE=${COMPOSER_IMAGE}@${COMPOSER_DIGEST}" in WORKFLOW
+    assert WORKFLOW.count(":run-${{ github.run_id }}-${{ github.run_attempt }}") == 3
     assert ":${{ steps.release.outputs.tag }}" not in WORKFLOW
 
 
@@ -61,6 +63,8 @@ def test_secret_guard_checks_files_without_matching_source_literals() -> None:
 def test_published_image_bases_are_manifest_pinned() -> None:
     backend = (ROOT / "docker" / "Dockerfile.backend").read_text(encoding="utf-8")
     liquidsoap = (ROOT / "docker" / "Dockerfile.liquidsoap").read_text(encoding="utf-8")
+    composer = (ROOT / "docker" / "Dockerfile.composer").read_text(encoding="utf-8")
     assert re.search(r"ARG BASE=python:[^\s]+@sha256:[0-9a-f]{64}", backend)
     assert re.search(r"ARG DOCKER_CLI_IMAGE=docker:[^\s]+@sha256:[0-9a-f]{64}", backend)
     assert re.search(r"FROM savonet/liquidsoap:[^\s]+@sha256:[0-9a-f]{64}", liquidsoap)
+    assert re.search(r"ARG BASE=ubuntu:[^\s]+@sha256:[0-9a-f]{64}", composer)

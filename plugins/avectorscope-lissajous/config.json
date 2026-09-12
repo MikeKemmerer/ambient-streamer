@@ -21,6 +21,17 @@
   },
   "parameters": [
     {
+      "name": "thickness",
+      "token": "SCOPE_THICKNESS",
+      "label": "Thickness",
+      "description": "Expands the vectorscope stroke from one to four pixels.",
+      "type": "int",
+      "min": 1,
+      "max": 4,
+      "step": 1,
+      "default": 1
+    },
+    {
       "name": "zoom",
       "token": "SCOPE_ZOOM",
       "label": "Zoom",

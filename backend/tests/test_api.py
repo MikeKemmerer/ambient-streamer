@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import shutil
 from pathlib import Path
 
 import pytest
@@ -16,6 +17,10 @@ from ambient.supervisor import compose_context
 from tests.conftest import AUTH, RUNNING_STATE, TOKEN, eventually
 
 NOW_JSON = "lofi-composer:/run/ambient/lofi/now.json"
+
+
+def install_plugins(repo: Path) -> None:
+    shutil.copytree(Path("plugins"), repo / "plugins", dirs_exist_ok=True)
 
 # --------------------------------------------------------------------------
 # Authentication
@@ -309,33 +314,39 @@ def test_plugins_and_presets_are_listed(api) -> None:
     assert [p["name"] for p in presets] == ["calm-ocean"]
 
 
-def test_switching_outside_the_hot_set_stages_and_restarts(api, repo: Path) -> None:
-    """An installed plugin is usable; it just cannot switch instantly."""
+def test_stopped_channel_switches_to_any_installed_plugin(api, repo: Path, docker) -> None:
     client, _state = api
+    install_plugins(repo)
     response = client.put(
         "/api/channels/lofi/visualization", headers=AUTH, json={"active": "showwaves-classic"}
     )
-    assert response.status_code == 202
+    assert response.status_code == 200
     body = response.json()
-    assert body["staged"] is True
+    assert body["staged"] is False
+    assert body["restarted"] is False
+    assert body["visualizer_recreated"] is False
     assert body["active"] == "showwaves-classic"
-    assert body["hot_set"] == ["showfreqs-bars", "showwaves-classic"]
+    assert body["hot_set"] == ["showfreqs-bars"]
     config = yaml.safe_load((repo / "channels" / "lofi" / "config.yaml").read_text("utf-8"))
-    assert config["visualization"]["hot_set"] == ["showfreqs-bars", "showwaves-classic"]
+    assert config["visualization"]["active"] == "showwaves-classic"
+    assert config["visualization"]["hot_set"] == ["showfreqs-bars"]
+    assert not docker.compose_calls()
 
 
-def test_staging_can_be_refused_by_the_caller(api) -> None:
+def test_allow_restart_false_is_accepted_and_ignored(api, repo: Path) -> None:
     client, _state = api
+    install_plugins(repo)
     response = client.put(
         "/api/channels/lofi/visualization?allow_restart=false",
         headers=AUTH,
         json={"active": "showwaves-classic"},
     )
-    assert response.status_code == 409
-    assert response.json()["error"] == "restart_required"
+    assert response.status_code == 200
+    assert response.json()["active"] == "showwaves-classic"
+    assert response.json()["restarted"] is False
 
 
-def test_switching_inside_the_hot_set_is_accepted(api) -> None:
+def test_selecting_the_current_plugin_is_a_noop(api) -> None:
     client, _state = api
     response = client.put(
         "/api/channels/lofi/visualization", headers=AUTH, json={"active": "showfreqs-bars"}
@@ -344,13 +355,13 @@ def test_switching_inside_the_hot_set_is_accepted(api) -> None:
     body = response.json()
     assert body["active"] == "showfreqs-bars"
     assert body["staged"] is False
-    assert body["mode"] == "streamselect"
+    assert body["accepted"] is False
+    assert body["mode"] == "applied-on-next-start"
 
 
-def test_a_hot_switch_beats_a_stale_now_json(api, repo: Path) -> None:
-    """now.json's plugin is captured at boot and a streamselect switch does not
-    restart the composer, so it names the plugin the channel started with."""
+def test_a_running_switch_recreates_only_the_visualizer(api, repo: Path, docker) -> None:
     client, state = api
+    install_plugins(repo)
     path = repo / "channels" / "lofi" / "config.yaml"
     config = yaml.safe_load(path.read_text("utf-8"))
     config["visualization"]["hot_set"] = ["showfreqs-bars", "showwaves-classic"]
@@ -368,8 +379,14 @@ def test_a_hot_switch_beats_a_stale_now_json(api, repo: Path) -> None:
     switched = client.put(
         "/api/channels/lofi/visualization", headers=AUTH, json={"active": "showwaves-classic"}
     )
-    assert switched.status_code == 200
-    assert switched.json()["mode"] == "streamselect"
+    assert switched.status_code == 202
+    assert switched.json()["mode"] == "visualizer-recreate"
+    assert switched.json()["restarted"] is False
+    call = eventually(
+        lambda: docker.calls_matching("--force-recreate", "lofi-visualizer")
+    )[-1]
+    assert call[-1] == "lofi-visualizer"
+    assert not docker.calls_matching("--force-recreate", "lofi-composer")
 
     body = client.get("/api/channels/lofi", headers=AUTH).json()
     assert body["visualization"] == "showwaves-classic"
@@ -386,6 +403,41 @@ def test_applying_a_preset_returns_202(api, repo: Path) -> None:
     config = yaml.safe_load((repo / "channels" / "lofi" / "config.yaml").read_text("utf-8"))
     assert config["preset"] == "calm-ocean"
     assert config["images"]["hold_seconds"] == 30.0
+
+
+def test_preset_color_and_visualization_keep_the_running_base_accent(
+    api, repo: Path, docker
+) -> None:
+    client, state = api
+    install_plugins(repo)
+    preset = (repo / "presets" / "calm-ocean.yaml").read_text(encoding="utf-8")
+    (repo / "presets" / "orange-waves.yaml").write_text(
+        preset.replace("name: calm-ocean", "name: orange-waves")
+        .replace("active: showfreqs-bars", "active: showwaves-classic")
+        .replace("#4FC3F7", "#FF8800"),
+        encoding="utf-8",
+    )
+    run_dir = state.workspace.run_dir / "lofi"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "viz-accent").write_text("#4FC3F7\n", encoding="utf-8")
+    docker.states["lofi-composer"] = RUNNING_STATE
+
+    response = client.post(
+        "/api/channels/lofi/preset",
+        headers=AUTH,
+        json={"preset": "orange-waves"},
+    )
+
+    assert response.status_code == 202
+    config = yaml.safe_load(
+        (repo / "channels" / "lofi" / "config.yaml").read_text(encoding="utf-8")
+    )
+    compose = yaml.safe_load(
+        (repo / "channels" / "lofi" / "docker-compose.yml").read_text(encoding="utf-8")
+    )
+    assert config["visualization"]["active"] == "showwaves-classic"
+    assert config["color"]["manual"]["accent"] == "#FF8800"
+    assert compose["services"]["lofi-visualizer"]["environment"]["ACCENT"] == "#4FC3F7"
 
 
 def test_an_unknown_preset_is_a_400(api) -> None:

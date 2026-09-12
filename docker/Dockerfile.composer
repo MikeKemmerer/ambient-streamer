@@ -5,10 +5,9 @@
 # plugin changes mutate the running filtergraph instead of restarting FFmpeg).
 # A hand-built binary would be one more thing to keep patched for a 24/7 service.
 #
-# Pin the base by digest in production. `ubuntu:24.04` is a moving tag, and a
-# 24/7 service that silently changes FFmpeg builds is a liability.
-#   docker build --build-arg BASE=ubuntu:24.04@sha256:<digest> ...
-ARG BASE=ubuntu:24.04
+# Multi-architecture manifest digest: release builds must not drift underneath
+# an unchanged commit. Dependency refreshes update this deliberately.
+ARG BASE=ubuntu:24.04@sha256:224a1869083a311ef3f13648a154ba79832fbef6364d31493642ca03082da254
 FROM ${BASE}
 
 ENV DEBIAN_FRONTEND=noninteractive
