@@ -206,6 +206,15 @@ class VisualizerRuntimeTests(unittest.TestCase):
             process.stderr.close()
             self.assertIn("ffmpeg did not stop after SIGINT; sending SIGKILL", logs)
 
+    def test_composer_cleanup_only_unlinks_owned_fifos(self) -> None:
+        source = (HERE / "entrypoint.sh").read_text(encoding="utf-8")
+
+        self.assertIn('SLIDES_FIFO_ID="$(path_identity "$SLIDES_FIFO")"', source)
+        self.assertIn('VIZ_FIFO_ID="$(path_identity "$VIZ_FIFO")"', source)
+        self.assertIn('unlink_owned "$SLIDES_FIFO" "$SLIDES_FIFO_ID"', source)
+        self.assertIn('unlink_owned "$VIZ_FIFO" "$VIZ_FIFO_ID"', source)
+        self.assertNotIn('[[ -S "$VIZ_SOCKET" ]] && unlink', source)
+
     def test_thickness_dilation_expands_a_stroke(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             work = Path(temporary)
