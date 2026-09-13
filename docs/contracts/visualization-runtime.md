@@ -23,9 +23,13 @@ visualizer starts, stops, crashes, is tuned, or is replaced.
 
 ## Visualizer child
 
-At most one `<channel>-visualizer` container runs. It reads the same Icecast
-mount as the compositor, renders exactly one installed `viz.ffmpeg` fragment at
-the capped layer geometry, and writes raw frames to the framekeeper socket.
+At most one `<channel>-visualizer` container runs. It reads audio from the
+compositor's MediaMTX preview path, renders exactly one installed `viz.ffmpeg`
+fragment at the capped layer geometry, and writes raw frames to the framekeeper
+socket. The preview carries the same post-processed audio timeline as the
+program output; a second Icecast listener is forbidden because independent
+listener queues were measured putting visualization 2.4 seconds ahead of
+published audio.
 
 - Plugin switch: recreate only `<channel>-visualizer`.
 - Parameter change: recreate only `<channel>-visualizer`.

@@ -187,6 +187,9 @@ def test_visualizer_service_uses_shared_framekeeper_state(tmp_path: Path) -> Non
 
     assert service["container_name"] == "lofi-visualizer"
     assert service["command"] == ["/opt/ambient/visualizer-entrypoint.sh"]
+    assert service["environment"]["AUDIO_URL"] == "rtmp://mediamtx:${AMBIENT_RTMP_PORT:-1935}/lofi/preview"
+    assert "ICECAST_HOST" not in service["environment"]
+    assert "ICECAST_PORT" not in service["environment"]
     assert service["environment"]["PLUGIN_NAME"] == "showfreqs-bars"
     assert service["environment"]["WIDTH"] == "1280"
     assert service["environment"]["HEIGHT"] == "720"
