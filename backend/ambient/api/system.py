@@ -10,7 +10,9 @@ happens and the only image in the stack that ships ffmpeg.
 from __future__ import annotations
 
 import os
+import re
 import time
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query, Request
@@ -32,11 +34,20 @@ SSE_HEADERS = {
 }
 
 
+def release_version(root: Path) -> str:
+    try:
+        version = (root / "VERSION").read_text(encoding="utf-8").strip()
+    except OSError:
+        return "unknown"
+    return version if re.fullmatch(r"[0-9A-Za-z][0-9A-Za-z.+-]{0,63}", version) else "unknown"
+
+
 @router.get("/health")
 async def health(state: AppState = Depends(get_state)) -> dict[str, Any]:
     """Unauthenticated liveness. Reports nothing an anonymous caller should not see."""
     return {
         "status": "ok",
+        "version": release_version(state.root),
         "uptime_seconds": round(time.time() - state.started_at, 1),
         "channels": len(state.names()),
         "watchdog": state.watchdog.enabled,
@@ -54,6 +65,7 @@ async def system(
     )
     cores = float(os.cpu_count() or 1)
     return {
+        "version": release_version(state.root),
         "cores": cores,
         "memory_bytes": _memory_bytes(),
         "reserved_cores": ambient.limits.reserved_cores,

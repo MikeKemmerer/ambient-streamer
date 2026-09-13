@@ -28,10 +28,12 @@ def install_plugins(repo: Path) -> None:
 
 
 def test_health_is_the_only_unauthenticated_endpoint(api) -> None:
-    client, _state = api
+    client, state = api
+    (state.root / "VERSION").write_text("9.8.7\n", encoding="utf-8")
     response = client.get("/api/health")
     assert response.status_code == 200
     assert response.json()["status"] == "ok"
+    assert response.json()["version"] == "9.8.7"
     # It reports nothing an anonymous caller should not see.
     assert "token" not in response.text and TOKEN not in response.text
 

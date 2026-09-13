@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Restartable visualization child: Icecast audio -> one plugin -> framekeeper.
+# Restartable visualization child: published preview audio -> one plugin -> framekeeper.
 set -euo pipefail
 umask 077
 
@@ -28,10 +28,12 @@ LAYER_WIDTH=$(( WIDTH < 1280 ? WIDTH : 1280 ))
 LAYER_HEIGHT=$(( HEIGHT < 720 ? HEIGHT : 720 ))
 LAYER_FPS=$(( FPS < 30 ? FPS : 30 ))
 
-ICECAST_HOST="${ICECAST_HOST:-icecast}"
-ICECAST_PORT="${ICECAST_PORT:-8081}"
 CHANNEL_MOUNT="${CHANNEL_MOUNT:-/${CHANNEL_NAME}}"
-AUDIO_URL="${AUDIO_URL:-http://${ICECAST_HOST}:${ICECAST_PORT}${CHANNEL_MOUNT}}"
+RELAY_RTMP="${RELAY_RTMP:-rtmp://mediamtx:1935}"
+# The compositor's preview carries the same post-processed audio timeline as
+# the program output. Reading it prevents a separate Icecast client from
+# drifting ahead of what viewers hear.
+AUDIO_URL="${AUDIO_URL:-${RELAY_RTMP}/${CHANNEL_NAME}/preview}"
 ACCENT="${ACCENT:-#4FC3F7}"
 ACCENT_FF="0x${ACCENT#\#}"
 PLUGIN_PARAMS="${PLUGIN_PARAMS:-{\}}"

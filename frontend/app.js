@@ -198,10 +198,18 @@ async function boot() {
 
 async function pingHealth() {
   const dot = $('backend-dot');
+  const badge = $('version-badge');
   try {
-    await api.health();
+    const health = await api.health();
     dot.dataset.tone = 'ok';
     dot.title = 'control plane reachable';
+    const version = String((health && health.version) || '').trim();
+    badge.textContent = !version || version === 'unknown'
+      ? 'version unknown'
+      : version === 'mock' || version.startsWith('v') ? version : `v${version}`;
+    badge.title = version && version !== 'unknown'
+      ? `deployed release ${version}`
+      : 'deployed release is unknown';
   } catch {
     dot.dataset.tone = 'bad';
     dot.title = 'control plane unreachable';
