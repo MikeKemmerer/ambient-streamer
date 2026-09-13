@@ -132,10 +132,17 @@ done
 [[ -S "$VIZ_SOCKET" ]] || die "framekeeper socket did not become ready"
 
 ok "plugin=$PLUGIN_NAME layer=${LAYER_WIDTH}x${LAYER_HEIGHT}@${LAYER_FPS} socket=$VIZ_SOCKET"
+INPUT_OPTIONS=(-probesize 32k -analyzeduration 500000 -fflags nobuffer)
+case "$AUDIO_URL" in
+  http://*|https://*)
+    INPUT_OPTIONS+=(
+      -reconnect 1 -reconnect_streamed 1 -reconnect_on_network_error 1
+      -reconnect_delay_max 5
+    )
+    ;;
+esac
 "$FFMPEG_BIN" -nostdin -hide_banner -loglevel "$FFMPEG_LOGLEVEL" \
-  -probesize 32k -analyzeduration 500000 -fflags nobuffer \
-  -reconnect 1 -reconnect_streamed 1 -reconnect_on_network_error 1 \
-  -reconnect_delay_max 5 \
+  "${INPUT_OPTIONS[@]}" \
   -i "$AUDIO_URL" \
   -filter_complex_script "$GRAPH_FILE" \
   -map '[vizout]' -an -c:v rawvideo -pix_fmt yuv420p \
