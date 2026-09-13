@@ -46,6 +46,77 @@ def stop_group(process: subprocess.Popen[bytes]) -> None:
 
 @unittest.skipUnless(shutil.which("ffmpeg"), "ffmpeg is required")
 class VisualizerRuntimeTests(unittest.TestCase):
+    def test_http_reconnect_options_are_not_applied_to_rtmp(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            work = Path(temporary)
+            run_root = work / "run"
+            run_dir = run_root / "test"
+            run_dir.mkdir(parents=True)
+            plugin_dir = work / "plugins" / "test-plugin"
+            plugin_dir.mkdir(parents=True)
+            (plugin_dir / "config.json").write_text(
+                json.dumps(
+                    {
+                        "name": "test-plugin",
+                        "version": "test",
+                        "requires_filters": [],
+                        "parameters": {},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (plugin_dir / "viz.ffmpeg").write_text(
+                "[0:a]showwaves=s=${WIDTH}x${HEIGHT}:r=${FPS}[${OUT}]\n",
+                encoding="utf-8",
+            )
+            arguments = work / "arguments.json"
+            fake_ffmpeg = work / "ffmpeg"
+            fake_ffmpeg.write_text(
+                "#!/usr/bin/env python3\n"
+                "import json, os, sys\n"
+                "if '-filters' not in sys.argv:\n"
+                "    open(os.environ['FFMPEG_ARGUMENTS'], 'w').write(json.dumps(sys.argv[1:]))\n",
+                encoding="utf-8",
+            )
+            fake_ffmpeg.chmod(0o700)
+            socket_path = run_dir / "visualization.sock"
+            listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            listener.bind(str(socket_path))
+            listener.listen(1)
+            environment = {
+                **os.environ,
+                "CHANNEL_NAME": "test",
+                "PLUGIN_NAME": "test-plugin",
+                "WIDTH": "320",
+                "HEIGHT": "180",
+                "FPS": "30",
+                "RUN_ROOT": str(run_root),
+                "RUN_DIR": str(run_dir),
+                "PLUGIN_DIR": str(work / "plugins"),
+                "FFMPEG_BIN": str(fake_ffmpeg),
+                "FFMPEG_ARGUMENTS": str(arguments),
+                "PYTHON_BIN": sys.executable,
+                "PLUGIN_PARAMS_BIN": str(HERE / "plugin_params.py"),
+            }
+            try:
+                for audio_url, expects_reconnect in (
+                    ("rtmp://relay/channel/preview", False),
+                    ("http://icecast:8081/channel", True),
+                ):
+                    arguments.unlink(missing_ok=True)
+                    subprocess.run(
+                        ["bash", str(HERE / "visualizer-entrypoint.sh")],
+                        env={**environment, "AUDIO_URL": audio_url},
+                        check=True,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.PIPE,
+                    )
+                    argv = json.loads(arguments.read_text(encoding="utf-8"))
+                    self.assertEqual("-reconnect" in argv, expects_reconnect)
+                    self.assertEqual(argv[argv.index("-i") + 1], audio_url)
+            finally:
+                listener.close()
+
     def test_entrypoint_escalates_unresponsive_ffmpeg_shutdown(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             work = Path(temporary)
