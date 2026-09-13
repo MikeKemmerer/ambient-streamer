@@ -148,6 +148,59 @@ class FramekeeperProcessTests(unittest.TestCase):
             process.stderr.close()
             self.assertEqual(process.returncode, 0, error_output)
 
+    def test_shutdown_does_not_unlink_a_replacement_socket(self) -> None:
+        width, height, fps = 8, 4, 20
+
+        with tempfile.TemporaryDirectory() as temporary:
+            run_dir = Path(temporary)
+            socket_path = run_dir / "visualization.sock"
+            status_path = run_dir / "visualization-status.json"
+            process = subprocess.Popen(
+                [
+                    sys.executable,
+                    str(HERE / "framekeeper.py"),
+                    "--input",
+                    str(socket_path),
+                    "--width",
+                    str(width),
+                    "--height",
+                    str(height),
+                    "--fps",
+                    str(fps),
+                    "--status",
+                    str(status_path),
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            assert process.stdout and process.stderr
+            replacement = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            try:
+                deadline = time.monotonic() + 3
+                while not socket_path.exists() and time.monotonic() < deadline:
+                    time.sleep(0.02)
+                self.assertTrue(socket_path.exists())
+                socket_path.unlink()
+                replacement.bind(str(socket_path))
+                replacement_identity = (socket_path.stat().st_dev, socket_path.stat().st_ino)
+
+                process.terminate()
+                process.wait(timeout=3)
+
+                self.assertTrue(socket_path.exists())
+                self.assertEqual(
+                    (socket_path.stat().st_dev, socket_path.stat().st_ino),
+                    replacement_identity,
+                )
+            finally:
+                if process.poll() is None:
+                    process.terminate()
+                    process.wait(timeout=3)
+                replacement.close()
+                socket_path.unlink(missing_ok=True)
+                process.stdout.close()
+                process.stderr.close()
+
 
 if __name__ == "__main__":
     unittest.main()

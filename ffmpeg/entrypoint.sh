@@ -154,6 +154,18 @@ FFMPEG_LOGLEVEL="${FFMPEG_LOGLEVEL:-level+warning}"
 PRODUCER_PID=""
 FRAMEKEEPER_PID=""
 FFMPEG_PID=""
+SLIDES_FIFO_ID=""
+VIZ_FIFO_ID=""
+
+path_identity() {
+  stat -Lc '%d:%i' -- "$1" 2>/dev/null || true
+}
+
+unlink_owned() {
+  local path="$1" expected="$2"
+  [[ -n "$expected" && "$(path_identity "$path")" == "$expected" ]] || return 0
+  unlink "$path" 2>/dev/null || true
+}
 
 cleanup() {
   local rc=$?
@@ -173,9 +185,8 @@ cleanup() {
   for pid in "$FFMPEG_PID" "$PRODUCER_PID" "$FRAMEKEEPER_PID"; do
     [[ -n "$pid" ]] && kill -9 "$pid" 2>/dev/null || true
   done
-  [[ -p "$SLIDES_FIFO" ]] && unlink "$SLIDES_FIFO" 2>/dev/null || true
-  [[ -p "$VIZ_FIFO" ]] && unlink "$VIZ_FIFO" 2>/dev/null || true
-  [[ -S "$VIZ_SOCKET" ]] && unlink "$VIZ_SOCKET" 2>/dev/null || true
+  unlink_owned "$SLIDES_FIFO" "$SLIDES_FIFO_ID"
+  unlink_owned "$VIZ_FIFO" "$VIZ_FIFO_ID"
   log "cleaned up (rc=$rc)"
   exit "$rc"
 }
@@ -355,6 +366,8 @@ for pipe in "$SLIDES_FIFO" "$VIZ_FIFO"; do
   [[ ! -e "$pipe" ]] || unlink "$pipe"
   mkfifo -m 600 "$pipe"
 done
+SLIDES_FIFO_ID="$(path_identity "$SLIDES_FIFO")"
+VIZ_FIFO_ID="$(path_identity "$VIZ_FIFO")"
 
 "$PYTHON_BIN" "$FRAMEKEEPER_BIN" \
   --input "$VIZ_SOCKET" \

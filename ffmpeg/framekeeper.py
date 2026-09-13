@@ -100,6 +100,7 @@ def main() -> int:
     server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     server.bind(str(socket_path))
     os.chmod(socket_path, stat.S_IRUSR | stat.S_IWUSR)
+    socket_identity = (socket_path.stat().st_dev, socket_path.stat().st_ino)
     server.listen(1)
     server.settimeout(0.1)
     reader: socket.socket | None = None
@@ -216,7 +217,12 @@ def main() -> int:
             reader.close()
         server.close()
         receiver.join(timeout=0.5)
-        socket_path.unlink(missing_ok=True)
+        try:
+            current_identity = (socket_path.stat().st_dev, socket_path.stat().st_ino)
+        except FileNotFoundError:
+            current_identity = None
+        if current_identity == socket_identity:
+            socket_path.unlink()
         publish_status(status_path, status(ready=False, fallback_active=True))
         log("stopped", emitted=emitted, received=received)
     return 0
