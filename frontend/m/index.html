@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en" data-locked="true">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#0a0d13">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Ambient">
+<title>ambient-streamer</title>
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="stylesheet" href="m.css">
+<link rel="stylesheet" href="screens.css">
+<script src="../vendor/hls.js" defer></script>
+<script type="module" src="m.js"></script>
+</head>
+<body>
+<div id="app">
+  <header class="appbar" id="appbar"></header>
+  <div class="banner" id="banner" hidden></div>
+  <main id="view" tabindex="-1"></main>
+  <nav class="tabbar" id="tabbar" aria-label="Sections"></nav>
+</div>
+<div id="toasts" aria-live="polite"></div>
+<div id="sheets"></div>
+<noscript><p style="padding:24px;font:16px system-ui;color:#ddd">This page needs JavaScript.</p></noscript>
+</body>
+</html>

@@ -1,0 +1,14 @@
+{
+  "name": "ambient-streamer",
+  "short_name": "Ambient",
+  "description": "Touch controls for the ambient-streamer channels",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0a0d13",
+  "theme_color": "#0a0d13",
+  "icons": [
+    { "src": "../favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}
