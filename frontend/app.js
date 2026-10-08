@@ -456,7 +456,7 @@ function renderChannelList() {
   for (const name of names) {
     if (!state.cards.has(name)) {
       state.cards.set(name, buildCard(name, {
-        onSelect: selectChannel,
+        onSelect: (name) => { selectChannel(name); revealDetail(); },
         onStart: (n) => lifecycle(n, 'start'),
         onStop: (n) => lifecycle(n, 'stop'),
         onRestart: (n) => lifecycle(n, 'restart'),
@@ -2521,7 +2521,21 @@ async function deleteChannel() {
 // Wiring
 // --------------------------------------------------------------------------
 
+// On a phone the channel list and the detail pane are stacked, so selecting a card has to
+// bring the detail into view; wide layouts show both at once and never scroll.
+const compactLayout = window.matchMedia('(max-width: 1100px)');
+
+function scrollToPane(selector) {
+  const target = document.querySelector(selector);
+  if (target && compactLayout.matches) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function revealDetail() {
+  scrollToPane('#detail-body');
+}
+
 function wire() {
+  $('btn-back').addEventListener('click', () => scrollToPane('.pane-side'));
   $('btn-refresh').addEventListener('click', () => {
     refreshChannels();
     refreshCapacity();

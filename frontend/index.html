@@ -4,6 +4,20 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#10151f">
+<script>
+// Phones get the touch UI unless the operator chose the desktop panel (?desktop remembers that).
+(function () {
+  try {
+    var q = location.search;
+    if (/[?&]desktop\b/.test(q)) { localStorage.setItem('ambient.ui', 'desktop'); return; }
+    if (localStorage.getItem('ambient.ui') === 'desktop') return;
+    if (matchMedia('(max-width: 700px) and (pointer: coarse)').matches) {
+      location.replace('m/' + (/[?&]mock\b/.test(q) ? '?mock' : ''));
+    }
+  } catch (e) { /* storage blocked: stay on this page */ }
+})();
+</script>
 <title>ambient-streamer — operator</title>
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="style.css">
@@ -32,6 +46,8 @@
     <button id="btn-new-channel" type="button">New channel</button>
     <button id="btn-system" type="button">System</button>
     <button id="btn-token" type="button">Token</button>
+    <button id="btn-mobile" type="button" title="Switch to the touch-friendly phone layout"
+            onclick="try{localStorage.removeItem('ambient.ui')}catch(e){};location.href='m/'">Mobile site</button>
     <button id="btn-refresh" type="button" title="Re-read all state from the control plane">Refresh</button>
   </div>
 </header>
@@ -58,6 +74,7 @@
 
     <div id="detail-body" hidden>
       <div class="detail-head">
+        <button id="btn-back" class="back-link" type="button">&#8593; Channels</button>
         <div class="detail-title">
           <span class="stripe" id="detail-stripe" data-tone="idle"></span>
           <h2 class="num" id="detail-name">—</h2>
