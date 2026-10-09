@@ -34,6 +34,57 @@ never match.
 
 Generate one with `openssl rand -hex 32`.
 
+### Limited shortcut token
+
+An optional second secret, `AMBIENT_SHORTCUT_TOKEN`, is for Apple Shortcuts (Siri, the Watch
+face, a Home Screen button) and anything else that should be able to nudge what is on air but
+never take a channel down. Send it the same way, as `Authorization: Bearer <token>`.
+
+It is accepted on **exactly these routes** and nowhere else:
+
+| Method | Route | Use |
+|--------|-------|-----|
+| `GET` | `/api/channels` | read every channel's status |
+| `GET` | `/api/channels/{name}/soundboard` | list the sound-effect clips and their `container_path` |
+| `POST` | `/api/channels/{name}/skip` | skip to the next track |
+| `POST` | `/api/channels/{name}/soundboard/play` | play one clip, body `{"clip": "<container_path>"}` |
+| `POST` | `/api/channels/{name}/soundboard/stop` | stop the active effect and clear the queue |
+
+Anything else — start, stop, restart, delete, uploads, settings, the event stream, even
+`GET /api/channels/{name}` — answers **`403`** with `{"error": "forbidden", ...}`. A wrong or
+missing token is still `401`. The master `AMBIENT_API_TOKEN` is unchanged and works everywhere.
+The allowlist is matched on the route template, and a test walks every registered `/api` route
+to prove the limited token is refused outside it.
+
+To enable it, add a value to the root `.env` and recreate the backend:
+
+```bash
+echo "AMBIENT_SHORTCUT_TOKEN=$(openssl rand -hex 24)" >> .env
+docker compose -p ambient up -d --no-deps backend
+```
+
+The backend refuses to start if it equals `AMBIENT_API_TOKEN` or is under 24 characters. Leave
+it empty and the feature is off. To revoke it, change or remove the value and recreate the
+backend. A token is not TLS: this one still crosses the network in the clear, so keep it on a
+trusted network or behind a VPN, but a leak costs far less than the master token would.
+
+A sound-effect clip's `container_path` follows from where the file lives, so a Shortcut can be
+written without calling the list endpoint: `common/soundboard/<file>` is
+`/media/common/soundboard/<file>`, and `channels/<name>/soundboard/<file>` is
+`/media/channel/soundboard/<file>`. Names are case-sensitive.
+
+```bash
+# play a sound, then stop it
+curl -X POST -H "Authorization: Bearer $SHORTCUT_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"clip": "/media/common/soundboard/SadTrombone.mp3"}' \
+  http://host:8090/api/channels/lofi/soundboard/play
+curl -X POST -H "Authorization: Bearer $SHORTCUT_TOKEN" http://host:8090/api/channels/lofi/soundboard/stop
+```
+
+In Shortcuts, each is a **Get Contents of URL** action: method `POST`, a header named
+`Authorization` with the value `Bearer <token>`, and for a clip a JSON request body with a `clip`
+field. Do not share such a shortcut by link, since the token travels with it.
+
 ---
 
 ## Conventions
@@ -52,11 +103,12 @@ Generate one with `openssl rand -hex 32`.
 | `202` | accepted; work continues asynchronously |
 | `400` | validation — bad name, bad path, bad config, empty patch |
 | `401` | missing or wrong bearer token |
+| `403` | a valid but [limited shortcut token](#limited-shortcut-token) used outside its allowlist |
 | `404` | unknown channel, unknown bumper, unmatched path |
 | `409` | conflicting state — running, already exists, not in `hot_set`, out of capacity |
 | `503` | a `docker` invocation failed, or the app is still starting |
 
-Common `error` tokens: `unauthorized`, `unknown_channel`, `invalid_channel_name`,
+Common `error` tokens: `unauthorized`, `forbidden`, `unknown_channel`, `invalid_channel_name`,
 `invalid_channel_config`, `invalid_media_path`, `invalid_preset`, `channel_exists`,
 `channel_running`, `channel_busy`, `not_in_hot_set`, `insufficient_capacity`,
 `channel_limit_reached`, `mount_in_use`, `supervisor_failed`.

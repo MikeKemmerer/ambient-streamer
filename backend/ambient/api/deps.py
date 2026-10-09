@@ -51,11 +51,39 @@ def get_state(request: Request) -> AppState:
     return state
 
 
+# The only routes the limited AMBIENT_SHORTCUT_TOKEN may reach, as (method, route template).
+# It is for phone and watch Shortcuts, so it can nudge what is on air and read status, and
+# nothing more: no start, stop, restart, delete, upload or settings. Matching the route
+# template rather than the raw path means an alias or odd encoding cannot widen it.
+SHORTCUT_ROUTES: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("GET", "/api/channels"),
+        ("GET", "/api/channels/{name}/soundboard"),
+        ("POST", "/api/channels/{name}/skip"),
+        ("POST", "/api/channels/{name}/soundboard/play"),
+        ("POST", "/api/channels/{name}/soundboard/stop"),
+    }
+)
+
+
+def shortcut_may(request: Request) -> bool:
+    route = request.scope.get("route")
+    template = getattr(route, "path", None)
+    return template is not None and (request.method.upper(), template) in SHORTCUT_ROUTES
+
+
 def require_token(request: Request, state: AppState = Depends(get_state)) -> AppState:
     scheme, _, supplied = (request.headers.get("authorization") or "").partition(" ")
-    if scheme.lower() != "bearer" or not compare_token(supplied.strip(), state.token):
-        raise ApiError(401, "unauthorized", "a valid bearer token is required")
-    return state
+    supplied = supplied.strip()
+    if scheme.lower() == "bearer":
+        if compare_token(supplied, state.token):
+            return state
+        if compare_token(supplied, state.shortcut_token):
+            if shortcut_may(request):
+                return state
+            # A real credential, used somewhere it is not allowed: say so, not "unauthorized".
+            raise ApiError(403, "forbidden", "this token is limited to shortcut actions")
+    raise ApiError(401, "unauthorized", "a valid bearer token is required")
 
 
 Authed = Depends(require_token)
