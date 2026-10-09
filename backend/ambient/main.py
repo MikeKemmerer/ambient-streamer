@@ -97,6 +97,8 @@ class AppState:
     scheduler: Scheduler
     token: str
     bind_address: str = DEFAULT_BIND_ADDRESS
+    # A limited secret for phone and watch Shortcuts; empty means the feature is off.
+    shortcut_token: str = ""
     started_at: float = field(default_factory=time.time)
     cpu: dict[str, float] = field(default_factory=dict)
     color_ramps: dict[str, ColorRamp] = field(default_factory=dict)
@@ -236,6 +238,29 @@ def resolve_token(workspace: Workspace) -> str:
     return _env("AMBIENT_API_TOKEN", workspace.env.api_token.get_secret_value())
 
 
+MIN_SHORTCUT_TOKEN_LENGTH = 24
+
+
+def resolve_shortcut_token(workspace: Workspace) -> str:
+    return _env("AMBIENT_SHORTCUT_TOKEN", workspace.env.shortcut_token.get_secret_value())
+
+
+def check_shortcut_token(token: str, shortcut_token: str) -> None:
+    """A limited token that equals the master, or is guessable, defeats its purpose."""
+    if not shortcut_token:
+        return
+    if shortcut_token == token:
+        raise StartupRefused(
+            "AMBIENT_SHORTCUT_TOKEN is the same as AMBIENT_API_TOKEN, which would make the "
+            "limited token all-powerful. Generate a separate one: openssl rand -hex 24"
+        )
+    if len(shortcut_token) < MIN_SHORTCUT_TOKEN_LENGTH:
+        raise StartupRefused(
+            f"AMBIENT_SHORTCUT_TOKEN is shorter than {MIN_SHORTCUT_TOKEN_LENGTH} characters. "
+            "Generate one: openssl rand -hex 24"
+        )
+
+
 def resolve_bind_address(workspace: Workspace) -> str:
     return _env("AMBIENT_BIND_ADDRESS", workspace.env.bind_address or DEFAULT_BIND_ADDRESS)
 
@@ -252,8 +277,10 @@ def check_exposure(bind_address: str, token: str) -> None:
 def build_state(root: Path) -> AppState:
     workspace = load_workspace(root)
     token = resolve_token(workspace)
+    shortcut_token = resolve_shortcut_token(workspace)
     bind_address = resolve_bind_address(workspace)
     check_exposure(bind_address, token)
+    check_shortcut_token(token, shortcut_token)
     if not token:
         LOG.warning("AMBIENT_API_TOKEN is unset; the API is open on %s", bind_address)
 
@@ -274,6 +301,7 @@ def build_state(root: Path) -> AppState:
         watchdog=watchdog,
         scheduler=scheduler,
         token=token,
+        shortcut_token=shortcut_token,
         bind_address=bind_address,
     )
     # The scheduler reads and writes the state it lives in, so it is wired here.

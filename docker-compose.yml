@@ -171,6 +171,8 @@ services:
       # main.py refuses to start without one when not on loopback.
       AMBIENT_BIND_ADDRESS: 0.0.0.0
       AMBIENT_API_TOKEN: ${AMBIENT_API_TOKEN:?unset — run scripts/install.sh, which generates one}
+      # Optional. A second, limited secret for phone/watch Shortcuts; empty disables it.
+      AMBIENT_SHORTCUT_TOKEN: ${AMBIENT_SHORTCUT_TOKEN:-}
       AMBIENT_BACKEND_PORT: ${AMBIENT_BACKEND_PORT:-8090}
       AMBIENT_ROOT: ${AMBIENT_REPO_ROOT:?unset — run scripts/install.sh; it must be this repo's absolute host path}
       AMBIENT_LOG_DIR: ${AMBIENT_LOG_DIR:-/var/log/ambient}

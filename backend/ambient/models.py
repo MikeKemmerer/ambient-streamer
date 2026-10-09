@@ -357,6 +357,9 @@ class GlobalEnv(EnvModel):
     hls_publish: int | None = Field(None, alias="AMBIENT_HLS_PUBLISH", ge=1, le=65535)
     bind_address: str = Field("127.0.0.1", alias="AMBIENT_BIND_ADDRESS")
     api_token: SecretStr = Field(SecretStr(""), alias="AMBIENT_API_TOKEN")
+    # Optional second secret that may only reach a short allowlist of routes (skip a
+    # track, play or stop a sound effect, read status). See api/deps.py.
+    shortcut_token: SecretStr = Field(SecretStr(""), alias="AMBIENT_SHORTCUT_TOKEN")
     icecast_source_password: SecretStr = Field(SecretStr(""), alias="ICECAST_SOURCE_PASSWORD")
     icecast_admin_password: SecretStr = Field(SecretStr(""), alias="ICECAST_ADMIN_PASSWORD")
     icecast_relay_password: SecretStr = Field(SecretStr(""), alias="ICECAST_RELAY_PASSWORD")

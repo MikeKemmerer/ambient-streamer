@@ -298,6 +298,7 @@ asking for 30 s, so `unknown` can persist briefly after the relay recovers.
 | Message | Fix |
 |---------|-----|
 | `AMBIENT_API_TOKEN is unset while bound to ...` | set a token, or bind to `127.0.0.1` |
+| `AMBIENT_SHORTCUT_TOKEN is the same as AMBIENT_API_TOKEN` / `is shorter than 24 characters` | generate a separate limited token: `openssl rand -hex 24`, or leave it empty to disable it |
 | `AMBIENT_ROOT is not present in this container` | `AMBIENT_REPO_ROOT` does not match the repository's host path. Re-run `scripts/install.sh`, then `docker compose -p ambient up -d backend` |
 | `/var/run/docker.sock is group root` | the entrypoint cannot drop privileges and still reach the daemon. Give the socket a non-root group |
 | `the Docker daemon did not answer as uid ...` | the unprivileged user is not in the socket's group |
